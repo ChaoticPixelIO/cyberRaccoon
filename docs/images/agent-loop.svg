@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 360" font-family="'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="a1" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3b82f6"/>
+    </marker>
+    <marker id="a2" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#8b5cf6"/>
+    </marker>
+    <marker id="a3" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#10b981"/>
+    </marker>
+    <marker id="a4" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f59e0b"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="880" height="360" fill="#f8fafc" rx="12"/>
+
+  <!-- ═══ TARGET COMPUTER ═══ -->
+  <rect x="30" y="80" width="200" height="200" rx="12" fill="white" stroke="#e2e8f0" stroke-width="1.5"/>
+  <!-- Monitor icon -->
+  <rect x="105" y="108" width="50" height="35" rx="3" fill="#eff6ff" stroke="#3b82f6" stroke-width="2"/>
+  <line x1="130" y1="143" x2="130" y2="153" stroke="#3b82f6" stroke-width="2"/>
+  <line x1="117" y1="153" x2="143" y2="153" stroke="#3b82f6" stroke-width="2" stroke-linecap="round"/>
+  <!-- Screen content lines -->
+  <line x1="113" y1="118" x2="139" y2="118" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+  <line x1="113" y1="125" x2="133" y2="125" stroke="#bfdbfe" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="113" y1="132" x2="137" y2="132" stroke="#bfdbfe" stroke-width="1.5" stroke-linecap="round"/>
+  <!-- Labels -->
+  <text x="130" y="183" text-anchor="middle" font-size="14" font-weight="600" fill="#1e293b">Target Computer</text>
+  <text x="130" y="201" text-anchor="middle" font-size="11" fill="#64748b">Any OS · Zero install</text>
+  <text x="130" y="218" text-anchor="middle" font-size="10" fill="#94a3b8">Windows / macOS / Linux</text>
+  <text x="130" y="234" text-anchor="middle" font-size="10" fill="#94a3b8">Even BIOS screens</text>
+
+  <!-- ═══ CYBERRACCOON ═══ -->
+  <rect x="340" y="60" width="200" height="240" rx="12" fill="white" stroke="#a7f3d0" stroke-width="1.5"/>
+  <!-- Board icon -->
+  <rect x="412" y="85" width="56" height="40" rx="4" fill="#ecfdf5" stroke="#10b981" stroke-width="1.5"/>
+  <!-- SoC chip -->
+  <rect x="424" y="95" width="32" height="20" rx="2" fill="white" stroke="#10b981" stroke-width="1.5"/>
+  <text x="440" y="109" text-anchor="middle" font-size="8" font-weight="700" fill="#10b981">SoC</text>
+  <!-- GPIO pins top -->
+  <line x1="422" y1="80" x2="422" y2="85" stroke="#10b981" stroke-width="1.5"/>
+  <line x1="432" y1="80" x2="432" y2="85" stroke="#10b981" stroke-width="1.5"/>
+  <line x1="442" y1="80" x2="442" y2="85" stroke="#10b981" stroke-width="1.5"/>
+  <line x1="452" y1="80" x2="452" y2="85" stroke="#10b981" stroke-width="1.5"/>
+  <line x1="462" y1="80" x2="462" y2="85" stroke="#10b981" stroke-width="1.5"/>
+  <!-- GPIO pins bottom -->
+  <line x1="422" y1="125" x2="422" y2="130" stroke="#10b981" stroke-width="1.5"/>
+  <line x1="432" y1="125" x2="432" y2="130" stroke="#10b981" stroke-width="1.5"/>
+  <line x1="442" y1="125" x2="442" y2="130" stroke="#10b981" stroke-width="1.5"/>
+  <line x1="452" y1="125" x2="452" y2="130" stroke="#10b981" stroke-width="1.5"/>
+  <line x1="462" y1="125" x2="462" y2="130" stroke="#10b981" stroke-width="1.5"/>
+  <!-- LED dot -->
+  <circle cx="418" cy="120" r="2.5" fill="#10b981"/>
+  <!-- Labels -->
+  <text x="440" y="152" text-anchor="middle" font-size="15" font-weight="700" fill="#1e293b">CyberRaccoon</text>
+  <text x="440" y="170" text-anchor="middle" font-size="11" fill="#64748b">Raspberry Pi Controller</text>
+  <!-- Loop badge -->
+  <rect x="385" y="183" width="110" height="24" rx="12" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="1"/>
+  <text x="440" y="199" text-anchor="middle" font-size="10" font-weight="600" fill="#059669">capture · decide · act</text>
+  <!-- Subtitle -->
+  <text x="440" y="230" text-anchor="middle" font-size="10" fill="#94a3b8">Orchestrates the full loop</text>
+  <text x="440" y="246" text-anchor="middle" font-size="10" fill="#94a3b8">Hardware-level I/O control</text>
+
+  <!-- ═══ VISION LLM ═══ -->
+  <rect x="650" y="80" width="200" height="200" rx="12" fill="white" stroke="#e2e8f0" stroke-width="1.5"/>
+  <!-- Sparkle/AI icon -->
+  <path d="M750 95 l4 11 11 4 -11 4 -4 11 -4-11 -11-4 11-4z" fill="#8b5cf6"/>
+  <path d="M770 88 l2.5 7 7 2.5 -7 2.5 -2.5 7 -2.5-7 -7-2.5 7-2.5z" fill="#c4b5fd"/>
+  <path d="M730 92 l2 5.5 5.5 2 -5.5 2 -2 5.5 -2-5.5 -5.5-2 5.5-2z" fill="#c4b5fd"/>
+  <!-- Labels -->
+  <text x="750" y="145" text-anchor="middle" font-size="14" font-weight="600" fill="#1e293b">Vision LLM</text>
+  <text x="750" y="163" text-anchor="middle" font-size="11" fill="#64748b">Claude / GPT-4o</text>
+  <text x="750" y="185" text-anchor="middle" font-size="10" fill="#94a3b8">Sees the screen</text>
+  <text x="750" y="201" text-anchor="middle" font-size="10" fill="#94a3b8">Decides what to do next</text>
+
+  <!-- ═══ ARROWS ═══ -->
+
+  <!-- Step 1: Target → CyberRaccoon (upper path) -->
+  <line x1="234" y1="155" x2="336" y2="155" stroke="#3b82f6" stroke-width="2" marker-end="url(#a1)"/>
+  <circle cx="285" cy="155" r="11" fill="#3b82f6"/>
+  <text x="285" y="159" text-anchor="middle" font-size="10" font-weight="700" fill="white">1</text>
+  <text x="285" y="140" text-anchor="middle" font-size="10" font-weight="600" fill="#3b82f6">Capture</text>
+  <text x="285" y="128" text-anchor="middle" font-size="9" fill="#94a3b8">HDMI / CSI / AirPlay</text>
+
+  <!-- Step 2: CyberRaccoon → LLM (upper path) -->
+  <line x1="544" y1="155" x2="646" y2="155" stroke="#8b5cf6" stroke-width="2" marker-end="url(#a2)"/>
+  <circle cx="595" cy="155" r="11" fill="#8b5cf6"/>
+  <text x="595" y="159" text-anchor="middle" font-size="10" font-weight="700" fill="white">2</text>
+  <text x="595" y="140" text-anchor="middle" font-size="10" font-weight="600" fill="#8b5cf6">Analyze</text>
+  <text x="595" y="128" text-anchor="middle" font-size="9" fill="#94a3b8">Screenshot via API</text>
+
+  <!-- Step 3: LLM → CyberRaccoon (lower path) -->
+  <line x1="646" y1="215" x2="544" y2="215" stroke="#10b981" stroke-width="2" marker-end="url(#a3)"/>
+  <circle cx="595" cy="215" r="11" fill="#10b981"/>
+  <text x="595" y="219" text-anchor="middle" font-size="10" font-weight="700" fill="white">3</text>
+  <text x="595" y="240" text-anchor="middle" font-size="10" font-weight="600" fill="#10b981">Decide</text>
+  <text x="595" y="252" text-anchor="middle" font-size="9" fill="#94a3b8">Action as JSON</text>
+
+  <!-- Step 4: CyberRaccoon → Target (lower path) -->
+  <line x1="336" y1="215" x2="234" y2="215" stroke="#f59e0b" stroke-width="2" marker-end="url(#a4)"/>
+  <circle cx="285" cy="215" r="11" fill="#f59e0b"/>
+  <text x="285" y="219" text-anchor="middle" font-size="10" font-weight="700" fill="white">4</text>
+  <text x="285" y="240" text-anchor="middle" font-size="10" font-weight="600" fill="#f59e0b">Execute</text>
+  <text x="285" y="252" text-anchor="middle" font-size="9" fill="#94a3b8">USB / Bluetooth HID</text>
+
+  <!-- Loop indicator -->
+  <text x="440" y="332" text-anchor="middle" font-size="11" fill="#94a3b8" font-style="italic">Loop repeats until task is complete</text>
+</svg>

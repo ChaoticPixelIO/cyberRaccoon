@@ -1,0 +1,22 @@
+# Core dependencies
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# LLM providers
+anthropic>=0.45.0
+openai>=1.66.0
+
+# Config persistence
+pyyaml>=6.0
+
+# CLI REPL (optional, falls back to basic input())
+prompt_toolkit>=3.0
+
+# Web UI
+fastapi>=0.110.0
+uvicorn>=0.27.0
+
+# Development
+pytest>=8.0.0
+httpx>=0.27.0

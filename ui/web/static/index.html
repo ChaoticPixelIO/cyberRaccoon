@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CyberRaccoon</title>
+    <link rel="stylesheet" href="/static/style.css?v=7">
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="/static/app.js?v=10"></script>
+</head>
+<body>
+
+<div id="app" x-data="cyberRaccoon()" x-init="init()">
+
+    <!-- Header -->
+    <header class="header">
+        <h1>CyberRaccoon</h1>
+        <span class="status-badge" :class="modulesReady ? 'ready' : 'offline'"
+              x-text="modulesReady ? 'Ready' : 'Offline'"></span>
+    </header>
+
+    <!-- Navigation tabs -->
+    <nav class="tabs">
+        <button :class="{ active: tab === 'task' }"    @click="tab = 'task'">Task</button>
+        <button :class="{ active: tab === 'config' }"  @click="tab = 'config'">Config</button>
+        <button :class="{ active: tab === 'skills' }"  @click="tab = 'skills'; loadSkills()">Skills</button>
+        <button :class="{ active: tab === 'status' }"  @click="tab = 'status'">Status</button>
+        <button :class="{ active: tab === 'debug' }"   @click="tab = 'debug'">Debug</button>
+    </nav>
+
+    <!-- ============================================================ -->
+    <!-- Task Panel                                                    -->
+    <!-- ============================================================ -->
+    <section x-show="tab === 'task'" class="panel">
+
+        <!-- Connection panel — two independent rows -->
+        <div class="connection-panel">
+            <!-- Capture row -->
+            <div class="connection-row">
+                <div class="connection-item">
+                    <span class="connection-label-fixed">Screen Capture:</span>
+                    <select class="connection-select" x-model="config.capture_source"
+                            @change="saveTopLevel()"
+                            :disabled="captureReady || connectingCapture">
+                        <option value="hdmi">HDMI</option>
+                        <option value="csi">CSI Camera</option>
+                        <option value="airplay">AirPlay</option>
+                    </select>
+                    <span class="tooltip-wrap">
+                        <span class="tooltip-icon">?</span>
+                        <span class="tooltip-text" x-text="captureTooltip()"></span>
+                    </span>
+                </div>
+                <div class="connection-actions">
+                    <span class="status-dot" :class="captureReady ? 'dot-ok' : (captureError ? 'dot-error' : 'dot-off')"></span>
+                    <span class="device-name" x-show="captureDevice" x-text="captureDevice" x-cloak></span>
+                    <template x-if="!captureReady && !connectingCapture">
+                        <button @click="connectCapture()" class="btn btn-primary btn-sm">Connect</button>
+                    </template>
+                    <template x-if="connectingCapture">
+                        <div style="display:flex;gap:0.25rem;">
+                            <button disabled class="btn btn-primary btn-sm">
+                                <span class="spinner"></span> Connecting…
+                            </button>
+                            <button @click="cancelConnectCapture()" class="btn btn-sm btn-danger">Cancel</button>
+                        </div>
+                    </template>
+                    <template x-if="captureReady && !connectingCapture">
+                        <button @click="disconnectCapture()" :disabled="taskRunning"
+                                class="btn btn-sm btn-connected">Disconnect</button>
+                    </template>
+                </div>
+            </div>
+            <!-- Input row -->
+            <div class="connection-row">
+                <div class="connection-item">
+                    <span class="connection-label-fixed">Mouse/Keyboard:</span>
+                    <select class="connection-select" x-model="config.executor_transport"
+                            @change="saveTopLevel()"
+                            :disabled="executorReady || connectingExecutor">
+                        <option value="usb">USB HID</option>
+                        <option value="bt">Bluetooth</option>
+                    </select>
+                    <span class="tooltip-wrap">
+                        <span class="tooltip-icon">?</span>
+                        <span class="tooltip-text" x-text="transportTooltip()"></span>
+                    </span>
+                </div>
+                <div class="connection-actions">
+                    <span class="status-dot" :class="executorReady ? 'dot-ok' : (executorError ? 'dot-error' : 'dot-off')"></span>
+                    <span class="device-name" x-show="executorDevice" x-text="executorDevice" x-cloak></span>
+                    <template x-if="!executorReady && !connectingExecutor">
+                        <button @click="connectExecutor()" class="btn btn-primary btn-sm">Connect</button>
+                    </template>
+                    <template x-if="connectingExecutor">
+                        <div style="display:flex;gap:0.25rem;">
+                            <button disabled class="btn btn-primary btn-sm">
+                                <span class="spinner"></span> Connecting…
+                            </button>
+                            <button @click="cancelConnectExecutor()" class="btn btn-sm btn-danger">Cancel</button>
+                        </div>
+                    </template>
+                    <template x-if="executorReady && !connectingExecutor">
+                        <button @click="disconnectExecutor()" :disabled="taskRunning"
+                                class="btn btn-sm btn-connected">Disconnect</button>
+                    </template>
+                </div>
+            </div>
+            <!-- Target OS row -->
+            <div class="connection-row">
+                <div class="connection-item">
+                    <span class="connection-label-fixed">Target OS:</span>
+                    <select class="connection-select" x-model="config.target_os"
+                            @change="saveTopLevel()">
+                        <option value="">Auto-detect</option>
+                        <option value="windows">Windows</option>
+                        <option value="macos">macOS</option>
+                        <option value="linux">Linux</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <div class="connection-error" x-show="captureError" x-text="captureError" x-cloak></div>
+        <div class="connection-error" x-show="executorError" x-text="executorError" x-cloak></div>
+
+        <div class="task-controls">
+            <input type="text" x-model="taskGoal" placeholder="Task goal..."
+                   @keydown.enter="if (!$event.isComposing) startTask()"
+                   :disabled="taskRunning" class="task-input">
+            <button @click="startTask()"
+                    :disabled="taskRunning || connectingCapture || connectingExecutor || !taskGoal.trim()"
+                    class="btn btn-primary">
+                <template x-if="!connectingCapture && !connectingExecutor">
+                    <span>Start</span>
+                </template>
+                <template x-if="connectingCapture || connectingExecutor">
+                    <span><span class="spinner"></span> Connecting…</span>
+                </template>
+            </button>
+            <button @click="abortTask()" :disabled="!taskRunning"
+                    class="btn btn-danger">Abort</button>
+        </div>
+
+        <!-- Screenshot preview -->
+        <div class="preview-area">
+            <template x-if="screenshot">
+                <img :src="'data:image/jpeg;base64,' + screenshot"
+                     alt="Screen preview" class="preview-img">
+            </template>
+            <template x-if="!screenshot">
+                <div class="preview-placeholder">No screenshot yet</div>
+            </template>
+        </div>
+
+        <!-- Task stats (live running total, not just at task end) -->
+        <template x-if="totalInputTokens > 0 || totalOutputTokens > 0">
+            <div class="task-stats">
+                <template x-if="taskResult">
+                    <span>
+                        <span x-text="taskResult.total_steps + ' steps'"></span>
+                        <span>·</span>
+                        <span x-text="taskResult.total_duration_s + 's'"></span>
+                        <span>·</span>
+                    </span>
+                </template>
+                <span x-text="totalInputTokens.toLocaleString() + ' in'"></span>
+                <span>·</span>
+                <span x-text="totalOutputTokens.toLocaleString() + ' out'"></span>
+                <template x-if="totalCacheReadTokens > 0 || totalCacheCreationTokens > 0">
+                    <span>
+                        <span>·</span>
+                        <span x-text="totalCacheReadTokens.toLocaleString() + ' cache read'"></span>
+                        <span>·</span>
+                        <span x-text="totalCacheCreationTokens.toLocaleString() + ' cache write'"></span>
+                    </span>
+                </template>
+            </div>
+        </template>
+
+        <!-- Step log -->
+        <div class="step-log" x-ref="stepLog">
+            <template x-if="steps.length === 0 && !taskRunning">
+                <p class="muted">No steps yet. Start a task above.</p>
+            </template>
+            <template x-for="(step, idx) in steps" :key="step.step">
+                <div class="step-entry" :class="['step-' + step.execute_status, selectedStep === idx ? 'selected' : '']"
+                     @click="selectStep(idx)">
+                    <span class="step-num" x-text="'#' + step.step"></span>
+                    <span class="step-action" x-text="formatStep(step)"></span>
+                    <span class="step-latency" x-show="step.llm_latency_ms > 0" x-text="step.llm_latency_ms + 'ms'"></span>
+                    <span class="step-tokens muted" x-show="step.input_tokens > 0 || step.output_tokens > 0"
+                          x-text="step.input_tokens + ' in · ' + step.output_tokens + ' out' + (step.cache_read_tokens ? ' · ' + step.cache_read_tokens + ' cr' : '') + (step.cache_creation_tokens ? ' · ' + step.cache_creation_tokens + ' cw' : '')"></span>
+                    <span class="step-status" x-text="'[' + step.execute_status + ']'"></span>
+                </div>
+            </template>
+        </div>
+
+        <!-- Step detail tabs (persist across step clicks) -->
+        <div class="step-detail-tabs" x-show="steps.length > 0">
+            <button :class="{ active: stepDetailTab === 'detail' }"
+                    @click="stepDetailTab = 'detail'">Step Detail</button>
+            <button :class="{ active: stepDetailTab === 'system_prompt' }"
+                    @click="stepDetailTab = 'system_prompt'">System Prompt</button>
+            <button :class="{ active: stepDetailTab === 'raw_prompt' }"
+                    @click="stepDetailTab = 'raw_prompt'">Raw Prompt</button>
+        </div>
+
+        <!-- Step detail panel -->
+        <template x-if="selectedStep !== null && activeStep">
+            <div class="step-detail">
+                <div class="step-detail-header">
+                    <strong x-text="'Step #' + activeStep.step + ' Detail'"></strong>
+                    <button @click="deselectStep()" class="btn btn-sm">Close</button>
+                </div>
+                <div x-show="stepDetailTab === 'detail'">
+                    <div class="step-detail-section">
+                        <h4>LLM Response</h4>
+                        <div class="pre-wrap">
+                            <button class="btn-copy" @click="copyText(activeStep.llm_response_text || '', $event)">Copy</button>
+                            <pre class="step-detail-pre" x-text="activeStep.llm_response_text || '(no response)'"></pre>
+                        </div>
+                    </div>
+                    <div class="step-detail-section">
+                        <h4>Prompt History</h4>
+                        <template x-if="activeStep.prompt_messages && activeStep.prompt_messages.length > 0">
+                            <div class="prompt-messages">
+                                <template x-for="(msg, mi) in activeStep.prompt_messages" :key="mi">
+                                    <div class="prompt-msg" :class="'prompt-' + msg.role">
+                                        <span class="prompt-role" x-text="msg.role"></span>
+                                        <div class="pre-wrap">
+                                            <button class="btn-copy" @click="copyText(formatMsgContent(msg.content), $event)">Copy</button>
+                                            <pre class="prompt-content" x-text="formatMsgContent(msg.content)"></pre>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                        <template x-if="!activeStep.prompt_messages || activeStep.prompt_messages.length === 0">
+                            <p class="muted">(no history — first step)</p>
+                        </template>
+                    </div>
+                </div>
+                <div x-show="stepDetailTab === 'system_prompt'">
+                    <div class="step-detail-section">
+                        <div class="pre-wrap">
+                            <button class="btn-copy" @click="copyText(activeStep.system_prompt || '', $event)">Copy</button>
+                            <pre class="step-detail-pre raw-prompt-pre" x-text="activeStep.system_prompt || '(no system prompt)'"></pre>
+                        </div>
+                    </div>
+                </div>
+                <div x-show="stepDetailTab === 'raw_prompt'">
+                    <div class="step-detail-section">
+                        <h4>Prompt Messages</h4>
+                        <div class="pre-wrap">
+                            <button class="btn-copy" @click="copyText(formatRawPrompt(activeStep), $event)">Copy</button>
+                            <pre class="step-detail-pre raw-prompt-pre" x-text="formatRawPrompt(activeStep)"></pre>
+                        </div>
+                    </div>
+                    <div class="step-detail-section">
+                        <h4>LLM Raw Response</h4>
+                        <div class="pre-wrap">
+                            <button class="btn-copy" @click="copyText(activeStep.llm_response_text || '', $event)">Copy</button>
+                            <pre class="step-detail-pre raw-prompt-pre" x-text="activeStep.llm_response_text || '(no response)'"></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- Task result -->
+        <template x-if="taskResult && taskResult.status !== 'completed'">
+            <div class="task-result" :class="'result-' + taskResult.status">
+                <strong x-text="taskResult.status.toUpperCase()"></strong>:
+                <span x-text="taskResult.reason"></span>
+                <div class="result-stats">
+                    <span x-text="taskResult.total_steps + ' steps'"></span> &middot;
+                    <span x-text="taskResult.total_duration_s + 's'"></span> &middot;
+                    <span x-text="taskResult.total_input_tokens + ' in + ' + taskResult.total_output_tokens + ' out'"></span>
+                    <template x-if="taskResult.total_cache_read_tokens || taskResult.total_cache_creation_tokens">
+                        <span>
+                            &middot; <span x-text="(taskResult.total_cache_read_tokens || 0) + ' cache read'"></span>
+                            &middot; <span x-text="(taskResult.total_cache_creation_tokens || 0) + ' cache write'"></span>
+                        </span>
+                    </template>
+                </div>
+            </div>
+        </template>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- Config Panel                                                  -->
+    <!-- ============================================================ -->
+    <section x-show="tab === 'config'" class="panel">
+        <template x-if="config">
+            <div class="config-grid">
+
+                <!-- LLM -->
+                <fieldset>
+                    <legend>LLM (M3)</legend>
+                    <label>Provider
+                        <select x-model="config.llm.provider">
+                            <option value="anthropic">Anthropic</option>
+                            <option value="openai">OpenAI</option>
+                        </select>
+                    </label>
+                    <label>Model
+                        <input type="text" x-model="config.llm.model">
+                    </label>
+                    <label>API Key
+                        <input type="password" x-model="config.llm.api_key"
+                               placeholder="sk-...">
+                    </label>
+                    <label>Base URL
+                        <input type="text" x-model="config.llm.base_url"
+                               placeholder="(default)">
+                    </label>
+                    <label>Temperature
+                        <input type="number" x-model.number="config.llm.temperature"
+                               step="0.1" min="0" max="2">
+                    </label>
+                    <button @click="saveSection('llm')" class="btn">Save LLM</button>
+                </fieldset>
+
+                <!-- Agent -->
+                <fieldset>
+                    <legend>Agent (M2)</legend>
+                    <label>Max Steps
+                        <input type="number" x-model.number="config.agent.max_steps" min="1">
+                    </label>
+                    <label>Timeout (s)
+                        <input type="number" x-model.number="config.agent.task_timeout_s" min="1">
+                    </label>
+                    <label>Post-action Delay (s)
+                        <input type="number" x-model.number="config.agent.post_action_delay_s"
+                               step="0.1" min="0">
+                    </label>
+                    <button @click="saveSection('agent')" class="btn">Save Agent</button>
+                </fieldset>
+
+                <!-- Network -->
+                <fieldset>
+                    <legend>Network</legend>
+                    <label>Web Host
+                        <input type="text" x-model="config.network.web_host">
+                    </label>
+                    <label>Web Port
+                        <input type="number" x-model.number="config.network.web_port">
+                    </label>
+                    <button @click="saveSection('network')" class="btn">Save Network</button>
+                </fieldset>
+
+            </div>
+        </template>
+        <template x-if="!config">
+            <p class="muted">Loading configuration...</p>
+        </template>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- Skills Panel                                                  -->
+    <!-- ============================================================ -->
+    <section x-show="tab === 'skills'" class="panel">
+
+        <!-- 1. Active Skills summary -->
+        <div class="connection-panel">
+            <div class="connection-row">
+                <div class="connection-item">
+                    <span class="connection-label-fixed">Active Skills:</span>
+                    <span x-show="activeSkills.length === 0" style="font-size:0.8rem; color:var(--text-muted);">none</span>
+                    <span x-show="activeSkills.length > 0" style="display:flex;align-items:center;gap:0.4rem;">
+                        <span class="status-dot dot-ok"></span>
+                        <span style="font-size:0.8rem; color:var(--ok);" x-text="activeSkills.join(', ')"></span>
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. Section header + "New Skill" button -->
+        <div class="section-header">
+            <span class="section-title">Available Skills</span>
+            <button class="btn btn-sm btn-primary" style="font-size:0.75rem;"
+                    :disabled="editingSkill"
+                    @click="startNewSkill()">+ New Skill</button>
+        </div>
+
+        <!-- 3. Skill list -->
+        <div class="skill-list">
+            <template x-if="skills.length === 0">
+                <p class="muted">No skills found.</p>
+            </template>
+            <template x-for="s in skills" :key="s.name">
+                <div class="skill-entry"
+                     :class="[selectedSkill === s.name ? 'selected' : '', activeSkills.includes(s.name) ? 'active-skill' : '']"
+                     @click="selectSkill(s.name)">
+                    <input type="checkbox" class="skill-checkbox"
+                           :checked="activeSkills.includes(s.name)"
+                           @click.stop="toggleSkill(s.name)">
+                    <span class="skill-name" x-text="s.name"></span>
+                    <template x-if="activeSkills.includes(s.name)">
+                        <span class="skill-active-badge">active</span>
+                    </template>
+                    <span class="skill-source" :class="s.source" x-text="s.source"></span>
+                </div>
+            </template>
+        </div>
+
+        <!-- 4. Preview panel (shown when a skill is selected and not editing) -->
+        <template x-if="selectedSkill && !editingSkill">
+            <div class="skill-preview">
+                <div class="skill-preview-header">
+                    <div style="display:flex;align-items:center;gap:0.5rem;">
+                        <strong x-text="selectedSkill"></strong>
+                        <span class="skill-source" :class="skillSource" x-text="skillSource"></span>
+                    </div>
+                    <div class="skill-preview-actions">
+                        <button class="btn btn-sm" @click="copyText(skillContent, $event)">Copy</button>
+                        <button class="btn btn-sm" @click="startEditSkill()">Edit</button>
+                        <button class="btn btn-sm btn-danger"
+                                :disabled="skillSource === 'bundled'"
+                                @click="deleteSkill(selectedSkill)">Delete</button>
+                    </div>
+                </div>
+                <pre class="skill-preview-content" x-text="skillContent"></pre>
+            </div>
+        </template>
+
+        <!-- 5. Editor panel (shown when creating or editing) -->
+        <template x-if="editingSkill">
+            <div class="skill-editor">
+                <div class="skill-editor-header">
+                    <div style="display:flex;gap:0.5rem;align-items:center;">
+                        <strong x-text="isNewSkill ? 'New Skill' : 'Editing:'"></strong>
+                        <input class="skill-name-input" placeholder="skill-name"
+                               x-model="editSkillName"
+                               :disabled="!isNewSkill">
+                    </div>
+                    <div style="display:flex;gap:0.35rem;">
+                        <button class="btn btn-sm btn-primary" @click="saveSkill()"
+                                :disabled="!editSkillName.trim() || !editSkillContent.trim()">Save</button>
+                        <button class="btn btn-sm" @click="cancelEdit()">Cancel</button>
+                    </div>
+                </div>
+                <textarea class="skill-textarea" x-model="editSkillContent"
+                          placeholder="# My Skill&#10;&#10;Describe the application's UI layout, keyboard shortcuts, and workflows here..."></textarea>
+            </div>
+        </template>
+
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- Status Panel                                                  -->
+    <!-- ============================================================ -->
+    <section x-show="tab === 'status'" class="panel">
+        <div class="status-grid">
+            <div class="status-card">
+                <h3>Modules</h3>
+                <p :class="modulesReady ? 'text-ok' : 'text-warn'"
+                   x-text="modulesReady ? 'Initialised' : 'Not initialised'"></p>
+            </div>
+            <div class="status-card">
+                <h3>Capture</h3>
+                <p x-text="statusData.capture_source || '-'"></p>
+            </div>
+            <div class="status-card">
+                <h3>Transport</h3>
+                <p x-text="statusData.executor_transport || '-'"></p>
+            </div>
+            <div class="status-card">
+                <h3>LLM</h3>
+                <p x-text="(statusData.llm_provider || '-') + ' / ' + (statusData.llm_model || '-')"></p>
+            </div>
+            <div class="status-card">
+                <h3>Task</h3>
+                <p x-text="statusData.task ? statusData.task.status : 'idle'"></p>
+            </div>
+            <div class="status-card">
+                <h3>Wi-Fi</h3>
+                <template x-if="statusData.wifi && statusData.wifi.connected">
+                    <p x-text="statusData.wifi.ssid + ' (' + statusData.wifi.ip + ')'"></p>
+                </template>
+                <template x-if="!statusData.wifi || !statusData.wifi.connected">
+                    <p class="text-warn">Not connected</p>
+                </template>
+            </div>
+        </div>
+        <div style="margin-top:1rem; display:flex; gap:0.5rem;">
+            <button @click="refreshStatus()" class="btn">Refresh</button>
+        </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <!-- Debug Panel                                                   -->
+    <!-- ============================================================ -->
+    <section x-show="tab === 'debug'" class="panel">
+        <div class="debug-filters">
+            <label>Level
+                <select x-model="logFilter.level">
+                    <option value="">All</option>
+                    <option value="DEBUG">DEBUG</option>
+                    <option value="INFO">INFO</option>
+                    <option value="WARNING">WARNING</option>
+                    <option value="ERROR">ERROR</option>
+                </select>
+            </label>
+            <label>Module
+                <select x-model="logFilter.module">
+                    <option value="">All</option>
+                    <option value="M1">M1 Capture</option>
+                    <option value="M2">M2 Agent</option>
+                    <option value="M3">M3 LLM</option>
+                    <option value="M4">M4 Executor</option>
+                    <option value="M5">M5 UI</option>
+                </select>
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" x-model="logFilter.autoScroll"> Auto-scroll
+            </label>
+            <button @click="loadLogs()" class="btn btn-sm">Refresh</button>
+            <button @click="clearLogs()" class="btn btn-sm btn-danger">Clear</button>
+        </div>
+
+        <div class="log-output" x-ref="logContainer">
+            <template x-if="filteredLogs.length === 0">
+                <p class="muted">(no logs)</p>
+            </template>
+            <template x-for="(log, idx) in filteredLogs" :key="idx">
+                <div class="log-entry" :class="'log-' + (log.level || '').toLowerCase()">
+                    <span x-text="log"></span>
+                </div>
+            </template>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <span>WS: <span :class="wsConnected ? 'text-ok' : 'text-warn'"
+              x-text="wsConnected ? 'connected' : 'disconnected'"></span></span>
+    </footer>
+
+</div>
+
+</body>
+</html>

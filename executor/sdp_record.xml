@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  CyberRaccoon Bluetooth HID SDP Service Record
+
+  Declares this device as a composite HID device (Keyboard + Absolute Mouse).
+  Used by BluetoothHIDConnection when registering the HID Profile with BlueZ.
+
+  HID Report Descriptor defines two reports:
+    Report ID 1: 8-byte Boot Keyboard (modifier + reserved + 6 keycodes)
+    Report ID 2: 7-byte Absolute Mouse (buttons + X:16LE + Y:16LE + wheel + pad)
+-->
+<record>
+  <!-- Service Class ID: HID -->
+  <attribute id="0x0001">
+    <sequence>
+      <uuid value="0x1124" />
+    </sequence>
+  </attribute>
+
+  <!-- Protocol Descriptor: L2CAP (PSM 0x0011 = HID Control) + HIDP -->
+  <attribute id="0x0004">
+    <sequence>
+      <sequence>
+        <uuid value="0x0100" />
+        <uint16 value="0x0011" />
+      </sequence>
+      <sequence>
+        <uuid value="0x0011" />
+      </sequence>
+    </sequence>
+  </attribute>
+
+  <!-- Browse Group: Public Browse Root -->
+  <attribute id="0x0005">
+    <sequence>
+      <uuid value="0x1002" />
+    </sequence>
+  </attribute>
+
+  <!-- Language Base Attribute -->
+  <attribute id="0x0006">
+    <sequence>
+      <uint16 value="0x656e" />
+      <uint16 value="0x006a" />
+      <uint16 value="0x0100" />
+    </sequence>
+  </attribute>
+
+  <!-- Profile Descriptor: HID v1.1 -->
+  <attribute id="0x0009">
+    <sequence>
+      <sequence>
+        <uuid value="0x1124" />
+        <uint16 value="0x0111" />
+      </sequence>
+    </sequence>
+  </attribute>
+
+  <!-- Additional Protocol: L2CAP (PSM 0x0013 = HID Interrupt) + HIDP -->
+  <attribute id="0x000d">
+    <sequence>
+      <sequence>
+        <sequence>
+          <uuid value="0x0100" />
+          <uint16 value="0x0013" />
+        </sequence>
+        <sequence>
+          <uuid value="0x0011" />
+        </sequence>
+      </sequence>
+    </sequence>
+  </attribute>
+
+  <!-- Service Name -->
+  <attribute id="0x0100">
+    <text value="CyberRaccoon HID" />
+  </attribute>
+
+  <!-- Service Description -->
+  <attribute id="0x0101">
+    <text value="AI Computer Control - Keyboard and Mouse" />
+  </attribute>
+
+  <!-- Service Provider -->
+  <attribute id="0x0102">
+    <text value="CyberRaccoon" />
+  </attribute>
+
+  <!-- HID Device Release Number -->
+  <attribute id="0x0200">
+    <uint16 value="0x0100" />
+  </attribute>
+
+  <!-- HID Parser Version -->
+  <attribute id="0x0201">
+    <uint16 value="0x0111" />
+  </attribute>
+
+  <!-- HID Device Subclass: Keyboard (0x40) -->
+  <attribute id="0x0202">
+    <uint8 value="0x40" />
+  </attribute>
+
+  <!-- HID Country Code: Not Specified -->
+  <attribute id="0x0203">
+    <uint8 value="0x00" />
+  </attribute>
+
+  <!-- HID Virtual Cable -->
+  <attribute id="0x0204">
+    <boolean value="true" />
+  </attribute>
+
+  <!-- HID Reconnect Initiate -->
+  <attribute id="0x0205">
+    <boolean value="true" />
+  </attribute>
+
+  <!--
+    HID Report Descriptor (attribute 0x0206)
+
+    Two Application Collections with Report IDs:
+
+    Report ID 1 — Boot Keyboard (8 bytes):
+      Byte 0: Modifier keys (8 bits: LCtrl..RGui)
+      Byte 1: Reserved (constant)
+      Bytes 2-7: Key codes array (6 slots, Usage 0x00-0x65)
+      Output: 5 LED bits + 3 padding
+
+    Report ID 2 — Absolute Mouse (7 bytes):
+      Byte 0: 5 buttons + 3 padding
+      Bytes 1-2: X absolute (uint16 LE, 0-32767)
+      Bytes 3-4: Y absolute (uint16 LE, 0-32767)
+      Byte 5: Wheel (int8, relative)
+      Byte 6: Padding (constant)
+  -->
+  <attribute id="0x0206">
+    <sequence>
+      <sequence>
+        <uint8 value="0x22" />
+        <text encoding="hex" value="05010906a1018501050719e029e71500250175019508810295017508810195057501050819012905910295017503910195067508150025650507190029658100c005010902a10185020901a1000509190129051500250175019505810295017503810105010930093116000026ff7f75109502810209381581257f750895018106950175088101c0c0" />
+      </sequence>
+    </sequence>
+  </attribute>
+
+  <!-- HID LANGID Base: English (US) -->
+  <attribute id="0x0207">
+    <sequence>
+      <sequence>
+        <uint16 value="0x0409" />
+        <uint16 value="0x0100" />
+      </sequence>
+    </sequence>
+  </attribute>
+
+  <!-- HID Boot Device: true -->
+  <attribute id="0x020e">
+    <boolean value="true" />
+  </attribute>
+
+  <!-- HID Supervision Timeout -->
+  <attribute id="0x020c">
+    <uint16 value="0x0c80" />
+  </attribute>
+
+  <!-- HID Normally Connectable -->
+  <attribute id="0x020d">
+    <boolean value="true" />
+  </attribute>
+
+  <!-- HID Profile Version -->
+  <attribute id="0x020f">
+    <uint16 value="0x0100" />
+  </attribute>
+</record>
