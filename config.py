@@ -64,8 +64,7 @@ class AgentConfig:
 
 @dataclass
 class ExecutorConfig:
-    keyboard_device: str = "/dev/hidg0"
-    mouse_device: str = "/dev/hidg1"
+    device: str = "/dev/hidg0"
     screen_width: int = 1280
     screen_height: int = 720
 

@@ -467,8 +467,7 @@ class AppController:
             )
         else:
             executor = ActionExecutor(
-                keyboard_device=config.executor.keyboard_device,
-                mouse_device=config.executor.mouse_device,
+                device=config.executor.device,
                 target_os=target_os,
             )
 
@@ -490,7 +489,7 @@ class AppController:
         if config.executor_transport == "bt":
             device_name = getattr(executor, "connected_host", "")
         else:
-            device_name = config.executor.keyboard_device
+            device_name = config.executor.device
 
         with self._lock:
             if self._executor is not executor:

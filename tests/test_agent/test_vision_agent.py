@@ -175,9 +175,9 @@ class TestTerminationConditions:
     def test_abort_method(self) -> None:
         """abort() sets the flag correctly."""
         agent = _make_agent([{"action": "done", "reason": "ok"}])
-        assert agent._abort_requested is False
+        assert not agent._abort_event.is_set()
         agent.abort()
-        assert agent._abort_requested is True
+        assert agent._abort_event.is_set()
 
 
 # ===========================================================================

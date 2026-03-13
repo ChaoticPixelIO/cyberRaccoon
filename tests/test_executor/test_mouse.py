@@ -8,6 +8,7 @@ import pytest
 
 from executor.mouse import (
     HID_MAX,
+    REPORT_ID,
     SCREEN_HEIGHT,
     SCREEN_WIDTH,
     _build_report,
@@ -50,13 +51,18 @@ class TestMouseCoordinates:
 class TestMouseReport:
     """Tests for mouse HID report format."""
 
-    def test_report_is_7_bytes(self) -> None:
+    def test_report_is_8_bytes(self) -> None:
         report = _build_report(0, 0, 0, 0)
-        assert len(report) == 7
+        assert len(report) == 8
+
+    def test_report_id_in_first_byte(self) -> None:
+        report = _build_report(0, 0, 0, 0)
+        assert report[0] == REPORT_ID
 
     def test_report_format(self) -> None:
         report = _build_report(0x01, 1000, 2000, -1)
-        buttons, x, y, wheel, pad = struct.unpack("<BHHbB", report)
+        rid, buttons, x, y, wheel, pad = struct.unpack("<BBHHbB", report)
+        assert rid == REPORT_ID
         assert buttons == 0x01
         assert x == 1000
         assert y == 2000
@@ -65,7 +71,7 @@ class TestMouseReport:
 
     def test_zero_report(self) -> None:
         report = _build_report(0, 0, 0, 0)
-        assert report == b"\x00" * 7
+        assert report == bytes([REPORT_ID]) + b"\x00" * 7
 
 
 class TestMouseOperations:
@@ -76,31 +82,31 @@ class TestMouseOperations:
         mock_mouse.click(640, 360)
         assert len(mock_mouse_device.reports) == 3
 
-    def test_click_all_reports_7_bytes(self, mock_mouse: MouseController,
+    def test_click_all_reports_8_bytes(self, mock_mouse: MouseController,
                                        mock_mouse_device: MockHIDDevice) -> None:
         mock_mouse.click(100, 200)
         for report in mock_mouse_device.reports:
-            assert len(report) == 7
+            assert len(report) == 8
 
     def test_click_press_and_release(self, mock_mouse: MouseController,
                                       mock_mouse_device: MockHIDDevice) -> None:
         mock_mouse.click(640, 360)
         reports = mock_mouse_device.reports
 
-        # Report 0: move (buttons=0)
-        assert reports[0][0] == 0x00
+        # Report 0: move (buttons=0), byte 1 is buttons (byte 0 is report ID)
+        assert reports[0][1] == 0x00
 
         # Report 1: press (buttons=left=0x01)
-        assert reports[1][0] == 0x01
+        assert reports[1][1] == 0x01
 
         # Report 2: release (buttons=0)
-        assert reports[2][0] == 0x00
+        assert reports[2][1] == 0x00
 
     def test_right_click(self, mock_mouse: MouseController,
                           mock_mouse_device: MockHIDDevice) -> None:
         mock_mouse.click(640, 360, button="right")
-        # Press report should have right button (0x02)
-        assert mock_mouse_device.reports[1][0] == 0x02
+        # Press report should have right button (0x02), byte 1 is buttons
+        assert mock_mouse_device.reports[1][1] == 0x02
 
     def test_double_click_sends_6_reports(self, mock_mouse: MouseController,
                                            mock_mouse_device: MockHIDDevice) -> None:
@@ -118,14 +124,14 @@ class TestMouseOperations:
         mock_mouse.scroll(640, 360, direction="down", amount=1)
         # reports: [move, scroll_tick, stop]
         scroll_report = mock_mouse_device.reports[1]
-        _, _, _, wheel, _ = struct.unpack("<BHHbB", scroll_report)
+        _, _, _, _, wheel, _ = struct.unpack("<BBHHbB", scroll_report)
         assert wheel == -1
 
     def test_scroll_up_wheel_value(self, mock_mouse: MouseController,
                                     mock_mouse_device: MockHIDDevice) -> None:
         mock_mouse.scroll(640, 360, direction="up", amount=1)
         scroll_report = mock_mouse_device.reports[1]
-        _, _, _, wheel, _ = struct.unpack("<BHHbB", scroll_report)
+        _, _, _, _, wheel, _ = struct.unpack("<BBHHbB", scroll_report)
         assert wheel == 1
 
     def test_drag_report_count(self, mock_mouse: MouseController,
@@ -139,10 +145,11 @@ class TestMouseOperations:
         mock_mouse.drag(100, 200, 500, 300)
         reports = mock_mouse_device.reports
         # Reports 1 (press) through 11 (last interp step) should have button pressed
+        # Byte 1 is buttons (byte 0 is report ID)
         for i in range(1, 12):
-            assert reports[i][0] == 0x01, f"Report {i} should have left button"
+            assert reports[i][1] == 0x01, f"Report {i} should have left button"
         # Final release
-        assert reports[12][0] == 0x00
+        assert reports[12][1] == 0x00
 
     def test_move_sends_1_report(self, mock_mouse: MouseController,
                                   mock_mouse_device: MockHIDDevice) -> None:

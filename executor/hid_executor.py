@@ -1,8 +1,8 @@
 """M4 Action Executor — dispatches commands via USB HID Gadget.
 
-Routes JSON commands to mouse/keyboard controllers using /dev/hidg*
-device files. Inherits command dispatch, deduplication, and timing
-from BaseExecutor.
+Routes JSON commands to mouse/keyboard controllers using a single
+/dev/hidg0 device file with Report IDs. Inherits command dispatch,
+deduplication, and timing from BaseExecutor.
 """
 
 from __future__ import annotations
@@ -37,48 +37,39 @@ class ActionExecutor(BaseExecutor):
 
     def __init__(
         self,
-        keyboard_device: str = "/dev/hidg0",
-        mouse_device: str = "/dev/hidg1",
+        device: str = "/dev/hidg0",
         humanize_config: HumanizeConfig | None = None,
         target_os: str | None = None,
+        # Legacy kwarg accepted for backwards compatibility
+        keyboard_device: str | None = None,
     ) -> None:
         super().__init__(humanize_config=humanize_config, target_os=target_os)
-        self._keyboard_device_path = keyboard_device
-        self._mouse_device_path = mouse_device
-        self._keyboard_dev: HIDDevice | None = None
-        self._mouse_dev: HIDDevice | None = None
+        self._device_path = keyboard_device or device
+        self._hid_dev: HIDDevice | None = None
 
     def open(self) -> None:
-        """Open both HID device files and initialize controllers."""
-        self._keyboard_dev = HIDDevice(self._keyboard_device_path)
-        self._keyboard_dev.open()
+        """Open the HID device file and initialize controllers.
 
-        self._mouse_dev = HIDDevice(self._mouse_device_path)
-        try:
-            self._mouse_dev.open()
-        except Exception:
-            self._keyboard_dev.close()
-            self._keyboard_dev = None
-            raise
+        Keyboard and mouse share a single /dev/hidg0 device using
+        Report IDs (1=keyboard, 2=mouse) in a combined HID descriptor.
+        """
+        self._hid_dev = HIDDevice(self._device_path)
+        self._hid_dev.open()
 
         self._keyboard = self._wrap_keyboard_if_humanized(
-            KeyboardController(self._keyboard_dev)
+            KeyboardController(self._hid_dev)
         )
         self._mouse = self._wrap_mouse_if_humanized(
-            MouseController(self._mouse_dev)
+            MouseController(self._hid_dev)
         )
 
-        logger.info("ActionExecutor opened (keyboard=%s, mouse=%s)",
-                     self._keyboard_device_path, self._mouse_device_path)
+        logger.info("ActionExecutor opened (device=%s)", self._device_path)
 
     def close(self) -> None:
-        """Close both HID device files."""
-        if self._keyboard_dev:
-            self._keyboard_dev.close()
-            self._keyboard_dev = None
-        if self._mouse_dev:
-            self._mouse_dev.close()
-            self._mouse_dev = None
+        """Close the HID device file."""
+        if self._hid_dev:
+            self._hid_dev.close()
+            self._hid_dev = None
         self._keyboard = None
         self._mouse = None
         logger.info("ActionExecutor closed")

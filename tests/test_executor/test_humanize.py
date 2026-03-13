@@ -257,9 +257,10 @@ class TestHumanizedMouseClick:
         mouse.click(640, 360)
         reports = device.reports
         # Last 3: move(buttons=0), press(buttons=1), release(buttons=0)
-        assert reports[-3][0] == 0x00  # move
-        assert reports[-2][0] == 0x01  # press (left button)
-        assert reports[-1][0] == 0x00  # release
+        # Byte 1 is buttons (byte 0 is report ID)
+        assert reports[-3][1] == 0x00  # move
+        assert reports[-2][1] == 0x01  # press (left button)
+        assert reports[-1][1] == 0x00  # release
 
     def test_updates_last_position(self) -> None:
         mouse, device = _make_humanized_mouse()
@@ -301,8 +302,8 @@ class TestHumanizedMouseDrag:
         mouse._last_x, mouse._last_y = 100, 100
         mouse.drag(100, 100, 500, 400)
         reports = device.reports
-        # Find reports with button held (0x01 in byte 0)
-        held = [r for r in reports if r[0] == 0x01]
+        # Find reports with button held (0x01 in byte 1; byte 0 is report ID)
+        held = [r for r in reports if r[1] == 0x01]
         assert len(held) > 3  # press + drag path points
 
     def test_drag_updates_last_position(self) -> None:
@@ -399,8 +400,8 @@ class TestHumanizedMouseDragExtended:
         mouse, device = _make_humanized_mouse()
         mouse._last_x, mouse._last_y = 100, 100
         mouse.drag(100, 100, 500, 400)
-        # Last report is the release: buttons byte must be 0x00
-        assert device.reports[-1][0] == 0x00
+        # Last report is the release: buttons byte (byte 1) must be 0x00
+        assert device.reports[-1][1] == 0x00
 
     def test_drag_from_distant_position_has_approach(self) -> None:
         """Starting far from drag origin should produce approach movement reports."""
@@ -408,10 +409,10 @@ class TestHumanizedMouseDragExtended:
         mouse._last_x, mouse._last_y = 0, 0  # far from drag origin
         mouse.drag(640, 360, 700, 400)
 
-        # Collect reports before the first button-held report (0x01 in byte 0)
+        # Collect reports before the first button-held report (0x01 in byte 1)
         approach_reports = []
         for r in device.reports:
-            if r[0] == 0x01:
+            if r[1] == 0x01:
                 break
             approach_reports.append(r)
 
@@ -444,7 +445,7 @@ class TestHumanizedMouseScrollExtended:
         wheel_values = []
         for r in device.reports:
             if len(r) >= 7:
-                wheel = r[5]
+                wheel = r[6]
                 if wheel != 0:
                     # Convert unsigned to signed
                     if wheel > 127:
@@ -611,22 +612,22 @@ class TestHumanizedKeyboardTypeText:
         kb.type_text("a")
         # Report 0 is the press
         press_report = device.reports[0]
-        assert press_report[2] != 0  # keycode byte is non-zero
+        assert press_report[3] != 0  # keycode byte is non-zero
 
     def test_release_reports_are_all_zeros(self) -> None:
         """Release reports (odd indices) should be all zeros."""
         kb, device = _make_humanized_keyboard()
         kb.type_text("a")
         release_report = device.reports[1]
-        assert release_report == bytes(8)
+        assert release_report == bytes([0x01]) + bytes(8)
 
     def test_shift_for_uppercase(self) -> None:
         """Uppercase characters should have shift modifier in press report."""
         kb, device = _make_humanized_keyboard()
         kb.type_text("A")
         press_report = device.reports[0]
-        # Byte 0 should have shift bit (0x02)
-        assert press_report[0] & 0x02 != 0
+        # Byte 1 should have shift bit (0x02); byte 0 is report ID
+        assert press_report[1] & 0x02 != 0
 
     def test_newline_sends_enter_key(self) -> None:
         """Newline character should send enter key (shortcut-style)."""
@@ -635,14 +636,14 @@ class TestHumanizedKeyboardTypeText:
         # press_keys for "enter" sends press + release = 2 reports
         assert len(device.reports) == 2
         # Press report should have enter keycode (0x28)
-        assert device.reports[0][2] == 0x28
+        assert device.reports[0][3] == 0x28
 
     def test_tab_sends_tab_key(self) -> None:
         """Tab character should send tab key."""
         kb, device = _make_humanized_keyboard()
         kb.type_text("\t")
         assert len(device.reports) == 2
-        assert device.reports[0][2] == 0x2B  # tab keycode
+        assert device.reports[0][3] == 0x2B  # tab keycode
 
     def test_empty_text_sends_nothing(self) -> None:
         kb, device = _make_humanized_keyboard()
@@ -668,23 +669,23 @@ class TestHumanizedKeyboardPressKeys:
         kb, device = _make_humanized_keyboard()
         kb.press_keys(["ctrl", "c"])
         press = device.reports[0]
-        assert press[0] & 0x01 != 0  # ctrl modifier bit
-        assert press[2] == 0x06  # 'c' HID usage ID
+        assert press[1] & 0x01 != 0  # ctrl modifier bit (byte 1; byte 0 is report ID)
+        assert press[3] == 0x06  # 'c' HID usage ID
 
     def test_release_is_all_zeros(self) -> None:
         kb, device = _make_humanized_keyboard()
         kb.press_keys(["enter"])
         release = device.reports[1]
-        assert release == bytes(8)
+        assert release == bytes([0x01]) + bytes(8)
 
     def test_multiple_modifiers(self) -> None:
         """Ctrl+Shift+key should combine modifiers."""
         kb, device = _make_humanized_keyboard()
         kb.press_keys(["ctrl", "shift", "a"])
         press = device.reports[0]
-        # Ctrl = 0x01, Shift = 0x02
-        assert press[0] & 0x01 != 0
-        assert press[0] & 0x02 != 0
+        # Ctrl = 0x01, Shift = 0x02 (byte 1; byte 0 is report ID)
+        assert press[1] & 0x01 != 0
+        assert press[1] & 0x02 != 0
 
 
 # =========================================================================

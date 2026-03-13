@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
@@ -89,7 +91,8 @@ class VisionAgent:
         self._stability_threshold = stability_threshold
         self._stability_interval_s = stability_interval_s
         self._stability_max_wait_s = stability_max_wait_s
-        self._abort_requested = False
+        self._abort_event = threading.Event()
+        self._step_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="M2-step")
 
     def run(
         self,
@@ -108,7 +111,14 @@ class VisionAgent:
         """
         logger.info("Task started: %s", task_goal)
 
-        self._abort_requested = False
+        # Drain any orphaned task from a previous abort before reusing
+        # the single-worker executor (prevents blocking on stale future).
+        self._step_executor.shutdown(wait=True)
+        self._step_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="M2-step",
+        )
+
+        self._abort_event.clear()
         self._protocol.reset()
         start_time = time.monotonic()
         step_count = 0
@@ -167,7 +177,7 @@ class VisionAgent:
 
             while True:
                 # ---- Termination condition checks ----
-                if self._abort_requested:
+                if self._abort_event.is_set():
                     return self._build_result(
                         TaskStatus.ABORTED, "User aborted",
                         step_count, total_input_tokens, total_output_tokens,
@@ -207,9 +217,24 @@ class VisionAgent:
                 step_timestamp = time.monotonic()
 
                 # ---- Step 1: Call protocol (using previously captured frame) ----
-                step_result = self._protocol.step(
-                    cap_result.base64_jpeg, task_goal,
+                # Run in sub-thread so abort can interrupt a blocking API call.
+                future: Future[StepResult] = self._step_executor.submit(
+                    self._protocol.step, cap_result.base64_jpeg, task_goal,
                 )
+                while not future.done():
+                    if self._abort_event.wait(timeout=0.5):
+                        if not future.cancel():
+                            logger.warning(
+                                "Abort: API call still in progress, "
+                                "will complete in background (up to 30s)"
+                            )
+                        return self._build_result(
+                            TaskStatus.ABORTED, "User aborted",
+                            step_count, total_input_tokens, total_output_tokens,
+                            start_time, step_log,
+                            total_cache_read_tokens, total_cache_creation_tokens,
+                        )
+                step_result = future.result()
                 total_input_tokens += step_result.input_tokens
                 total_output_tokens += step_result.output_tokens
                 total_cache_read_tokens += step_result.cache_read_tokens
@@ -455,8 +480,8 @@ class VisionAgent:
             )
 
     def abort(self) -> None:
-        """Request the running task to stop at the next loop iteration."""
-        self._abort_requested = True
+        """Request the running task to stop immediately."""
+        self._abort_event.set()
         logger.info("Abort requested")
 
     def _wait_for_stable_screen(self) -> CaptureResult:

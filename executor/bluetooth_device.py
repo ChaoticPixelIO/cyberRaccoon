@@ -796,10 +796,15 @@ class BluetoothHIDDevice:
     def write(self, report: bytes) -> None:
         """Send an HID report over the Bluetooth connection.
 
-        Prepends the report header (0xA1) and report ID, then sends
-        on the L2CAP interrupt channel.
+        Reports include the Report ID at byte 0 (for USB HID). Strip it
+        here since send_report() adds the 0xA1 header + report ID itself.
         """
-        self._connection.send_report(self._report_id, report)
+        if len(report) < 2:
+            raise HIDDeviceError(
+                f"Report too short ({len(report)} bytes) — expected "
+                f"Report ID + data"
+            )
+        self._connection.send_report(self._report_id, report[1:])
 
     def close(self) -> None:
         """No-op — connection is managed by BluetoothHIDConnection."""

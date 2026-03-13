@@ -11,27 +11,25 @@ from tests.test_executor.conftest import MockHIDDevice
 
 
 class MockActionExecutor(ActionExecutor):
-    """ActionExecutor with mock HID devices for testing.
+    """ActionExecutor with mock HID device for testing.
 
-    Overrides open() to inject MockHIDDevices instead of real /dev/hidg* files.
+    Overrides open() to inject a MockHIDDevice instead of real /dev/hidg0.
+    Keyboard and mouse share the same device (using Report IDs).
     """
 
     def __init__(self, target_os: str | None = None) -> None:
         super().__init__(target_os=target_os)
-        self._mock_keyboard_dev = MockHIDDevice("/dev/hidg0")
-        self._mock_mouse_dev = MockHIDDevice("/dev/hidg1")
+        self._mock_dev = MockHIDDevice("/dev/hidg0")
 
     def open(self) -> None:
         from executor.mouse import MouseController
         from executor.keyboard import KeyboardController
 
-        self._mock_keyboard_dev.open()
-        self._mock_mouse_dev.open()
+        self._mock_dev.open()
 
-        self._keyboard_dev = self._mock_keyboard_dev  # type: ignore[assignment]
-        self._mouse_dev = self._mock_mouse_dev  # type: ignore[assignment]
-        self._keyboard = KeyboardController(self._mock_keyboard_dev)  # type: ignore[arg-type]
-        self._mouse = MouseController(self._mock_mouse_dev)  # type: ignore[arg-type]
+        self._hid_dev = self._mock_dev  # type: ignore[assignment]
+        self._keyboard = KeyboardController(self._mock_dev)  # type: ignore[arg-type]
+        self._mouse = MouseController(self._mock_dev)  # type: ignore[arg-type]
 
 
 @pytest.fixture
@@ -45,34 +43,36 @@ class TestCommandRouting:
     """Tests for action-to-controller routing."""
 
     def test_click_routes_to_mouse(self, executor: MockActionExecutor) -> None:
+        from executor.mouse import REPORT_ID as MOUSE_ID
         result = executor.execute(
             {"id": "t1", "action": "click", "x": 640, "y": 360}
         )
         assert result["status"] == "ok"
-        assert len(executor._mock_mouse_dev.reports) > 0
-        assert len(executor._mock_keyboard_dev.reports) == 0
+        assert len(executor._mock_dev.reports) > 0
+        assert all(r[0] == MOUSE_ID for r in executor._mock_dev.reports)
 
     def test_double_click_routes_to_mouse(self, executor: MockActionExecutor) -> None:
         result = executor.execute(
             {"id": "t2", "action": "double_click", "x": 100, "y": 200}
         )
         assert result["status"] == "ok"
-        assert len(executor._mock_mouse_dev.reports) > 0
+        assert len(executor._mock_dev.reports) > 0
 
     def test_type_routes_to_keyboard(self, executor: MockActionExecutor) -> None:
+        from executor.keyboard import REPORT_ID as KB_ID
         result = executor.execute(
             {"id": "t3", "action": "type", "text": "hi"}
         )
         assert result["status"] == "ok"
-        assert len(executor._mock_keyboard_dev.reports) > 0
-        assert len(executor._mock_mouse_dev.reports) == 0
+        assert len(executor._mock_dev.reports) > 0
+        assert all(r[0] == KB_ID for r in executor._mock_dev.reports)
 
     def test_key_routes_to_keyboard(self, executor: MockActionExecutor) -> None:
         result = executor.execute(
             {"id": "t4", "action": "key", "keys": ["ctrl", "c"]}
         )
         assert result["status"] == "ok"
-        assert len(executor._mock_keyboard_dev.reports) > 0
+        assert len(executor._mock_dev.reports) > 0
 
     def test_scroll_routes_to_mouse(self, executor: MockActionExecutor) -> None:
         result = executor.execute(
@@ -80,7 +80,7 @@ class TestCommandRouting:
              "direction": "down", "amount": 3}
         )
         assert result["status"] == "ok"
-        assert len(executor._mock_mouse_dev.reports) > 0
+        assert len(executor._mock_dev.reports) > 0
 
     def test_drag_routes_to_mouse(self, executor: MockActionExecutor) -> None:
         result = executor.execute(
@@ -88,7 +88,7 @@ class TestCommandRouting:
              "from_x": 100, "from_y": 200, "to_x": 500, "to_y": 300}
         )
         assert result["status"] == "ok"
-        assert len(executor._mock_mouse_dev.reports) > 0
+        assert len(executor._mock_dev.reports) > 0
 
     def test_unknown_action_returns_error(self, executor: MockActionExecutor) -> None:
         result = executor.execute(
@@ -212,8 +212,7 @@ class TestWaitAction:
         executor.execute(
             {"id": "w4", "action": "wait", "duration_s": 1.0}
         )
-        assert len(executor._mock_keyboard_dev.reports) == 0
-        assert len(executor._mock_mouse_dev.reports) == 0
+        assert len(executor._mock_dev.reports) == 0
 
 
 class TestNonAsciiRejection:
@@ -243,7 +242,7 @@ class TestNonAsciiRejection:
             {"id": "cb1", "action": "type", "text": "hello"}
         )
         assert result["status"] == "ok"
-        reports = win_executor._mock_keyboard_dev.reports
+        reports = win_executor._mock_dev.reports
         assert len(reports) == 10  # 5 chars × (press + release)
 
     def test_non_ascii_returns_error(self, win_executor: MockActionExecutor) -> None:
@@ -255,7 +254,7 @@ class TestNonAsciiRejection:
         assert "Cannot type non-ASCII" in result["error"]
         assert "base64 command" in result["error"].lower() or "base64" in result["error"]
         # No HID reports sent
-        assert len(win_executor._mock_keyboard_dev.reports) == 0
+        assert len(win_executor._mock_dev.reports) == 0
 
     def test_mixed_text_returns_error(self, win_executor: MockActionExecutor) -> None:
         """Mixed ASCII + non-ASCII text should also return error."""

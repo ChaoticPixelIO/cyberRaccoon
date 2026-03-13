@@ -75,15 +75,15 @@ class TestBluetoothHIDDevice:
         conn = make_mock_connection()
         dev = BluetoothHIDDevice(conn, report_id=0x01)
 
-        report = bytes(8)  # keyboard release
+        report = bytes([0x01]) + bytes(8)  # keyboard release (Report ID + 8 zeros)
         dev.write(report)
 
         conn._intr_client.send.assert_called_once()
         sent_data = conn._intr_client.send.call_args[0][0]
-        # Should have 0xA1 header + report_id + report data
+        # Should have 0xA1 header + report_id + report data (without embedded ID)
         assert sent_data[0] == 0xA1
         assert sent_data[1] == 0x01
-        assert sent_data[2:] == report
+        assert sent_data[2:] == bytes(8)
 
     def test_write_mouse_report_id(self) -> None:
         """Mouse device should use report ID 0x02."""

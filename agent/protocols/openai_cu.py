@@ -77,7 +77,7 @@ class OpenAICUProtocol(ComputerUseProtocol):
         self._display_height = display_height
 
         self._openai = openai  # for exception handling
-        self._client = openai.OpenAI(api_key=api_key)
+        self._client = openai.OpenAI(api_key=api_key, timeout=30.0)
 
         self._system_prompt = build_openai_cu_system_prompt()
         if skill_text:
@@ -567,7 +567,18 @@ class OpenAICUProtocol(ComputerUseProtocol):
             return {"action": "key", "keys": normalized}
 
         if action_type == "wait":
-            return {"action": "wait", "duration_s": 2.0}
+            # GPT-5.4 sends duration in ms via "ms" or "duration_ms" field
+            ms = _g(action, "ms")
+            if ms is None:
+                ms = _g(action, "duration_ms")
+            if ms is None:
+                ms = 1000
+            try:
+                duration_s = max(0.0, float(ms) / 1000.0)
+            except (ValueError, TypeError):
+                logger.warning("Invalid wait duration: %r, defaulting to 1s", ms)
+                duration_s = 1.0
+            return {"action": "wait", "duration_s": duration_s}
 
         if action_type == "screenshot":
             return None  # handled via needs_screenshot flag

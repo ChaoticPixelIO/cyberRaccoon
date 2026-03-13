@@ -1,7 +1,7 @@
 """Mouse HID report builder — absolute coordinate protocol.
 
-Builds 7-byte HID reports for mouse operations:
-  buttons(1B) | X(2B LE) | Y(2B LE) | wheel(1B signed) | padding(1B)
+Builds 8-byte HID reports with Report ID prefix:
+  report_id(1B=0x02) | buttons(1B) | X(2B LE) | Y(2B LE) | wheel(1B signed) | padding(1B)
 
 Coordinates are absolute (0–32767) mapped from screen resolution (1280×720).
 """
@@ -42,12 +42,15 @@ def _screen_to_hid(x: int, y: int) -> tuple[int, int]:
     return hid_x, hid_y
 
 
-def _build_report(buttons: int, hid_x: int, hid_y: int, wheel: int = 0) -> bytes:
-    """Build a 7-byte absolute mouse HID report.
+REPORT_ID = 0x02  # Mouse Report ID in combined HID descriptor
 
-    Format: buttons(1B) | X(2B LE) | Y(2B LE) | wheel(1B signed) | pad(1B)
+
+def _build_report(buttons: int, hid_x: int, hid_y: int, wheel: int = 0) -> bytes:
+    """Build an 8-byte absolute mouse HID report with Report ID prefix.
+
+    Format: report_id(1B) | buttons(1B) | X(2B LE) | Y(2B LE) | wheel(1B signed) | pad(1B)
     """
-    return struct.pack("<BHHbB", buttons, hid_x, hid_y, wheel, 0)
+    return struct.pack("<BBHHbB", REPORT_ID, buttons, hid_x, hid_y, wheel, 0)
 
 
 class MouseController:

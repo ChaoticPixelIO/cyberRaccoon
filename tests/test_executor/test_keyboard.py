@@ -7,6 +7,7 @@ import pytest
 from executor.keyboard import (
     CHAR_MAP,
     MODIFIER_MAP,
+    REPORT_ID,
     SPECIAL_KEY_MAP,
     KeyboardController,
     _build_report,
@@ -69,37 +70,42 @@ class TestCharMap:
 class TestKeyboardReport:
     """Tests for keyboard HID report format."""
 
-    def test_report_is_8_bytes(self) -> None:
+    def test_report_is_9_bytes(self) -> None:
         report = _build_report(0, [])
-        assert len(report) == 8
+        assert len(report) == 9
 
-    def test_modifier_in_first_byte(self) -> None:
+    def test_report_id_in_first_byte(self) -> None:
+        report = _build_report(0, [])
+        assert report[0] == REPORT_ID
+
+    def test_modifier_in_second_byte(self) -> None:
         report = _build_report(0x01, [0x04])  # Ctrl + 'a'
-        assert report[0] == 0x01
+        assert report[1] == 0x01
 
     def test_reserved_byte_is_zero(self) -> None:
         report = _build_report(0xFF, [0x04, 0x05])
-        assert report[1] == 0x00
+        assert report[2] == 0x00
 
     def test_keycode_in_correct_position(self) -> None:
         report = _build_report(0, [0x04])
-        assert report[2] == 0x04
+        assert report[3] == 0x04
 
     def test_multiple_keycodes(self) -> None:
         report = _build_report(0, [0x04, 0x05, 0x06])
-        assert report[2] == 0x04
-        assert report[3] == 0x05
-        assert report[4] == 0x06
+        assert report[3] == 0x04
+        assert report[4] == 0x05
+        assert report[5] == 0x06
 
     def test_max_6_keycodes(self) -> None:
         codes = [0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A]  # 7 codes
         report = _build_report(0, codes)
         # Should only include first 6
-        assert report[2:8] == bytes([0x04, 0x05, 0x06, 0x07, 0x08, 0x09])
+        assert report[3:9] == bytes([0x04, 0x05, 0x06, 0x07, 0x08, 0x09])
 
-    def test_release_report_all_zeros(self) -> None:
-        assert _RELEASE_REPORT == bytes(8)
-        assert len(_RELEASE_REPORT) == 8
+    def test_release_report_has_report_id(self) -> None:
+        assert _RELEASE_REPORT[0] == REPORT_ID
+        assert _RELEASE_REPORT[1:] == bytes(8)
+        assert len(_RELEASE_REPORT) == 9
 
 
 class TestKeyboardOperations:
@@ -117,10 +123,12 @@ class TestKeyboardOperations:
     ) -> None:
         mock_keyboard.press_keys(["ctrl", "c"])
         press_report = mock_keyboard_device.reports[0]
+        # Report ID
+        assert press_report[0] == REPORT_ID
         # Ctrl modifier
-        assert press_report[0] == MODIFIER_MAP["ctrl"]
+        assert press_report[1] == MODIFIER_MAP["ctrl"]
         # 'c' keycode
-        assert press_report[2] == CHAR_MAP["c"][0]
+        assert press_report[3] == CHAR_MAP["c"][0]
 
     def test_type_text_sends_press_release_per_char(
         self, mock_keyboard: KeyboardController, mock_keyboard_device: MockHIDDevice
@@ -134,7 +142,7 @@ class TestKeyboardOperations:
     ) -> None:
         mock_keyboard.type_text("A")
         press_report = mock_keyboard_device.reports[0]
-        assert press_report[0] == MODIFIER_MAP["shift"]
+        assert press_report[1] == MODIFIER_MAP["shift"]
 
     def test_type_text_newline_sends_enter(
         self, mock_keyboard: KeyboardController, mock_keyboard_device: MockHIDDevice
@@ -143,7 +151,7 @@ class TestKeyboardOperations:
         # press_keys(["enter"]) → 2 reports
         assert len(mock_keyboard_device.reports) == 2
         press_report = mock_keyboard_device.reports[0]
-        assert press_report[2] == SPECIAL_KEY_MAP["enter"]
+        assert press_report[3] == SPECIAL_KEY_MAP["enter"]
 
     def test_type_text_tab_sends_tab(
         self, mock_keyboard: KeyboardController, mock_keyboard_device: MockHIDDevice
@@ -151,21 +159,21 @@ class TestKeyboardOperations:
         mock_keyboard.type_text("\t")
         assert len(mock_keyboard_device.reports) == 2
         press_report = mock_keyboard_device.reports[0]
-        assert press_report[2] == SPECIAL_KEY_MAP["tab"]
+        assert press_report[3] == SPECIAL_KEY_MAP["tab"]
 
     def test_special_key_enter(
         self, mock_keyboard: KeyboardController, mock_keyboard_device: MockHIDDevice
     ) -> None:
         mock_keyboard.press_keys(["enter"])
         press_report = mock_keyboard_device.reports[0]
-        assert press_report[2] == SPECIAL_KEY_MAP["enter"]
+        assert press_report[3] == SPECIAL_KEY_MAP["enter"]
 
     def test_special_key_f5(
         self, mock_keyboard: KeyboardController, mock_keyboard_device: MockHIDDevice
     ) -> None:
         mock_keyboard.press_keys(["f5"])
         press_report = mock_keyboard_device.reports[0]
-        assert press_report[2] == SPECIAL_KEY_MAP["f5"]
+        assert press_report[3] == SPECIAL_KEY_MAP["f5"]
 
 
 class TestKeyboardErrors:

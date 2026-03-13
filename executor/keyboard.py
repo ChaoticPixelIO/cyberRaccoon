@@ -1,7 +1,7 @@
-"""Keyboard HID report builder — Boot Keyboard protocol.
+"""Keyboard HID report builder.
 
-Builds 8-byte HID reports:
-  modifier(1B) | reserved(1B) | keycodes(6B)
+Builds 9-byte HID reports with Report ID prefix:
+  report_id(1B=0x01) | modifier(1B) | reserved(1B) | keycodes(6B)
 
 Supports US keyboard layout character mapping and modifier key combos.
 """
@@ -16,7 +16,7 @@ from executor.hid_device import HIDDevice
 logger = logging.getLogger("M4.keyboard")
 
 # ---------------------------------------------------------------------------
-# Modifier keys (byte 0 of keyboard report)
+# Modifier keys (byte 1 of keyboard report; byte 0 is Report ID)
 # ---------------------------------------------------------------------------
 
 MODIFIER_MAP: dict[str, int] = {
@@ -120,20 +120,24 @@ _init_char_map()
 # Report building
 # ---------------------------------------------------------------------------
 
-def _build_report(modifier: int, keycodes: list[int]) -> bytes:
-    """Build an 8-byte Boot Keyboard HID report.
+REPORT_ID = 0x01  # Keyboard Report ID in combined HID descriptor
 
-    Format: modifier(1B) | reserved(1B) | keycodes(up to 6B)
+
+def _build_report(modifier: int, keycodes: list[int]) -> bytes:
+    """Build a 9-byte Keyboard HID report with Report ID prefix.
+
+    Format: report_id(1B) | modifier(1B) | reserved(1B) | keycodes(up to 6B)
     """
-    report = bytearray(8)
-    report[0] = modifier
-    # report[1] = 0  (reserved, already zero)
+    report = bytearray(9)
+    report[0] = REPORT_ID
+    report[1] = modifier
+    # report[2] = 0  (reserved, already zero)
     for i, code in enumerate(keycodes[:6]):
-        report[2 + i] = code
+        report[3 + i] = code
     return bytes(report)
 
 
-_RELEASE_REPORT = bytes(8)  # All zeros = all keys released
+_RELEASE_REPORT = bytes([REPORT_ID]) + bytes(8)  # Report ID + all zeros
 
 
 class KeyboardController:

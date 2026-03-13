@@ -19,7 +19,7 @@ class MockHIDDevice:
 
         dev = MockHIDDevice()
         dev.open()
-        dev.write(b"\\x00" * 7)
+        dev.write(b"\\x00" * 8)
         assert len(dev.reports) == 1
     """
 
@@ -46,7 +46,7 @@ class MockHIDDevice:
 @pytest.fixture
 def mock_mouse_device() -> MockHIDDevice:
     """A MockHIDDevice configured for mouse testing."""
-    dev = MockHIDDevice("/dev/hidg1")
+    dev = MockHIDDevice("/dev/hidg0")
     dev.open()
     return dev
 

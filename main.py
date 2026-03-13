@@ -205,8 +205,7 @@ def _run_task(args: argparse.Namespace, logger: logging.Logger) -> None:
             )
         else:
             executor = ActionExecutor(
-                keyboard_device=args.keyboard,
-                mouse_device=args.mouse,
+                device=args.hid_device,
                 humanize_config=humanize_config,
                 target_os=target_os,
             )
@@ -379,12 +378,8 @@ def main() -> None:
         help="Transport: usb (USB HID Gadget) or bt (Bluetooth HID) (default: usb)",
     )
     parser.add_argument(
-        "--keyboard", default="/dev/hidg0",
-        help="Keyboard HID device path for USB mode (default: /dev/hidg0)",
-    )
-    parser.add_argument(
-        "--mouse", default="/dev/hidg1",
-        help="Mouse HID device path for USB mode (default: /dev/hidg1)",
+        "--hid-device", default="/dev/hidg0",
+        help="HID device path for USB mode (default: /dev/hidg0)",
     )
 
     parser.add_argument(

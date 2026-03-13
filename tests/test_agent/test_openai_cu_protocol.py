@@ -247,7 +247,17 @@ class TestOpenAICUNormalization:
     def test_wait(self) -> None:
         action = SimpleNamespace(type="wait")
         cmd = _make_protocol()._normalize_action(action)
-        assert cmd == {"action": "wait", "duration_s": 2.0}
+        assert cmd == {"action": "wait", "duration_s": 1.0}
+
+    def test_wait_with_ms(self) -> None:
+        action = SimpleNamespace(type="wait", ms=3000)
+        cmd = _make_protocol()._normalize_action(action)
+        assert cmd == {"action": "wait", "duration_s": 3.0}
+
+    def test_wait_with_duration_ms(self) -> None:
+        action = SimpleNamespace(type="wait", duration_ms=500)
+        cmd = _make_protocol()._normalize_action(action)
+        assert cmd == {"action": "wait", "duration_s": 0.5}
 
     def test_screenshot_returns_none(self) -> None:
         action = SimpleNamespace(type="screenshot")
@@ -409,7 +419,7 @@ class TestOpenAICUDictNormalization:
 
     def test_wait_dict(self) -> None:
         cmd = _make_protocol()._normalize_action({"type": "wait"})
-        assert cmd == {"action": "wait", "duration_s": 2.0}
+        assert cmd == {"action": "wait", "duration_s": 1.0}
 
 
 # ===========================================================================
