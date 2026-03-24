@@ -28,9 +28,12 @@ Usage::
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
@@ -443,6 +446,30 @@ class AppController:
                 self.close_executor()
                 return
 
+    def _setup_usb_gadget(self) -> None:
+        """Run ``setup_gadget.sh`` to create ``/dev/hidg0``.
+
+        Called automatically when the USB HID device file does not exist.
+
+        Raises:
+            TaskError: If the setup script fails.
+        """
+        script = Path(__file__).resolve().parent.parent / "scripts" / "setup_gadget.sh"
+        if not script.exists():
+            raise TaskError(f"USB Gadget setup script not found: {script}")
+        logger.info("USB Gadget device not found, running setup_gadget.sh ...")
+        try:
+            result = subprocess.run(
+                [str(script)],
+                capture_output=True, text=True, timeout=30,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise TaskError("USB Gadget setup timed out") from e
+        if result.returncode != 0:
+            stderr = result.stderr.strip() or result.stdout.strip()
+            raise TaskError(f"USB Gadget setup failed: {stderr}")
+        logger.info("USB Gadget setup completed successfully")
+
     def init_executor(self) -> None:
         """Initialise M4 (Executor), emit ``EXECUTOR_READY``.
 
@@ -466,8 +493,11 @@ class AppController:
                 target_os=target_os,
             )
         else:
+            device_path = config.executor.device
+            if not os.path.exists(device_path):
+                self._setup_usb_gadget()
             executor = ActionExecutor(
-                device=config.executor.device,
+                device=device_path,
                 target_os=target_os,
             )
 

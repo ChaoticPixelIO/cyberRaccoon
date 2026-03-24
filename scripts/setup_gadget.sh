@@ -22,13 +22,64 @@ set -euo pipefail
 
 GADGET_DIR="/sys/kernel/config/usb_gadget/cyber_raccoon"
 
-# Check if already configured
-if [ -d "$GADGET_DIR" ]; then
+# Check if already configured AND device file exists
+if [ -d "$GADGET_DIR" ] && [ -e /dev/hidg0 ]; then
     echo "[INFO] USB Gadget already configured at $GADGET_DIR — skipping."
     exit 0
 fi
 
 echo "[INFO] Setting up CyberRaccoon USB Gadget..."
+
+# ---------------------------------------------------------------------------
+# Disable competing gadget drivers (e.g. g_ether) that hold the UDC.
+# Only one gadget driver can bind to the UDC at a time.
+# Raspberry Pi OS ships g_ether + rpi-usb-gadget-ics for USB networking;
+# we must disable them permanently so HID gadget works on every boot.
+# ---------------------------------------------------------------------------
+BLACKLIST_CONF="/etc/modprobe.d/cyberraccoon-no-gether.conf"
+if [ ! -f "$BLACKLIST_CONF" ]; then
+    echo "[INFO] Blacklisting competing gadget modules..."
+    cat > "$BLACKLIST_CONF" <<'CONF'
+blacklist g_ether
+blacklist g_serial
+blacklist g_mass_storage
+blacklist g_multi
+blacklist g_webcam
+CONF
+fi
+
+# Remove g_ether from modules-load if present
+MODULES_CONF="/etc/modules-load.d/usb-gadget.conf"
+if [ -f "$MODULES_CONF" ] && grep -q '^g_ether' "$MODULES_CONF"; then
+    echo "[INFO] Removing g_ether from $MODULES_CONF"
+    sed -i '/^g_ether/d' "$MODULES_CONF"
+fi
+
+# Disable the Raspberry Pi USB gadget ICS service
+if systemctl is-enabled rpi-usb-gadget-ics.service &>/dev/null; then
+    echo "[INFO] Disabling rpi-usb-gadget-ics.service"
+    systemctl disable --now rpi-usb-gadget-ics.service 2>/dev/null || true
+fi
+
+# Unload any competing modules currently loaded
+for mod in g_ether g_serial g_mass_storage g_multi g_webcam; do
+    if lsmod | grep -q "^${mod} "; then
+        echo "[INFO] Unloading competing gadget module: $mod"
+        modprobe -r "$mod" 2>/dev/null || true
+    fi
+done
+
+# Clean up stale configfs gadget (dir exists but /dev/hidg0 missing)
+if [ -d "$GADGET_DIR" ] && [ ! -e /dev/hidg0 ]; then
+    echo "[INFO] Cleaning up stale gadget configuration..."
+    echo "" > "$GADGET_DIR/UDC" 2>/dev/null || true
+    rm -f "$GADGET_DIR/configs/c.1/hid.combo" 2>/dev/null || true
+    rmdir "$GADGET_DIR/configs/c.1/strings/0x409" 2>/dev/null || true
+    rmdir "$GADGET_DIR/configs/c.1" 2>/dev/null || true
+    rmdir "$GADGET_DIR/functions/hid.combo" 2>/dev/null || true
+    rmdir "$GADGET_DIR/strings/0x409" 2>/dev/null || true
+    rmdir "$GADGET_DIR" 2>/dev/null || true
+fi
 
 # Load composite module
 modprobe libcomposite
