@@ -152,8 +152,14 @@ class TestRegistry:
 
     def test_create_csi(self) -> None:
         from capture import create_capture
+        from capture.csi_capture import CsiHdmiCapture
+        cap = create_capture("csi")
+        assert isinstance(cap, CsiHdmiCapture)
+
+    def test_create_picamera(self) -> None:
+        from capture import create_capture
         from capture.camera_capture import CameraCapture
-        cap = create_capture("csi", camera_index=0)
+        cap = create_capture("picamera", camera_index=0)
         assert isinstance(cap, CameraCapture)
 
     def test_create_unknown_raises(self) -> None:

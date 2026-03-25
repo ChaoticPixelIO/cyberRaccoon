@@ -336,7 +336,7 @@ class AppController:
         if config.capture_source == "hdmi":
             source_kwargs["device_index"] = config.capture.device_index
         elif config.capture_source == "csi":
-            source_kwargs["camera_index"] = config.capture.device_index
+            pass  # CsiHdmiCapture discovers devices dynamically
         elif config.capture_source == "airplay":
             # Wait indefinitely for a real AirPlay stream (user must mirror)
             source_kwargs["stream_wait_timeout"] = float("inf")
@@ -364,7 +364,7 @@ class AppController:
         if config.capture_source == "hdmi":
             device_name = getattr(capture, "v4l2_device_name", f"/dev/video{config.capture.device_index}")
         elif config.capture_source == "csi":
-            device_name = f"Camera {config.capture.device_index}"
+            device_name = "TC358743 HDMI-CSI"
         elif config.capture_source == "airplay":
             device_name = getattr(capture, "connected_client", "")
         else:

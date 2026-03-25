@@ -130,7 +130,7 @@ def _run_task(args: argparse.Namespace, logger: logging.Logger) -> None:
     print(f"  Provider: {args.provider} / {args.model}")
     _source_labels = {
         "hdmi": f"HDMI /dev/video{args.device}",
-        "csi": f"CSI camera #{args.device}",
+        "csi": "HDMI-CSI (TC358743)",
         "airplay": "AirPlay (waiting for connection)",
     }
     print(f"  Source:   {_source_labels.get(args.source, args.source)}")
@@ -147,7 +147,7 @@ def _run_task(args: argparse.Namespace, logger: logging.Logger) -> None:
     if args.source == "hdmi":
         source_kwargs["device_index"] = args.device
     elif args.source == "csi":
-        source_kwargs["camera_index"] = args.device
+        pass  # CsiHdmiCapture discovers devices dynamically
     elif args.source == "airplay":
         source_kwargs["rtp_port"] = args.rtp_port
 
@@ -159,7 +159,7 @@ def _run_task(args: argparse.Namespace, logger: logging.Logger) -> None:
         print(f"\nError: Failed to open capture device: {e}", file=sys.stderr)
         _source_hints = {
             "hdmi": "Check: HDMI cable, capture card, /dev/video*",
-            "csi": "Check: CSI camera connected, picamera2 installed",
+            "csi": "Check: TC358743 on CAM0, dtoverlay in config.txt, HDMI cable, v4l-utils installed",
             "airplay": "Check: uxplay installed, GStreamer plugins, run setup_airplay.sh",
         }
         print(f"  {_source_hints.get(args.source, 'Check device')}", file=sys.stderr)

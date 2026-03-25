@@ -187,6 +187,8 @@ def main() -> None:
     if args.source == "hdmi":
         source_kwargs["device_index"] = args.device
     elif args.source == "csi":
+        pass  # CsiHdmiCapture discovers devices dynamically
+    elif args.source == "picamera":
         source_kwargs["camera_index"] = args.device
     elif args.source == "airplay":
         source_kwargs["rtp_port"] = args.rtp_port

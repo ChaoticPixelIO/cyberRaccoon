@@ -12,13 +12,14 @@ backends and a registry / factory for instantiating them by name::
 
 Built-in sources:
 
-======== ======================== ============================
+======== ======================== ========================================
 Name     Class                    Hardware
-======== ======================== ============================
-hdmi     ScreenCapture            HDMI capture card (V4L2)
-csi      CameraCapture            Raspberry Pi CSI camera
+======== ======================== ========================================
+hdmi     ScreenCapture            HDMI USB capture card (V4L2/MJPEG)
+csi      CsiHdmiCapture           TC358743 HDMI-to-CSI bridge (V4L2/BGR)
 airplay  AirPlayCapture           AirPlay mirroring via uxplay
-======== ======================== ============================
+picamera CameraCapture            Raspberry Pi CSI camera (picamera2)
+======== ======================== ========================================
 
 To add a new backend, implement the :class:`CaptureSource` protocol and
 call ``register_source("name", YourClass)``.
@@ -31,6 +32,7 @@ from capture.base import (
     frame_to_capture_result,
 )
 from capture.camera_capture import CameraCapture
+from capture.csi_capture import CsiHdmiCapture
 from capture.screen_capture import ScreenCapture, find_capture_device
 
 # ---------------------------------------------------------------------------
@@ -82,7 +84,8 @@ def create_capture(source: str, **kwargs: object) -> CaptureSource:
 # ---------------------------------------------------------------------------
 
 register_source("hdmi", ScreenCapture)
-register_source("csi", CameraCapture)
+register_source("csi", CsiHdmiCapture)
+register_source("picamera", CameraCapture)
 
 # AirPlay is registered lazily to avoid import errors on systems without
 # GStreamer / uxplay.  The import is wrapped in try/except so that the
@@ -107,6 +110,7 @@ __all__ = [
     "frame_to_capture_result",
     # Concrete sources
     "ScreenCapture",
+    "CsiHdmiCapture",
     "CameraCapture",
     # Factory
     "register_source",
