@@ -19,6 +19,7 @@ from capture.base import CaptureError
 from capture.csi_capture import (
     CsiHdmiCapture,
     EDID_720P,
+    EDID_1080P,
     _edid_to_hex_file_content,
 )
 
@@ -81,6 +82,19 @@ SAMPLE_DV_TIMINGS_LOCKED = """\
 \tTotal height: 750
 \tFrame format: progressive
 \tPixelclock: 74250000 Hz (60.00 frames per second)
+"""
+
+SAMPLE_TOPOLOGY_4LANE = SAMPLE_TOPOLOGY.replace(
+    "platform:1f00110000.csi", "platform:1f00128000.csi",
+)
+
+SAMPLE_DV_TIMINGS_1080P = """\
+\tActive width: 1920
+\tActive height: 1080
+\tTotal width: 2200
+\tTotal height: 1125
+\tFrame format: progressive
+\tPixelclock: 148500000 Hz (60.00 frames per second)
 """
 
 SAMPLE_DV_TIMINGS_NO_SIGNAL = """\
@@ -171,6 +185,101 @@ class TestEdid:
         assert len(lines) == 8
         for line in lines:
             assert len(line) == 32  # 16 bytes × 2 hex chars each
+
+
+class TestEdid1080p:
+    """Tests for the 1080p EDID constant."""
+
+    def test_edid_length(self) -> None:
+        assert len(EDID_1080P) == 128
+
+    def test_edid_header(self) -> None:
+        assert EDID_1080P[:8] == bytes([0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00])
+
+    def test_edid_checksum_valid(self) -> None:
+        assert sum(EDID_1080P) % 256 == 0
+
+    def test_edid_version_1_3(self) -> None:
+        assert EDID_1080P[18] == 1
+        assert EDID_1080P[19] == 3
+
+    def test_edid_no_extensions(self) -> None:
+        assert EDID_1080P[126] == 0
+
+
+# ---------------------------------------------------------------------------
+# Tests: Lane detection
+# ---------------------------------------------------------------------------
+
+class TestLaneDetection:
+    """Tests for _detect_lane_count()."""
+
+    def test_2_lane_cam0(self) -> None:
+        """Should detect 2 lanes from CAM0 device tree."""
+        import struct
+        data = struct.pack(">II", 1, 2)  # 2 big-endian uint32s
+        cap = CsiHdmiCapture()
+        with patch("builtins.open", MagicMock(
+            return_value=MagicMock(
+                __enter__=MagicMock(return_value=MagicMock(read=MagicMock(return_value=data))),
+                __exit__=MagicMock(return_value=False),
+            ),
+        )):
+            assert cap._detect_lane_count(SAMPLE_TOPOLOGY) == 2
+
+    def test_4_lane_cam1(self) -> None:
+        """Should detect 4 lanes from CAM1 device tree."""
+        import struct
+        data = struct.pack(">IIII", 1, 2, 3, 4)  # 4 big-endian uint32s
+        cap = CsiHdmiCapture()
+        with patch("builtins.open", MagicMock(
+            return_value=MagicMock(
+                __enter__=MagicMock(return_value=MagicMock(read=MagicMock(return_value=data))),
+                __exit__=MagicMock(return_value=False),
+            ),
+        )):
+            assert cap._detect_lane_count(SAMPLE_TOPOLOGY_4LANE) == 4
+
+    def test_file_not_found_defaults_to_2(self) -> None:
+        """Should fall back to 2 lanes if device tree file missing."""
+        cap = CsiHdmiCapture()
+        with patch("builtins.open", side_effect=FileNotFoundError):
+            assert cap._detect_lane_count(SAMPLE_TOPOLOGY) == 2
+
+    def test_no_bus_info_defaults_to_2(self) -> None:
+        """Should fall back to 2 lanes if topology has no bus info."""
+        cap = CsiHdmiCapture()
+        assert cap._detect_lane_count(SAMPLE_PISPBE_TOPOLOGY) == 2
+
+    def test_address_mapping_cam0(self) -> None:
+        """CAM0 platform address should map to csi@110000."""
+        import struct
+        cap = CsiHdmiCapture()
+        data = struct.pack(">II", 1, 2)
+        with patch("builtins.open", MagicMock(
+            return_value=MagicMock(
+                __enter__=MagicMock(return_value=MagicMock(read=MagicMock(return_value=data))),
+                __exit__=MagicMock(return_value=False),
+            ),
+        )) as mock_open:
+            cap._detect_lane_count(SAMPLE_TOPOLOGY)
+            path_arg = mock_open.call_args[0][0]
+            assert "csi@110000" in path_arg
+
+    def test_address_mapping_cam1(self) -> None:
+        """CAM1 platform address should map to csi@128000."""
+        import struct
+        cap = CsiHdmiCapture()
+        data = struct.pack(">IIII", 1, 2, 3, 4)
+        with patch("builtins.open", MagicMock(
+            return_value=MagicMock(
+                __enter__=MagicMock(return_value=MagicMock(read=MagicMock(return_value=data))),
+                __exit__=MagicMock(return_value=False),
+            ),
+        )) as mock_open:
+            cap._detect_lane_count(SAMPLE_TOPOLOGY_4LANE)
+            path_arg = mock_open.call_args[0][0]
+            assert "csi@128000" in path_arg
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +431,8 @@ class TestInit:
         assert cap._target_height == 720
         assert cap._jpeg_quality == 80
         assert cap._signal_timeout == 15.0
+        assert cap._lane_count == 0
+        assert cap._max_capture_height == 720
         assert cap._cap is None
         assert cap._media_device is None
         assert cap._subdev_path is None
@@ -437,6 +548,7 @@ def _make_run_side_effects(
 class TestOpen:
     """Tests for the full open() pipeline with mocked subprocesses."""
 
+    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
     @patch("capture.csi_capture.time.sleep")
     @patch("capture.csi_capture.cv2.VideoCapture")
     @patch("capture.csi_capture.subprocess.run")
@@ -444,6 +556,7 @@ class TestOpen:
     @patch("capture.csi_capture.os.path.exists")
     def test_open_success(
         self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
+        mock_lanes,
     ) -> None:
         """Full open() should succeed with proper mocking."""
         # /dev/media0-2 don't exist, /dev/media3 does
@@ -491,6 +604,7 @@ class TestOpen:
         with pytest.raises(CaptureError, match="not found"):
             cap.open()
 
+    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
     @patch("capture.csi_capture.time.sleep")
     @patch("capture.csi_capture.cv2.VideoCapture")
     @patch("capture.csi_capture.subprocess.run")
@@ -498,6 +612,7 @@ class TestOpen:
     @patch("capture.csi_capture.os.path.exists", return_value=True)
     def test_open_signal_retry(
         self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
+        mock_lanes,
     ) -> None:
         """Should retry signal detection before success."""
         mock_run.side_effect = _make_run_side_effects(
@@ -521,6 +636,7 @@ class TestOpen:
         cap.open()
         assert cap.is_open()
 
+    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
     @patch("capture.csi_capture.subprocess.run")
     @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
     @patch("capture.csi_capture.os.path.exists", return_value=True)
@@ -528,6 +644,7 @@ class TestOpen:
     @patch("capture.csi_capture.time.sleep")
     def test_open_signal_timeout(
         self, mock_sleep, mock_monotonic, mock_exists, mock_which, mock_run,
+        mock_lanes,
     ) -> None:
         """Should raise CaptureError if signal never locks."""
         no_signal = subprocess.CompletedProcess(
@@ -554,12 +671,13 @@ class TestOpen:
         with pytest.raises(CaptureError, match="No HDMI signal"):
             cap.open()
 
+    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
     @patch("capture.csi_capture.time.sleep")
     @patch("capture.csi_capture.subprocess.run")
     @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
     @patch("capture.csi_capture.os.path.exists", return_value=True)
     def test_open_pipeline_failure(
-        self, mock_exists, mock_which, mock_run, mock_sleep,
+        self, mock_exists, mock_which, mock_run, mock_sleep, mock_lanes,
     ) -> None:
         """Should raise CaptureError if media-ctl pipeline setup fails."""
         effects = _make_run_side_effects(media_device_index=0)
@@ -573,6 +691,7 @@ class TestOpen:
         with pytest.raises(CaptureError, match="Pipeline setup failed"):
             cap.open()
 
+    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
     @patch("capture.csi_capture.time.sleep")
     @patch("capture.csi_capture.cv2.VideoCapture")
     @patch("capture.csi_capture.subprocess.run")
@@ -580,6 +699,7 @@ class TestOpen:
     @patch("capture.csi_capture.os.path.exists", return_value=True)
     def test_open_opencv_fails(
         self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
+        mock_lanes,
     ) -> None:
         """Should raise CaptureError if OpenCV can't open the device."""
         mock_run.side_effect = _make_run_side_effects(media_device_index=0)
@@ -591,6 +711,7 @@ class TestOpen:
         with pytest.raises(CaptureError, match="Cannot open"):
             cap.open()
 
+    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
     @patch("capture.csi_capture.time.sleep")
     @patch("capture.csi_capture.time.monotonic")
     @patch("capture.csi_capture.cv2.VideoCapture")
@@ -599,7 +720,7 @@ class TestOpen:
     @patch("capture.csi_capture.os.path.exists", return_value=True)
     def test_open_warmup_timeout(
         self, mock_exists, mock_which, mock_run, mock_cv2_cap,
-        mock_monotonic, mock_sleep,
+        mock_monotonic, mock_sleep, mock_lanes,
     ) -> None:
         """Should raise CaptureError if warmup produces only black frames."""
         mock_run.side_effect = _make_run_side_effects(media_device_index=0)
@@ -626,6 +747,7 @@ class TestOpen:
         with pytest.raises(CaptureError, match="only producing black frames"):
             cap.open()
 
+    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
     @patch("capture.csi_capture.subprocess.run")
     @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
     @patch("capture.csi_capture.os.path.exists", return_value=True)
@@ -633,8 +755,9 @@ class TestOpen:
     @patch("capture.csi_capture.time.sleep")
     def test_open_source_stuck_at_1080p(
         self, mock_sleep, mock_monotonic, mock_exists, mock_which, mock_run,
+        mock_lanes,
     ) -> None:
-        """Should raise CaptureError if source stays at 1080p after EDID load."""
+        """Should raise CaptureError if source stays at 1080p after EDID load (2-lane)."""
         dv_1080p = subprocess.CompletedProcess(
             args=[], returncode=0,
             stdout="\tActive width: 1920\n\tActive height: 1080\n"
@@ -657,8 +780,91 @@ class TestOpen:
         mock_monotonic.side_effect = [0.0, 0.0, 5.0, 16.0]
 
         cap = CsiHdmiCapture(signal_timeout=15.0)
-        with pytest.raises(CaptureError, match="exceeds 2-lane CSI bandwidth"):
+        with pytest.raises(CaptureError, match="2-lane CSI bandwidth"):
             cap.open()
+
+    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=4)
+    @patch("capture.csi_capture.time.sleep")
+    @patch("capture.csi_capture.cv2.VideoCapture")
+    @patch("capture.csi_capture.subprocess.run")
+    @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
+    @patch("capture.csi_capture.os.path.exists", return_value=True)
+    def test_open_4lane_accepts_1080p(
+        self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
+        mock_lanes,
+    ) -> None:
+        """On 4-lane CSI, 1080p signal should be accepted without EDID reload."""
+        dv_1080p = _ok(SAMPLE_DV_TIMINGS_1080P)
+        mock_run.side_effect = [
+            _ok(SAMPLE_TOPOLOGY_4LANE),   # _discover_media_device
+            dv_1080p,                      # _query_current_signal: 1080p (accepted)
+            _ok("BT timings set"),         # _set_dv_timings
+            _ok(), _ok(), _ok(), _ok(),    # _configure_pipeline (4 commands)
+        ]
+
+        mock_vc = MagicMock()
+        mock_vc.isOpened.return_value = True
+        def _get_prop(prop_id):
+            if prop_id == cv2.CAP_PROP_FRAME_WIDTH:
+                return 1920
+            if prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
+                return 1080
+            return 0
+        mock_vc.get.side_effect = _get_prop
+        warmup_frame = np.full((1080, 1920, 3), 128, dtype=np.uint8)
+        mock_vc.read.return_value = (True, warmup_frame)
+        mock_vc.grab.return_value = True
+        mock_cv2_cap.return_value = mock_vc
+
+        cap = CsiHdmiCapture()
+        cap.open()
+        assert cap._signal_width == 1920
+        assert cap._signal_height == 1080
+        assert cap._max_capture_height == 1080
+        assert cap._lane_count == 4
+
+    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=4)
+    @patch("capture.csi_capture.time.sleep")
+    @patch("capture.csi_capture.cv2.VideoCapture")
+    @patch("capture.csi_capture.subprocess.run")
+    @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
+    @patch("capture.csi_capture.os.path.exists", return_value=True)
+    def test_open_4lane_loads_1080p_edid(
+        self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
+        mock_lanes,
+    ) -> None:
+        """On 4-lane CSI with no signal, should load 1080p EDID."""
+        no_signal = subprocess.CompletedProcess(
+            args=[], returncode=255, stdout="", stderr=SAMPLE_DV_TIMINGS_NO_SIGNAL,
+        )
+        dv_1080p = _ok(SAMPLE_DV_TIMINGS_1080P)
+        mock_run.side_effect = [
+            _ok(SAMPLE_TOPOLOGY_4LANE),   # _discover_media_device
+            no_signal,                     # _query_current_signal: no signal
+            _ok(),                         # _load_edid: set-edid
+            dv_1080p,                      # _wait_for_signal: locks at 1080p
+            _ok("BT timings set"),         # _set_dv_timings
+            _ok(), _ok(), _ok(), _ok(),    # _configure_pipeline
+        ]
+
+        mock_vc = MagicMock()
+        mock_vc.isOpened.return_value = True
+        def _get_prop(prop_id):
+            if prop_id == cv2.CAP_PROP_FRAME_WIDTH:
+                return 1920
+            if prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
+                return 1080
+            return 0
+        mock_vc.get.side_effect = _get_prop
+        warmup_frame = np.full((1080, 1920, 3), 128, dtype=np.uint8)
+        mock_vc.read.return_value = (True, warmup_frame)
+        mock_vc.grab.return_value = True
+        mock_cv2_cap.return_value = mock_vc
+
+        cap = CsiHdmiCapture()
+        cap.open()
+        assert cap._signal_width == 1920
+        assert cap._signal_height == 1080
 
 
 # ---------------------------------------------------------------------------

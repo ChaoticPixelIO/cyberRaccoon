@@ -12,9 +12,10 @@ Unlike picamera2-based CameraCapture, this works with the TC358743 bridge
 chip which libcamera does not support (no tuning file).
 
 Requires:
-    - dtoverlay=tc358743-pi5,cam0 in /boot/firmware/config.txt (Pi 5)
+    - dtoverlay=tc358743-pi5 in /boot/firmware/config.txt (Pi 5)
+      Use cam0 for CAM0 (2-lane) or 4lane=1 for CAM1 (4-lane, 1080p capable)
     - v4l2-ctl and media-ctl installed (sudo apt install v4l-utils)
-    - TC358743 HDMI-to-CSI board connected to CAM0 port
+    - TC358743 HDMI-to-CSI board connected to the matching CAM port
     - HDMI source connected and outputting video
 
 Note: importable on any platform (macOS, etc.) — hardware checks happen in
@@ -36,6 +37,7 @@ import logging
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import time
@@ -134,6 +136,80 @@ EDID_720P = bytes(_edid)
 del _edid
 
 
+# ---------------------------------------------------------------------------
+# 1080p EDID — forces HDMI source to output 1920×1080@60Hz
+# ---------------------------------------------------------------------------
+# Requires 4-lane CSI (CAM1 on Pi 5).  1080p60 BGR at 24bpp needs ~3 Gbps;
+# 4 lanes at ~1 Gbps each provide ~4 Gbps.
+#
+# Structure matches EDID_720P above but with 1080p60 detailed timing
+# (148.5 MHz pixel clock) and updated range limits.
+_EDID_1080P_BYTES = bytes([
+    # Header
+    0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00,
+    # Manufacturer "CYR" (CyberRaccoon), product 0x0001
+    0x0E, 0xD9, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
+    # Week 1, Year 2025 (1990+35), EDID 1.3
+    0x01, 0x23, 0x01, 0x03,
+    # Digital input (DFP 1.x), no size, gamma 2.2, RGB+preferred
+    0x80, 0x00, 0x00, 0x78, 0x0A,
+    # Chromaticity (sRGB standard)
+    0xEE, 0x91, 0xA3, 0x54, 0x4C, 0x99, 0x26, 0x0F, 0x50, 0x54,
+    # Established timings: none
+    0x00, 0x00, 0x00,
+    # Standard timings: all unused (0x0101)
+    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    # Detailed Timing Descriptor: 1920×1080 @ 60 Hz
+    # Pixel clock: 148.5 MHz = 14850 × 10 kHz → 0x3A02 (little-endian)
+    0x02, 0x3A,
+    # HActive=1920 low8=0x80, HBlanking=280 low8=0x18
+    0x80, 0x18,
+    # HActive[11:8]=7 (1920=0x780), HBlanking[11:8]=1 (280=0x118)
+    0x71,
+    # VActive=1080 low8=0x38 (1080=0x438), VBlanking=45 low8=0x2D
+    0x38, 0x2D,
+    # VActive[11:8]=4, VBlanking[11:8]=0
+    0x40,
+    # HSyncOffset=88 low8=0x58, HSyncWidth=44 low8=0x2C
+    0x58, 0x2C,
+    # VSyncOffset=4 [3:0], VSyncWidth=5 [3:0]
+    0x45,
+    # High bits of sync: all 0
+    0x00,
+    # Image size (mm): 0 (no physical size)
+    0x00, 0x00, 0x00,
+    # Border: 0, 0
+    0x00, 0x00,
+    # Non-interlaced, no stereo, digital separate sync, +H +V
+    0x1E,
+    # Monitor Name Descriptor
+    0x00, 0x00, 0x00, 0xFC, 0x00,
+    # "CyberRaccoon" + newline + padding
+    0x43, 0x79, 0x62, 0x65, 0x72, 0x52, 0x61, 0x63,
+    0x63, 0x6F, 0x6F, 0x6E, 0x0A,
+    # Monitor Range Limits Descriptor
+    0x00, 0x00, 0x00, 0xFD, 0x00,
+    # Min V=59, Max V=61, Min H=15 kHz, Max H=70 kHz, MaxPixelClock/10=15 (150 MHz)
+    0x3B, 0x3D, 0x0F, 0x46, 0x0F,
+    # GTF not supported + padding
+    0x00, 0x0A, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    # Dummy Descriptor
+    0x00, 0x00, 0x00, 0x10, 0x00,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20,
+    # Extension count
+    0x00,
+    # Checksum placeholder (computed below)
+    0x00,
+])
+
+_edid = bytearray(_EDID_1080P_BYTES)
+_edid[127] = (256 - (sum(_edid[:127]) % 256)) % 256
+EDID_1080P = bytes(_edid)
+del _edid
+
+
 def _edid_to_hex_file_content(edid: bytes) -> str:
     """Convert EDID bytes to the hex text format expected by v4l2-ctl."""
     lines = []
@@ -179,6 +255,8 @@ class CsiHdmiCapture:
         self._video_device: str | None = None
         self._signal_width: int = 0
         self._signal_height: int = 0
+        self._lane_count: int = 0
+        self._max_capture_height: int = 720
         self._cap: cv2.VideoCapture | None = None
 
     # ------------------------------------------------------------------
@@ -204,24 +282,40 @@ class CsiHdmiCapture:
             self._media_device, self._subdev_path, self._video_device,
         )
 
+        # Detect CSI lane count to determine max capture resolution.
+        self._lane_count = self._detect_lane_count(topology)
+        self._max_capture_height = 1080 if self._lane_count >= 4 else 720
+        logger.info(
+            "CSI lane count: %d, max capture height: %dp",
+            self._lane_count, self._max_capture_height,
+        )
+
         # Configure HDMI input.  Only load EDID if the source isn't already
         # at a safe resolution — EDID re-negotiation breaks the CSI data path
         # on the TC358743 (DV timings update but video frames stay black).
+        #
+        # EDID selection: 4-lane CSI loads a 1080p EDID (which also allows
+        # 720p — the source picks its preferred mode).  2-lane CSI loads a
+        # 720p-only EDID to prevent the source from choosing 1080p.
         current = self._query_current_signal()
-        if current and current[1] <= 720:
+        edid_loaded = False
+        if current and current[1] <= self._max_capture_height:
             logger.info(
                 "Source already at %dx%d — skipping EDID load", *current,
             )
             self._signal_width, self._signal_height = current
         else:
+            edid_label = "1080p" if self._max_capture_height >= 1080 else "720p"
             if current:
                 logger.info(
-                    "Source at %dx%d (too high) — loading 720p EDID", *current,
+                    "Source at %dx%d (too high) — loading %s EDID",
+                    *current, edid_label,
                 )
             else:
-                logger.info("No signal — loading 720p EDID")
+                logger.info("No signal — loading %s EDID", edid_label)
             self._load_edid()
             self._wait_for_signal()
+            edid_loaded = True
         self._set_dv_timings()
 
         # Configure CSI media pipeline
@@ -261,7 +355,9 @@ class CsiHdmiCapture:
         # Warmup: discard frames until we get a non-black one.  After a
         # resolution switch the CSI receiver may output blank frames for a
         # short period while the DMA buffers fill and the signal stabilises.
-        warmup_deadline = time.monotonic() + 5.0
+        # After an EDID load the HPD renegotiation needs longer to settle.
+        warmup_timeout = 10.0 if edid_loaded else 5.0
+        warmup_deadline = time.monotonic() + warmup_timeout
         while time.monotonic() < warmup_deadline:
             self._cap.grab()
             ret, frame = self._cap.read()
@@ -272,7 +368,7 @@ class CsiHdmiCapture:
         else:
             raise CaptureError(
                 "CSI pipeline opened but only producing black frames after "
-                "5s warmup. The HDMI signal may have dropped during setup, "
+                f"{warmup_timeout:.0f}s warmup. The HDMI signal may have dropped during setup, "
                 "or the CSI data path is broken. Try: disconnect and "
                 "reconnect the HDMI cable, then retry."
             )
@@ -391,10 +487,61 @@ class CsiHdmiCapture:
 
         raise CaptureError(
             "TC358743 HDMI-CSI bridge not detected. Check:\n"
-            "  1) dtoverlay=tc358743-pi5,cam0 in /boot/firmware/config.txt\n"
-            "  2) TC358743 board connected to CAM0 port\n"
+            "  1) dtoverlay=tc358743-pi5 in /boot/firmware/config.txt "
+            "(use cam0 for CAM0 or 4lane=1 for CAM1)\n"
+            "  2) TC358743 board connected to the matching CAM port\n"
             "  3) Reboot after config.txt changes"
         )
+
+    def _detect_lane_count(self, topology: str) -> int:
+        """Detect the number of CSI data lanes from the device tree.
+
+        Parses the ``bus info`` field from the media topology to find the
+        CSI controller address, then reads the ``data-lanes`` property
+        from the device tree.  Falls back to 2 (safe default) on any error.
+
+        Returns:
+            2 or 4 (the number of active CSI data lanes).
+        """
+        # Extract platform address from topology, e.g. "platform:1f00128000.csi"
+        match = re.search(r"bus info\s+platform:([0-9a-fA-F]+)\.csi", topology)
+        if not match:
+            logger.warning("Could not parse CSI bus info — defaulting to 2 lanes")
+            return 2
+
+        # Map platform address to RP1 CSI register offset:
+        # 1f00110000 → 110000 (CAM0), 1f00128000 → 128000 (CAM1)
+        platform_addr = match.group(1)
+        csi_addr = platform_addr[-6:]
+
+        dt_path = (
+            f"/sys/firmware/devicetree/base/axi/pcie@1000120000"
+            f"/rp1/csi@{csi_addr}/port/endpoint/data-lanes"
+        )
+        try:
+            with open(dt_path, "rb") as f:
+                data = f.read()
+        except OSError:
+            logger.warning(
+                "Cannot read %s — defaulting to 2 lanes", dt_path,
+            )
+            return 2
+
+        if len(data) % 4 != 0 or len(data) == 0:
+            logger.warning(
+                "Unexpected data-lanes size (%d bytes) — defaulting to 2 lanes",
+                len(data),
+            )
+            return 2
+
+        lane_count = len(data) // 4
+        if lane_count not in (2, 4):
+            logger.warning(
+                "Unexpected lane count %d — defaulting to 2 lanes", lane_count,
+            )
+            return 2
+
+        return lane_count
 
     def _parse_subdev(self, topology: str) -> str:
         """Extract the TC358743 V4L2 subdevice path from media topology.
@@ -485,17 +632,23 @@ class CsiHdmiCapture:
         return None
 
     def _load_edid(self) -> None:
-        """Load 720p EDID onto the TC358743.
+        """Load the appropriate EDID onto the TC358743.
 
-        Overwrites any existing EDID without clearing first.  The TC358743
-        driver's ``set_edid`` toggles HPD (hot-plug detect) internally to
-        trigger source re-negotiation.  Clearing first (``clear_edid``)
-        deasserts HPD in a way that breaks subsequent re-negotiation on
-        the Pi 5 rp1-cfe driver.
+        Selects 1080p EDID on 4-lane CSI (allows source to choose up to
+        1080p), 720p-only EDID on 2-lane CSI.  Overwrites any existing
+        EDID without clearing first.  The TC358743 driver's ``set_edid``
+        toggles HPD (hot-plug detect) internally to trigger source
+        re-negotiation.  Clearing first (``clear_edid``) deasserts HPD
+        in a way that breaks subsequent re-negotiation on the Pi 5
+        rp1-cfe driver.
         """
-        hex_content = _edid_to_hex_file_content(EDID_720P)
+        if self._max_capture_height >= 1080:
+            edid, label = EDID_1080P, "1080p"
+        else:
+            edid, label = EDID_720P, "720p"
+        hex_content = _edid_to_hex_file_content(edid)
 
-        fd, path = tempfile.mkstemp(suffix=".txt", prefix="edid_720p_")
+        fd, path = tempfile.mkstemp(suffix=".txt", prefix=f"edid_{label}_")
         try:
             with os.fdopen(fd, "w") as f:
                 f.write(hex_content)
@@ -506,7 +659,7 @@ class CsiHdmiCapture:
                 ],
                 error_msg="Failed to load EDID onto TC358743",
             )
-            logger.info("720p EDID loaded on %s", self._subdev_path)
+            logger.info("%s EDID loaded on %s", label, self._subdev_path)
         finally:
             try:
                 os.unlink(path)
@@ -520,14 +673,11 @@ class CsiHdmiCapture:
     def _wait_for_signal(self) -> None:
         """Poll DV timings until HDMI signal locks at a safe resolution.
 
-        Pi 5 CSI has 2 lanes (~1.94 Gbps max).  1080p60 BGR needs ~3 Gbps
-        and crashes the kernel.  This method waits for the source to settle
-        at 720p (or lower) after the 720p-only EDID is loaded.  If the
-        source insists on 1080p, we warn and keep waiting for it to switch.
+        The max safe height depends on the CSI lane count:
+        - 2-lane (CAM0): max 720p (BGR needs ~1.33 Gbps, 2 lanes provide ~2 Gbps)
+        - 4-lane (CAM1): max 1080p (BGR needs ~2.99 Gbps, 4 lanes provide ~4 Gbps)
         """
-        # Max pixels for 2-lane CSI at 972 Mbps with BGR (24bpp):
-        # 1.94 Gbps / 24 bpp / 60 fps ≈ 1.35 Mpixels → 1280×720 fits
-        max_safe_height = 720
+        max_safe_height = self._max_capture_height
         deadline = time.monotonic() + self._signal_timeout
         attempt = 0
         while True:
@@ -556,16 +706,17 @@ class CsiHdmiCapture:
                         return
                     # Source still at high resolution — keep waiting
                     logger.debug(
-                        "Signal at %dx%d (too high for 2-lane CSI), "
-                        "waiting for source to switch to 720p (attempt %d)...",
-                        w, h, attempt,
+                        "Signal at %dx%d (too high for %d-lane CSI), "
+                        "waiting for source to switch to %dp (attempt %d)...",
+                        w, h, self._lane_count, max_safe_height, attempt,
                     )
                     if time.monotonic() >= deadline:
                         raise CaptureError(
-                            f"HDMI source locked at {w}x{h} which exceeds 2-lane "
-                            f"CSI bandwidth (max {max_safe_height}p). The 720p EDID was "
+                            f"HDMI source locked at {w}x{h} which exceeds "
+                            f"{self._lane_count}-lane CSI bandwidth "
+                            f"(max {max_safe_height}p). The EDID was "
                             "loaded but the source did not switch. Try:\n"
-                            "  1) Manually set source output to 1280x720\n"
+                            f"  1) Manually set source output to {max_safe_height}p\n"
                             "  2) Disconnect and reconnect the HDMI cable\n"
                             "  3) Restart the source computer"
                         )
