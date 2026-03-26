@@ -256,4 +256,4 @@ Config precedence: **environment variables > YAML file > dataclass defaults**
 
 ## License
 
-MIT
+Apache 2.0
