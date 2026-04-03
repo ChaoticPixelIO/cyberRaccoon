@@ -55,6 +55,7 @@ class TaskResult:
     total_cache_read_tokens: int = 0
     total_cache_creation_tokens: int = 0
     step_log: list[dict[str, Any]] = field(default_factory=list)
+    completion_status: str = "success"  # "success", "gave_up", or "stuck"
 
 
 class VisionAgent:
@@ -94,10 +95,63 @@ class VisionAgent:
         self._abort_event = threading.Event()
         self._step_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="M2-step")
 
+        # BIOS reboot transition state
+        self._in_bios_mode = False
+        self._expecting_reboot = False
+
+    def run_workflow(
+        self,
+        task_goal: str,
+        planner: Any,
+        skill_text: str | None = None,
+        on_step: Callable[[dict[str, Any]], None] | None = None,
+    ) -> Any:
+        """Execute a task using the plan-then-execute workflow.
+
+        Uses the planner to decompose the task into steps, then executes
+        each step individually via :meth:`run`. This gives better control
+        than a single free-form ``run()`` call, especially for tasks that
+        require following specific procedures from skills.
+
+        Args:
+            task_goal: Natural language task description.
+            planner: TaskPlanner instance for step decomposition.
+            skill_text: Optional skill markdown for planning context.
+            on_step: Callback for progress updates.
+
+        Returns:
+            WorkflowResult with status and step details.
+        """
+        from agent.workflow_runner import WorkflowRunner
+
+        # Capture initial screenshot for the planner
+        try:
+            cap = self._capture.capture()
+            screenshot_b64 = cap.base64_jpeg
+        except CaptureError as e:
+            from agent.workflow_runner import WorkflowResult
+            return WorkflowResult(
+                status="failed",
+                reason=f"Initial capture failed: {e}",
+                steps_completed=0,
+                steps_total=0,
+            )
+
+        runner = WorkflowRunner(agent=self, planner=planner)
+        self._workflow_runner = runner  # expose for plan approval
+        return runner.run(
+            task_goal=task_goal,
+            screenshot_base64=screenshot_b64,
+            skill_text=skill_text,
+            on_progress=on_step,
+        )
+
     def run(
         self,
         task_goal: str,
         on_step: Callable[[dict[str, Any]], None] | None = None,
+        *,
+        _preserve_transition_state: bool = False,
     ) -> TaskResult:
         """Execute the task loop until completion or termination.
 
@@ -105,6 +159,10 @@ class VisionAgent:
             task_goal: Natural language description of the task.
             on_step: Optional callback invoked after each step with step info dict.
                      Useful for UI status updates (M5).
+            _preserve_transition_state: Internal flag used by workflow runner.
+                     When True, does not reset ``_in_bios_mode`` and
+                     ``_expecting_reboot`` between steps, preserving
+                     reboot transition continuity across workflow steps.
 
         Returns:
             TaskResult with status, reason, token usage, and step log.
@@ -120,6 +178,9 @@ class VisionAgent:
 
         self._abort_event.clear()
         self._protocol.reset()
+        if not _preserve_transition_state:
+            self._in_bios_mode = False
+            self._expecting_reboot = False
         start_time = time.monotonic()
         step_count = 0
         consecutive_failures = 0
@@ -130,17 +191,30 @@ class VisionAgent:
         total_cache_creation_tokens = 0
 
         try:
-            # ---- Initial capture (no prior action, no stability check) ----
+            # ---- Initial capture (with reconnect on failure) ----
             try:
                 cap_result = self._capture.capture()
             except CaptureError as e:
-                logger.error("Initial capture failed: %s", e)
-                return self._build_result(
-                    TaskStatus.FAILED, f"Capture failed: {e}",
-                    step_count, total_input_tokens, total_output_tokens,
-                    start_time, step_log,
-                    total_cache_read_tokens, total_cache_creation_tokens,
+                # Capture device may be stale (e.g. after a reboot in a
+                # previous workflow step). Try reconnecting once.
+                logger.warning(
+                    "Initial capture failed (%s), attempting device "
+                    "reconnect", e,
                 )
+                try:
+                    self._capture.close()
+                    time.sleep(1.0)
+                    self._capture.open()
+                    cap_result = self._capture.capture()
+                    logger.info("Capture device reconnected successfully")
+                except CaptureError as e2:
+                    logger.error("Initial capture failed after reconnect: %s", e2)
+                    return self._build_result(
+                        TaskStatus.FAILED, f"Capture failed: {e2}",
+                        step_count, total_input_tokens, total_output_tokens,
+                        start_time, step_log,
+                        total_cache_read_tokens, total_cache_creation_tokens,
+                    )
 
             # Auto-detect target OS if not set
             if hasattr(self._executor, '_target_os') and self._executor._target_os is None:
@@ -315,6 +389,7 @@ class VisionAgent:
                         step_count, total_input_tokens, total_output_tokens,
                         start_time, step_log,
                         total_cache_read_tokens, total_cache_creation_tokens,
+                        completion_status=step_result.completion_status,
                     )
 
                 # ---- Step 2b: Handle screenshot request ----
@@ -366,6 +441,7 @@ class VisionAgent:
                 exec_results: list[tuple[bool, str | None]] = []
                 all_succeeded = True
 
+                reboot_triggered = False
                 for i, cmd in enumerate(commands):
                     # M2 generates the command ID, not the LLM
                     cmd.setdefault(
@@ -392,6 +468,22 @@ class VisionAgent:
                         # Fill remaining as not-executed
                         for _ in range(i + 1, len(commands)):
                             exec_results.append((False, "Skipped due to earlier failure"))
+                        break
+
+                    # Interrupt batch if a reboot command was just executed
+                    if self._is_reboot_command(cmd):
+                        self._expecting_reboot = True
+                        logger.info(
+                            "Step %d: Reboot command detected in batch "
+                            "item %d/%d, interrupting batch",
+                            step_count, i + 1, len(commands),
+                        )
+                        reboot_triggered = True
+                        # Mark remaining commands as skipped
+                        for _ in range(i + 1, len(commands)):
+                            exec_results.append(
+                                (False, "Skipped: reboot command interrupted batch")
+                            )
                         break
 
                 # Determine overall status for step_info
@@ -453,22 +545,85 @@ class VisionAgent:
                         step_count, total_input_tokens, total_output_tokens,
                         start_time, step_log,
                         total_cache_read_tokens, total_cache_creation_tokens,
+                        completion_status=step_result.completion_status,
                     )
 
                 # ---- Step 5: Wait for UI to settle, then capture ----
-                if self._post_action_delay_s > 0:
-                    time.sleep(self._post_action_delay_s)
+                # Enter reboot transition if a reboot command was detected.
+                # Note: we do NOT check for black screen in BIOS mode here
+                # because BIOS screens can flicker briefly during page
+                # transitions. The WorkflowRunner handles reboots between
+                # steps via [REBOOT EXPECTED] tags and pre-step capture
+                # health checks.
+                use_reboot_wait = reboot_triggered
 
-                try:
-                    cap_result = self._wait_for_stable_screen()
-                except CaptureError as e:
-                    logger.error("Step %d: Capture failed: %s", step_count, e)
-                    return self._build_result(
-                        TaskStatus.FAILED, f"Capture failed: {e}",
-                        step_count, total_input_tokens, total_output_tokens,
-                        start_time, step_log,
-                        total_cache_read_tokens, total_cache_creation_tokens,
-                    )
+                if use_reboot_wait:
+                    timeout = 60.0 if not self._in_bios_mode else 120.0
+                    try:
+                        cap_result = self._wait_for_reboot_transition(
+                            timeout_s=timeout,
+                        )
+                        # Update BIOS mode state
+                        if self._expecting_reboot and not self._in_bios_mode:
+                            self._in_bios_mode = True
+                            logger.info("Entered BIOS mode")
+                        elif self._in_bios_mode:
+                            self._in_bios_mode = False
+                            logger.info("Exited BIOS mode, back to OS")
+                        self._expecting_reboot = False
+                    except CaptureError as e:
+                        logger.error(
+                            "Step %d: Reboot transition failed: %s",
+                            step_count, e,
+                        )
+                        self._expecting_reboot = False
+                        self._in_bios_mode = False
+                        return self._build_result(
+                            TaskStatus.FAILED, f"Reboot transition failed: {e}",
+                            step_count, total_input_tokens, total_output_tokens,
+                            start_time, step_log,
+                            total_cache_read_tokens, total_cache_creation_tokens,
+                        )
+                else:
+                    if self._post_action_delay_s > 0:
+                        time.sleep(self._post_action_delay_s)
+
+                    try:
+                        cap_result = self._wait_for_stable_screen()
+                    except CaptureError as e:
+                        # Capture failed. Try device reconnect first
+                        # (handles stale V4L2/CSI handles after HDMI
+                        # signal changes). If that fails, try full
+                        # reboot transition recovery.
+                        logger.warning(
+                            "Step %d: Capture failed (%s), attempting "
+                            "device reconnect",
+                            step_count, e,
+                        )
+                        try:
+                            self._capture.close()
+                            time.sleep(1.0)
+                            self._capture.open()
+                            cap_result = self._wait_for_stable_screen()
+                            logger.info(
+                                "Step %d: Capture recovered after "
+                                "device reconnect", step_count,
+                            )
+                        except CaptureError as e2:
+                            logger.error(
+                                "Step %d: Reconnect failed (%s), "
+                                "capture unrecoverable",
+                                step_count, e2,
+                            )
+                            return self._build_result(
+                                TaskStatus.FAILED,
+                                f"Capture failed: {e2}",
+                                step_count, total_input_tokens,
+                                total_output_tokens,
+                                start_time, step_log,
+                                total_cache_read_tokens,
+                                total_cache_creation_tokens,
+                            )
 
         except Exception as e:
             logger.error("Unexpected error in agent loop: %s", e, exc_info=True)
@@ -483,6 +638,187 @@ class VisionAgent:
         """Request the running task to stop immediately."""
         self._abort_event.set()
         logger.info("Abort requested")
+
+    # ------------------------------------------------------------------
+    # BIOS reboot transition handling
+    # ------------------------------------------------------------------
+
+    # Patterns that indicate a reboot-to-firmware command was typed.
+    _REBOOT_PATTERNS = [
+        re.compile(r"shutdown\s+/r\s+/fw", re.IGNORECASE),
+        re.compile(r"systemctl\s+reboot\s+--firmware", re.IGNORECASE),
+    ]
+
+    @staticmethod
+    def _is_reboot_command(cmd: dict[str, Any]) -> bool:
+        """Check if a command is a reboot-to-firmware command.
+
+        Looks for known reboot patterns in the ``text`` field of ``type``
+        or ``key`` actions.
+        """
+        if cmd.get("action") != "type":
+            return False
+        text = cmd.get("text", "")
+        if not text:
+            return False
+        return any(p.search(text) for p in VisionAgent._REBOOT_PATTERNS)
+
+    @staticmethod
+    def _is_screen_black(capture_result: CaptureResult, threshold: int = 20) -> bool:
+        """Check if a captured frame is mostly black (mean pixel < threshold)."""
+        if capture_result.image is None:
+            return True
+        import numpy as np
+        gray = np.asarray(capture_result.image.convert("L"), dtype=np.uint8)
+        return float(gray.mean()) < threshold
+
+    def _wait_for_reboot_transition(
+        self,
+        timeout_s: float = 60.0,
+        poll_interval_s: float = 0.5,
+        stability_duration_s: float = 5.0,
+    ) -> CaptureResult:
+        """Wait for a reboot transition to complete.
+
+        Polls the capture device through three stages:
+        1. Wait for screen to go black (reboot started)
+        2. Wait for non-black stable screen (BIOS or OS appeared)
+        3. Return the stable frame
+
+        On CaptureError (e.g. HDMI signal loss causing stale handle),
+        attempts to reconnect the capture device via close() + open().
+
+        Args:
+            timeout_s: Maximum seconds to wait for a stable screen.
+            poll_interval_s: Seconds between capture polls.
+            stability_duration_s: Seconds of consecutive stable non-black
+                frames required before declaring transition complete.
+
+        Returns:
+            CaptureResult of the first stable post-reboot frame.
+
+        Raises:
+            CaptureError: If timeout expires without a stable screen.
+        """
+        start = time.monotonic()
+        saw_black = False
+        stable_since: float | None = None
+        last_frame: CaptureResult | None = None
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        # Detect frozen capture device: if frames are perfectly identical
+        # (diff < 0.1%) for too long, the device is returning stale buffers.
+        frozen_since: float | None = None
+        frozen_reconnect_threshold_s = 10.0
+
+        logger.info(
+            "Reboot transition: waiting up to %.0fs for stable screen",
+            timeout_s,
+        )
+
+        while True:
+            elapsed = time.monotonic() - start
+            if elapsed > timeout_s:
+                raise CaptureError(
+                    f"Reboot transition timed out after {timeout_s:.0f}s. "
+                    "Machine may have booted directly to OS, hung during "
+                    "POST, or have a BIOS password."
+                )
+
+            if self._abort_event.is_set():
+                raise CaptureError("Reboot transition aborted by user")
+
+            # Attempt capture, reconnect on repeated failures
+            try:
+                frame = self._capture.capture()
+                consecutive_errors = 0
+            except CaptureError:
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.warning(
+                        "Reboot transition: %d consecutive capture errors, "
+                        "attempting device reconnect",
+                        consecutive_errors,
+                    )
+                    try:
+                        self._capture.close()
+                        time.sleep(1.0)
+                        self._capture.open()
+                        consecutive_errors = 0
+                        logger.info("Capture device reconnected successfully")
+                    except CaptureError as reopen_err:
+                        logger.warning(
+                            "Capture reconnect failed: %s", reopen_err,
+                        )
+                time.sleep(poll_interval_s)
+                continue
+
+            is_black = self._is_screen_black(frame)
+
+            if is_black:
+                if not saw_black:
+                    logger.debug("Reboot transition: screen went black")
+                saw_black = True
+                stable_since = None
+                last_frame = None
+                frozen_since = None
+            else:
+                # Non-black frame
+                if last_frame is not None:
+                    try:
+                        diff = compute_frame_diff(last_frame.image, frame.image)
+                    except Exception:
+                        diff = 100.0
+
+                    # Detect frozen device: perfectly identical frames
+                    # (diff < 0.1%) for too long means the CSI device is
+                    # returning stale buffered frames, not live video.
+                    if diff < 0.1:
+                        if frozen_since is None:
+                            frozen_since = time.monotonic()
+                        elif time.monotonic() - frozen_since >= frozen_reconnect_threshold_s:
+                            logger.warning(
+                                "Reboot transition: frames frozen for "
+                                "%.0fs, forcing device reconnect",
+                                time.monotonic() - frozen_since,
+                            )
+                            try:
+                                self._capture.close()
+                                time.sleep(2.0)
+                                self._capture.open()
+                                logger.info("Capture device reconnected")
+                            except CaptureError as re_err:
+                                logger.warning(
+                                    "Reconnect failed: %s", re_err,
+                                )
+                            frozen_since = None
+                            stable_since = None
+                            last_frame = None
+                            time.sleep(poll_interval_s)
+                            continue
+                    else:
+                        frozen_since = None
+
+                    if diff < self._stability_threshold:
+                        # Frame is stable (but not frozen)
+                        if stable_since is None:
+                            stable_since = time.monotonic()
+                        elif time.monotonic() - stable_since >= stability_duration_s:
+                            logger.info(
+                                "Reboot transition complete: stable screen "
+                                "detected after %.1fs",
+                                time.monotonic() - start,
+                            )
+                            return frame
+                    else:
+                        # Screen still changing
+                        stable_since = None
+                else:
+                    stable_since = None
+
+                last_frame = frame
+
+            time.sleep(poll_interval_s)
 
     def _wait_for_stable_screen(self) -> CaptureResult:
         """Capture frames until the screen stops changing, then return the last.
@@ -589,6 +925,7 @@ class VisionAgent:
         step_log: list[dict[str, Any]],
         cache_read_tokens: int = 0,
         cache_creation_tokens: int = 0,
+        completion_status: str = "success",
     ) -> TaskResult:
         """Construct a TaskResult with computed duration."""
         duration = time.monotonic() - start_time
@@ -602,6 +939,7 @@ class VisionAgent:
             total_cache_read_tokens=cache_read_tokens,
             total_cache_creation_tokens=cache_creation_tokens,
             step_log=step_log,
+            completion_status=completion_status,
         )
         logger.info(
             "Task finished: status=%s, steps=%d, tokens=%d+%d, "

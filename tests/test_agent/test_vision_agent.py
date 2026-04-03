@@ -11,7 +11,8 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image
 
-from agent.vision_agent import TaskStatus, VisionAgent
+from agent.protocols.base import StepResult
+from agent.vision_agent import TaskResult, TaskStatus, VisionAgent
 from capture.base import CaptureError, CaptureResult, frame_to_capture_result
 from tests.test_agent.conftest import (
     FailAtIndexExecutor,
@@ -1140,3 +1141,71 @@ class TestBatchExecution:
         assert batch_entry["exec_results"][0] == (True, None)
         assert batch_entry["exec_results"][1][0] is False
         assert batch_entry["exec_results"][2] == (False, "Skipped due to earlier failure")
+
+
+# ===========================================================================
+# Completion Status Propagation
+# ===========================================================================
+
+class TestCompletionStatusDataclasses:
+    """Tests for completion_status field on StepResult and TaskResult."""
+
+    def test_step_result_default(self) -> None:
+        """StepResult with no completion_status defaults to 'success'."""
+        sr = StepResult(
+            command=None, is_done=True, done_reason="done",
+            screen_summary="", raw_text="", input_tokens=0,
+            output_tokens=0, latency_ms=0, success=True,
+        )
+        assert sr.completion_status == "success"
+
+    def test_step_result_gave_up(self) -> None:
+        """StepResult with completion_status='gave_up' stores correctly."""
+        sr = StepResult(
+            command=None, is_done=True, done_reason="cannot find button",
+            screen_summary="", raw_text="", input_tokens=0,
+            output_tokens=0, latency_ms=0, success=True,
+            completion_status="gave_up",
+        )
+        assert sr.completion_status == "gave_up"
+
+    def test_task_result_default(self) -> None:
+        """TaskResult with no completion_status defaults to 'success'."""
+        tr = TaskResult(
+            status=TaskStatus.COMPLETED, reason="ok",
+            total_steps=1, total_input_tokens=0,
+            total_output_tokens=0, total_duration_s=1.0,
+        )
+        assert tr.completion_status == "success"
+
+    def test_task_result_stuck(self) -> None:
+        """TaskResult with completion_status='stuck' stores correctly."""
+        tr = TaskResult(
+            status=TaskStatus.COMPLETED, reason="stuck on login",
+            total_steps=1, total_input_tokens=0,
+            total_output_tokens=0, total_duration_s=1.0,
+            completion_status="stuck",
+        )
+        assert tr.completion_status == "stuck"
+
+
+class TestCompletionStatusPropagation:
+    """Tests for completion_status propagation through VisionAgent."""
+
+    def test_default_status_propagation(self) -> None:
+        """Agent done with default status produces TaskResult.completion_status == 'success'."""
+        agent = _make_agent([
+            {"action": "done", "reason": "Task completed"},
+        ])
+        result = agent.run("test task")
+        assert result.status == TaskStatus.COMPLETED
+        assert result.completion_status == "success"
+
+    def test_gave_up_status_propagation(self) -> None:
+        """Agent done with gave_up propagates to TaskResult.completion_status."""
+        agent = _make_agent([
+            {"action": "done", "reason": "Cannot find button", "status": "gave_up"},
+        ])
+        result = agent.run("test task")
+        assert result.status == TaskStatus.COMPLETED
+        assert result.completion_status == "gave_up"

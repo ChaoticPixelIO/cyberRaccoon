@@ -905,6 +905,275 @@ class TestCacheMetrics:
         call_kwargs = proto._client.beta.messages.create.call_args
         assert "cache_control" not in call_kwargs.kwargs
 
+
+# ===========================================================================
+# Completion Status Propagation (COMP-03)
+# ===========================================================================
+
+class TestCompletionStatusPropagation:
+    """Tests for completion_status propagation through protocol implementations.
+
+    Verifies that all three protocol implementations (PromptBased,
+    AnthropicCU, OpenAICU) correctly extract and set completion_status
+    on StepResult when the LLM signals task completion.
+    """
+
+    # -----------------------------------------------------------------------
+    # PromptBasedProtocol tests
+    # -----------------------------------------------------------------------
+
+    def test_prompt_based_gave_up_status(self) -> None:
+        """PromptBased: done action with status='gave_up' sets completion_status."""
+        from unittest.mock import MagicMock, patch
+
+        proto = PromptBasedProtocol.__new__(PromptBasedProtocol)
+        proto._provider = "anthropic"
+        proto._model = "test-model"
+        proto._max_tokens = 4096
+        proto._temperature = 0.0
+        proto._history_max_turns = 10
+        proto._enable_cache = False
+        proto._system_prompt = "test"
+        proto._messages = []
+        proto._step_count = 0
+        proto._total_input_tokens = 0
+        proto._total_output_tokens = 0
+        proto._total_cache_read_tokens = 0
+        proto._total_cache_creation_tokens = 0
+        proto._last_exec_error = None
+        proto._anthropic_client = MagicMock()
+
+        # Mock LLM returning done with gave_up status
+        done_response = '{"action": "done", "status": "gave_up", "reason": "Cannot find button"}'
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=done_response)]
+        mock_response.usage = MagicMock(
+            input_tokens=100, output_tokens=10,
+            cache_read_input_tokens=0, cache_creation_input_tokens=0,
+        )
+        proto._anthropic_client.messages.create.return_value = mock_response
+
+        result = proto.step("fake_b64", "test task")
+        assert result.is_done is True
+        assert result.completion_status == "gave_up"
+
+    def test_prompt_based_default_success_status(self) -> None:
+        """PromptBased: done action without status field defaults to 'success'."""
+        from unittest.mock import MagicMock
+
+        proto = PromptBasedProtocol.__new__(PromptBasedProtocol)
+        proto._provider = "anthropic"
+        proto._model = "test-model"
+        proto._max_tokens = 4096
+        proto._temperature = 0.0
+        proto._history_max_turns = 10
+        proto._enable_cache = False
+        proto._system_prompt = "test"
+        proto._messages = []
+        proto._step_count = 0
+        proto._total_input_tokens = 0
+        proto._total_output_tokens = 0
+        proto._total_cache_read_tokens = 0
+        proto._total_cache_creation_tokens = 0
+        proto._last_exec_error = None
+        proto._anthropic_client = MagicMock()
+
+        done_response = '{"action": "done", "reason": "Done"}'
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=done_response)]
+        mock_response.usage = MagicMock(
+            input_tokens=100, output_tokens=10,
+            cache_read_input_tokens=0, cache_creation_input_tokens=0,
+        )
+        proto._anthropic_client.messages.create.return_value = mock_response
+
+        result = proto.step("fake_b64", "test task")
+        assert result.is_done is True
+        assert result.completion_status == "success"
+
+    def test_prompt_based_stuck_status(self) -> None:
+        """PromptBased: done action with status='stuck' sets completion_status."""
+        from unittest.mock import MagicMock
+
+        proto = PromptBasedProtocol.__new__(PromptBasedProtocol)
+        proto._provider = "anthropic"
+        proto._model = "test-model"
+        proto._max_tokens = 4096
+        proto._temperature = 0.0
+        proto._history_max_turns = 10
+        proto._enable_cache = False
+        proto._system_prompt = "test"
+        proto._messages = []
+        proto._step_count = 0
+        proto._total_input_tokens = 0
+        proto._total_output_tokens = 0
+        proto._total_cache_read_tokens = 0
+        proto._total_cache_creation_tokens = 0
+        proto._last_exec_error = None
+        proto._anthropic_client = MagicMock()
+
+        done_response = '{"action": "done", "status": "stuck", "reason": "Wrong screen"}'
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text=done_response)]
+        mock_response.usage = MagicMock(
+            input_tokens=100, output_tokens=10,
+            cache_read_input_tokens=0, cache_creation_input_tokens=0,
+        )
+        proto._anthropic_client.messages.create.return_value = mock_response
+
+        result = proto.step("fake_b64", "test task")
+        assert result.is_done is True
+        assert result.completion_status == "stuck"
+
+    # -----------------------------------------------------------------------
+    # AnthropicCUProtocol tests
+    # -----------------------------------------------------------------------
+
+    def _make_anthropic_cu(self) -> "AnthropicCUProtocol":
+        """Create an AnthropicCUProtocol with mocked client for testing."""
+        from unittest.mock import MagicMock
+        proto = AnthropicCUProtocol.__new__(AnthropicCUProtocol)
+        proto._model = "claude-sonnet-4-6"
+        proto._max_tokens = 4096
+        proto._temperature = 0.0
+        proto._history_max_turns = 10
+        proto._display_width = 1280
+        proto._display_height = 720
+        proto._enable_cache = False
+        mock_anthropic = MagicMock()
+        proto._anthropic = mock_anthropic
+        proto._client = MagicMock()
+        proto._tool_def = {
+            "type": "computer_20251124", "name": "computer",
+            "display_width_px": 1280, "display_height_px": 720,
+            "display_number": 1,
+        }
+        proto._system_prompt = "test"
+        proto._messages = []
+        proto._step_count = 0
+        proto._total_input_tokens = 0
+        proto._total_output_tokens = 0
+        proto._total_cache_read_tokens = 0
+        proto._total_cache_creation_tokens = 0
+        proto._last_tool_use_id = None
+        proto._last_exec_error = None
+        return proto
+
+    def test_anthropic_cu_gave_up_status(self) -> None:
+        """AnthropicCU: done text with status JSON sets completion_status='gave_up'."""
+        from unittest.mock import MagicMock
+        proto = self._make_anthropic_cu()
+
+        # Mock response with text block only (no tool_use = done path)
+        text_block = MagicMock()
+        text_block.type = "text"
+        text_block.text = '{"status": "gave_up"} I could not find the button.'
+        mock_response = MagicMock()
+        mock_response.content = [text_block]
+        mock_response.usage = MagicMock(
+            input_tokens=100, output_tokens=10,
+            cache_read_input_tokens=0, cache_creation_input_tokens=0,
+        )
+        proto._client.beta.messages.create.return_value = mock_response
+
+        result = proto.step("fake_b64", "test task")
+        assert result.is_done is True
+        assert result.completion_status == "gave_up"
+
+    def test_anthropic_cu_default_success(self) -> None:
+        """AnthropicCU: done text without status JSON defaults to 'success'."""
+        from unittest.mock import MagicMock
+        proto = self._make_anthropic_cu()
+
+        text_block = MagicMock()
+        text_block.type = "text"
+        text_block.text = "Task completed successfully."
+        mock_response = MagicMock()
+        mock_response.content = [text_block]
+        mock_response.usage = MagicMock(
+            input_tokens=100, output_tokens=10,
+            cache_read_input_tokens=0, cache_creation_input_tokens=0,
+        )
+        proto._client.beta.messages.create.return_value = mock_response
+
+        result = proto.step("fake_b64", "test task")
+        assert result.is_done is True
+        assert result.completion_status == "success"
+
+    # -----------------------------------------------------------------------
+    # OpenAICUProtocol tests
+    # -----------------------------------------------------------------------
+
+    def _make_openai_cu(self) -> "OpenAICUProtocol":
+        """Create an OpenAICUProtocol with mocked client for testing."""
+        from unittest.mock import MagicMock
+        from agent.protocols.openai_cu import OpenAICUProtocol
+        proto = OpenAICUProtocol.__new__(OpenAICUProtocol)
+        proto._model = "gpt-5.4"
+        proto._display_width = 1280
+        proto._display_height = 720
+        mock_openai = MagicMock()
+        proto._openai = mock_openai
+        proto._client = MagicMock()
+        proto._system_prompt = "test"
+        proto._last_response_id = None
+        proto._last_call_id = None
+        proto._pending_safety_checks = []
+        import collections
+        proto._action_queue = collections.deque()
+        proto._last_exec_error = None
+        proto._messages = []
+        proto._step_count = 0
+        proto._total_input_tokens = 0
+        proto._total_output_tokens = 0
+        proto._total_cache_read_tokens = 0
+        return proto
+
+    def test_openai_cu_stuck_status(self) -> None:
+        """OpenAICU: done text with status JSON sets completion_status='stuck'."""
+        from unittest.mock import MagicMock
+        proto = self._make_openai_cu()
+
+        # Mock response: no computer_call (done path)
+        mock_response = MagicMock()
+        mock_response.output = []  # no computer_call
+        mock_response.output_text = '{"status": "stuck"} Screen does not match.'
+        mock_response.usage = MagicMock(
+            input_tokens=100, output_tokens=10,
+        )
+        mock_response.usage.input_tokens_details = None
+        proto._client.responses.create.return_value = mock_response
+
+        result = proto.step("fake_b64", "test task")
+        assert result.is_done is True
+        assert result.completion_status == "stuck"
+
+    def test_openai_cu_default_success(self) -> None:
+        """OpenAICU: done text without status JSON defaults to 'success'."""
+        from unittest.mock import MagicMock
+        proto = self._make_openai_cu()
+
+        mock_response = MagicMock()
+        mock_response.output = []  # no computer_call
+        mock_response.output_text = "Task completed as requested."
+        mock_response.usage = MagicMock(
+            input_tokens=100, output_tokens=10,
+        )
+        mock_response.usage.input_tokens_details = None
+        proto._client.responses.create.return_value = mock_response
+
+        result = proto.step("fake_b64", "test task")
+        assert result.is_done is True
+        assert result.completion_status == "success"
+
+
+# ===========================================================================
+# Prompt Caching (continued)
+# ===========================================================================
+
+class TestCacheMetricsContinued(TestCacheMetrics):
+    """Continuation of cache metric tests (split by TestCompletionStatusPropagation)."""
+
     def test_anthropic_cu_cache_metrics_in_step(self) -> None:
         """Cache metrics from response.usage are included in StepResult."""
         from unittest.mock import MagicMock

@@ -177,14 +177,54 @@
             </div>
         </template>
 
+        <!-- Escalation banner -->
+        <template x-if="escalationPending">
+            <div class="escalation-banner">
+                <div class="escalation-header">Action Required</div>
+                <p class="escalation-reason" x-text="escalationReason"></p>
+                <p class="muted">Resolve the issue on the target machine, then click Resume.</p>
+                <button class="btn btn-sm btn-start" @click="resolveEscalation()">Resume</button>
+            </div>
+        </template>
+
+        <!-- Workflow plan checklist -->
+        <template x-if="workflowPlan">
+            <div class="workflow-plan" :class="{ 'plan-pending': planPending }">
+                <div class="workflow-plan-header">
+                    <span x-text="planPending ? 'Review Plan' : planExecuting ? 'Executing Plan' : 'Plan'"></span>
+                    <template x-if="planPending">
+                        <span class="plan-actions">
+                            <button class="btn btn-sm btn-start" @click="approvePlan()">Execute</button>
+                            <button class="btn btn-sm btn-abort" @click="rejectPlan()">Cancel</button>
+                        </span>
+                    </template>
+                </div>
+                <template x-for="step in workflowPlan.steps" :key="step.number">
+                    <div class="workflow-step" :class="['ws-' + step.status, selectedWorkflowStep === step.number ? 'ws-selected' : '']"
+                         @click="selectWorkflowStep(step.number)"
+                         style="cursor: pointer;">
+                        <span class="ws-check"
+                              x-text="step.status === 'done' ? '✓' : step.status === 'running' ? '▶' : step.status === 'rebooting' ? '⟳' : step.status === 'escalated' ? '!' : '○'"></span>
+                        <span class="ws-num" x-text="step.number + '.'"></span>
+                        <span class="ws-goal" x-text="step.goal"></span>
+                    </div>
+                </template>
+                <template x-if="!planPending && selectedWorkflowStep !== null">
+                    <div class="ws-filter-hint" @click="selectedWorkflowStep = null" style="cursor: pointer;">
+                        Showing actions for step <span x-text="selectedWorkflowStep"></span>. Click to show all.
+                    </div>
+                </template>
+            </div>
+        </template>
+
         <!-- Step log -->
         <div class="step-log" x-ref="stepLog">
-            <template x-if="steps.length === 0 && !taskRunning">
+            <template x-if="filteredSteps.length === 0 && !taskRunning">
                 <p class="muted">No steps yet. Start a task above.</p>
             </template>
-            <template x-for="(step, idx) in steps" :key="step.step">
-                <div class="step-entry" :class="['step-' + step.execute_status, selectedStep === idx ? 'selected' : '']"
-                     @click="selectStep(idx)">
+            <template x-for="(step, idx) in filteredSteps" :key="(step._workflowStep || 0) + '-' + step.step">
+                <div class="step-entry" :class="['step-' + step.execute_status, selectedStep === _stepKey(step) ? 'selected' : '']"
+                     @click="selectStep(step)">
                     <span class="step-num" x-text="'#' + step.step"></span>
                     <span class="step-action" x-text="formatStep(step)"></span>
                     <span class="step-latency" x-show="step.llm_latency_ms > 0" x-text="step.llm_latency_ms + 'ms'"></span>
@@ -213,7 +253,10 @@
                     <button @click="deselectStep()" class="btn btn-sm">Close</button>
                 </div>
                 <div x-show="stepDetailTab === 'detail'">
-                    <div class="step-detail-section">
+                    <template x-if="activeStep.execute_status === 'screenshot' && !activeStep.llm_response_text">
+                        <p class="muted">(screenshot capture, no LLM interaction)</p>
+                    </template>
+                    <div class="step-detail-section" x-show="activeStep.execute_status !== 'screenshot' || activeStep.llm_response_text">
                         <h4>LLM Response</h4>
                         <div class="pre-wrap">
                             <button class="btn-copy" @click="copyText(activeStep.llm_response_text || '', $event)">Copy</button>

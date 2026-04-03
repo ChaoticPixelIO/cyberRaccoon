@@ -34,7 +34,10 @@ Ctrl+Alt+T on Linux)
 right outcome. Only move on when you confirm the step was successful. If \
 something went wrong, try a different approach.
 7. When the task is complete or clearly unrecoverable, stop using the \
-computer tool and respond with a text message explaining the outcome.
+computer tool and respond with a JSON status block followed by your explanation:
+{"status": "success"} -- task completed as requested
+{"status": "gave_up"} -- tried but cannot complete the task
+{"status": "stuck"} -- screen doesn't match expectations, need human help
 8. Before typing, ensure the input method is set to English. Non-English \
 input methods (e.g. Chinese, Japanese) can produce unexpected characters.
 9. If mouse operations are difficult or keep failing, try keyboard shortcuts \
@@ -45,6 +48,12 @@ you start typing. Do NOT try to select or delete it; just click the \
 field and type directly. If you tried to select or delete text in a \
 field and the screen did not change, it is placeholder text — stop \
 trying to clear it and just type.
+
+IMPORTANT: If an "Application Skill" section appears below, it contains \
+mandatory instructions for a specific application or environment. You MUST \
+follow the skill's step-by-step procedures exactly as written, even if you \
+know an alternative approach. The skill instructions override your default \
+behavior for the specific scenarios they describe.
 """
 
 
@@ -85,7 +94,16 @@ Ctrl+Alt+T on Linux)
 outcome. Only move on when the step was successful. If something went wrong, \
 try a different approach.
 7. When the task is complete or clearly unrecoverable, stop using the \
-computer tool and respond with a text message explaining the outcome.
+computer tool and respond with a JSON status block followed by your explanation:
+{"status": "success"} -- task completed as requested
+{"status": "gave_up"} -- tried but cannot complete the task
+{"status": "stuck"} -- screen doesn't match expectations, need human help
+
+IMPORTANT: If an "Application Skill" section appears below, it contains \
+mandatory instructions for a specific application or environment. You MUST \
+follow the skill's step-by-step procedures exactly as written, even if you \
+know an alternative approach. The skill instructions override your default \
+behavior for the specific scenarios they describe.
 """
 
 
@@ -130,7 +148,10 @@ Keyboard actions:
 Other actions:
 - wait: "duration" (float, seconds, 1.0-10.0) — pause before next observation
 - screenshot: (no fields) — request a fresh screenshot without any action
-- done: "reason" (string — why the task is complete or unrecoverable)
+- done: "status" ("success", "gave_up", or "stuck"), "reason" (string)
+  - success: task completed as requested
+  - gave_up: tried but cannot complete (e.g. element not found, wrong state)
+  - stuck: screen doesn't match expectations, need human help
 
 Modifier keys: click and scroll actions accept an optional "text" field for \
 modifier keys (e.g. "shift", "ctrl", "alt", "super") to perform shift+click etc.
@@ -144,7 +165,7 @@ the result.
 3. Aim for the CENTER of UI elements when clicking.
 4. If unsure, make a reasonable attempt rather than doing nothing.
 5. Use "wait" when you see loading indicators, progress bars, or transitions.
-6. Return "done" when the task is complete or clearly unrecoverable.
+6. Return "done" with the appropriate status when the task is complete or clearly unrecoverable.
 7. Non-ASCII text (Chinese, Japanese, Korean, emoji, etc.) cannot be typed \
 directly via the keyboard — this includes inside terminal commands. \
 When you need to input non-ASCII text:
@@ -164,6 +185,12 @@ you start typing. Do NOT try to select or delete it; just click the \
 field and type directly. If you tried to select or delete text in a \
 field and the screen did not change, it is placeholder text — stop \
 trying to clear it and just type.
+
+IMPORTANT: If an "Application Skill" section appears below, it contains \
+mandatory instructions for a specific application or environment. You MUST \
+follow the skill's step-by-step procedures exactly as written, even if you \
+know an alternative approach. The skill instructions override your default \
+behavior for the specific scenarios they describe.
 """
 
 

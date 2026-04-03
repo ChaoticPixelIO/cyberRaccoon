@@ -73,7 +73,7 @@ class PromptBasedProtocol(ComputerUseProtocol):
             display_width, display_height,
         )
         if skill_text:
-            self._system_prompt += "\n\n" + skill_text
+            self._system_prompt += "\n\n## Application Skill\n\n" + skill_text
 
         # Initialize the appropriate SDK client
         if self._provider == "anthropic":
@@ -163,10 +163,12 @@ class PromptBasedProtocol(ComputerUseProtocol):
         # any preceding commands for execution first
         is_done = False
         done_reason = ""
+        completion_status = "success"
         action_list = parsed_list
         if parsed_list[-1].get("action") == "done":
             is_done = True
             done_reason = parsed_list[-1].get("reason", "Task completed")
+            completion_status = parsed_list[-1].get("status", "success")
             action_list = parsed_list[:-1]  # commands before done
 
         # If only action was done (no preceding commands)
@@ -183,6 +185,7 @@ class PromptBasedProtocol(ComputerUseProtocol):
                 success=True,
                 cache_read_tokens=cache_read,
                 cache_creation_tokens=cache_creation,
+                completion_status=completion_status,
             )
 
         # Normalize all actions to executor format
@@ -237,6 +240,7 @@ class PromptBasedProtocol(ComputerUseProtocol):
             commands=commands,
             cache_read_tokens=cache_read,
             cache_creation_tokens=cache_creation,
+            completion_status=completion_status,
         )
 
     def report_result(self, success: bool, error: str | None = None) -> None:

@@ -50,6 +50,7 @@ def _make_protocol() -> OpenAICUProtocol:
     proto._total_input_tokens = 0
     proto._total_output_tokens = 0
     proto._total_cache_read_tokens = 0
+    proto._messages = []
     return proto
 
 
@@ -653,14 +654,19 @@ class TestOpenAICUState:
             "total_cache_creation_tokens": 0,
         }
 
-    def test_messages_snapshot_returns_server_managed(self) -> None:
+    def test_messages_snapshot_returns_tracked_messages(self) -> None:
         proto = _make_protocol()
-        proto._last_response_id = "resp_42"
-
+        # Messages are empty initially
         snapshot = proto.get_messages_snapshot()
-        assert snapshot == [
-            {"note": "server-managed", "response_id": "resp_42"},
-        ]
+        assert snapshot == []
+        # Messages accumulate during API calls
+        proto._messages.append({"role": "user", "content": "test"})
+        snapshot = proto.get_messages_snapshot()
+        assert len(snapshot) == 1
+        assert snapshot[0]["role"] == "user"
+        # Snapshot is a deep copy
+        snapshot[0]["role"] = "modified"
+        assert proto._messages[0]["role"] == "user"
 
 
 # ===========================================================================

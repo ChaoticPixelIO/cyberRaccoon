@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from agent.protocols.parsing import parse_json_action, parse_json_actions, try_parse_json
+from agent.protocols.parsing import (
+    extract_completion_status,
+    parse_json_action,
+    parse_json_actions,
+    try_parse_json,
+)
 
 VALID = {"left_click", "type", "key", "done", "scroll", "screenshot"}
 
@@ -138,3 +143,39 @@ class TestParseJsonActions:
         assert result is not None
         assert len(result) == 1
         assert result[0]["action"] == "left_click"
+
+
+class TestExtractCompletionStatus:
+    """Tests for extract_completion_status()."""
+
+    def test_gave_up_in_json(self) -> None:
+        result = extract_completion_status('Some text {"status": "gave_up"} more text')
+        assert result == "gave_up"
+
+    def test_no_json_returns_success(self) -> None:
+        result = extract_completion_status("No JSON here")
+        assert result == "success"
+
+    def test_stuck_in_markdown_block(self) -> None:
+        result = extract_completion_status('```json\n{"status": "stuck"}\n```')
+        assert result == "stuck"
+
+    def test_invalid_value_returns_success(self) -> None:
+        result = extract_completion_status('{"status": "invalid_value"}')
+        assert result == "success"
+
+    def test_multiple_json_finds_correct_one(self) -> None:
+        result = extract_completion_status('{"other": "data"} {"status": "gave_up"}')
+        assert result == "gave_up"
+
+    def test_empty_string_returns_success(self) -> None:
+        result = extract_completion_status("")
+        assert result == "success"
+
+    def test_success_status(self) -> None:
+        result = extract_completion_status('{"status": "success"}')
+        assert result == "success"
+
+    def test_stuck_in_inline_json(self) -> None:
+        result = extract_completion_status('I am stuck {"status": "stuck"} cannot proceed')
+        assert result == "stuck"

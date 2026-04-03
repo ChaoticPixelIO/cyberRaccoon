@@ -14,6 +14,7 @@ from typing import Any
 
 from agent.prompts import build_openai_cu_system_prompt
 from agent.protocols.base import ComputerUseProtocol, StepResult
+from agent.protocols.parsing import extract_completion_status
 
 logger = logging.getLogger("M3.openai_cu")
 
@@ -81,9 +82,9 @@ class OpenAICUProtocol(ComputerUseProtocol):
 
         self._system_prompt = build_openai_cu_system_prompt()
         if skill_text:
-            self._system_prompt += "\n\n" + skill_text
+            self._system_prompt += "\n\n## Application Skill\n\n" + skill_text
 
-        # Conversation state (server-side — we only track IDs)
+        # Conversation state (server-side stateful, with client-side mirror)
         self._last_response_id: str | None = None
         self._last_call_id: str | None = None
         self._pending_safety_checks: list[Any] = []
@@ -93,6 +94,11 @@ class OpenAICUProtocol(ComputerUseProtocol):
 
         # Error from executor (cleared on next successful report)
         self._last_exec_error: str | None = None
+
+        # Client-side message tracking for UI display.
+        # The Responses API is server-side stateful, but we mirror
+        # messages here so get_messages_snapshot() returns useful data.
+        self._messages: list[dict[str, Any]] = []
 
         # Metrics
         self._step_count = 0
@@ -168,6 +174,11 @@ class OpenAICUProtocol(ComputerUseProtocol):
             done_text = (
                 getattr(response, "output_text", "") or "Task completed"
             )
+            completion_status = extract_completion_status(done_text)
+            self._messages.append({
+                "role": "assistant",
+                "content": done_text[:500],
+            })
             self._step_count += 1
             return StepResult(
                 command=None, is_done=True, done_reason=done_text,
@@ -175,6 +186,7 @@ class OpenAICUProtocol(ComputerUseProtocol):
                 input_tokens=in_tok, output_tokens=out_tok,
                 latency_ms=latency_ms, success=True,
                 cache_read_tokens=cache_read,
+                completion_status=completion_status,
             )
 
         # Store state for continuation
@@ -207,6 +219,12 @@ class OpenAICUProtocol(ComputerUseProtocol):
         raw_text_parts.append(json.dumps(actions, indent=2, default=str))
         raw_text = "\n".join(raw_text_parts)
         screen_summary = raw_text[:200] if raw_text else ""
+
+        # Track assistant response for get_messages_snapshot()
+        self._messages.append({
+            "role": "assistant",
+            "content": raw_text[:500] if raw_text else "(no text)",
+        })
 
         # Queue remaining actions, process first
         for action in actions[1:]:
@@ -289,6 +307,7 @@ class OpenAICUProtocol(ComputerUseProtocol):
         self._pending_safety_checks.clear()
         self._last_exec_error = None
         self._step_count = 0
+        self._messages.clear()
 
     def get_usage_summary(self) -> dict[str, int]:
         return {
@@ -302,9 +321,8 @@ class OpenAICUProtocol(ComputerUseProtocol):
         return self._system_prompt
 
     def get_messages_snapshot(self) -> list[dict[str, Any]]:
-        return [
-            {"note": "server-managed", "response_id": self._last_response_id},
-        ]
+        import copy
+        return copy.deepcopy(self._messages)
 
     def detect_os(self, screenshot_base64: str) -> str | None:
         """Detect target OS from screenshot via a one-off Responses API call."""
@@ -402,6 +420,11 @@ class OpenAICUProtocol(ComputerUseProtocol):
         self, screenshot_base64: str, task_goal: str,
     ) -> Any:
         """First API call: send screenshot + task goal with instructions."""
+        # Track for get_messages_snapshot()
+        self._messages.append({
+            "role": "user",
+            "content": f"[screenshot] Task: {task_goal}",
+        })
         return self._client.responses.create(
             model=self._model,
             instructions=self._system_prompt,
@@ -426,6 +449,10 @@ class OpenAICUProtocol(ComputerUseProtocol):
 
     def _call_api_continuation(self, screenshot_base64: str) -> Any:
         """Continuation API call: send screenshot as computer_call_output."""
+        self._messages.append({
+            "role": "user",
+            "content": "[screenshot after action]",
+        })
         call_output: dict[str, Any] = {
             "type": "computer_call_output",
             "call_id": self._last_call_id,

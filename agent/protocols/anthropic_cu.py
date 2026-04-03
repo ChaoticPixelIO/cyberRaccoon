@@ -13,6 +13,7 @@ from typing import Any
 
 from agent.prompts import build_anthropic_cu_system_prompt
 from agent.protocols.base import ComputerUseProtocol, StepResult
+from agent.protocols.parsing import extract_completion_status
 
 logger = logging.getLogger("M3.anthropic_cu")
 
@@ -89,7 +90,7 @@ class AnthropicCUProtocol(ComputerUseProtocol):
         }
         self._system_prompt = build_anthropic_cu_system_prompt()
         if skill_text:
-            self._system_prompt += "\n\n" + skill_text
+            self._system_prompt += "\n\n## Application Skill\n\n" + skill_text
 
         self._messages: list[dict[str, Any]] = []
         self._step_count = 0
@@ -166,6 +167,7 @@ class AnthropicCUProtocol(ComputerUseProtocol):
         # No tool_use block -> model considers task done
         if tool_use_block is None:
             done_reason = raw_text or "Task completed"
+            completion_status = extract_completion_status(raw_text)
             self._step_count += 1
             return StepResult(
                 command=None,
@@ -179,6 +181,7 @@ class AnthropicCUProtocol(ComputerUseProtocol):
                 success=True,
                 cache_read_tokens=cache_read,
                 cache_creation_tokens=cache_creation,
+                completion_status=completion_status,
             )
 
         # Normalize tool_use to executor command

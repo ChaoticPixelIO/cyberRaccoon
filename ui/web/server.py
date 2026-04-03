@@ -315,6 +315,21 @@ def create_app(controller: AppController) -> FastAPI:
         controller.abort_task()
         return JSONResponse({"status": "ok"})
 
+    @app.post("/api/task/approve-plan")
+    async def approve_plan() -> JSONResponse:
+        controller.approve_plan()
+        return JSONResponse({"status": "ok"})
+
+    @app.post("/api/task/reject-plan")
+    async def reject_plan() -> JSONResponse:
+        controller.reject_plan()
+        return JSONResponse({"status": "ok"})
+
+    @app.post("/api/task/resolve-escalation")
+    async def resolve_escalation() -> JSONResponse:
+        controller.resolve_escalation()
+        return JSONResponse({"status": "ok"})
+
     # ---- Status API ----
 
     @app.get("/api/status")

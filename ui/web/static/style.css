@@ -327,6 +327,82 @@ body {
 
 /* Step log */
 
+/* Escalation banner */
+.escalation-banner {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    padding: 0.75rem;
+    margin-bottom: 0.5rem;
+    border-left: 3px solid var(--accent);
+}
+.escalation-header {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--accent);
+    margin-bottom: 0.3rem;
+}
+.escalation-reason {
+    font-size: 0.85rem;
+    color: var(--text);
+    margin-bottom: 0.4rem;
+}
+
+/* Workflow plan checklist */
+.workflow-plan {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+    border-left: 3px solid var(--accent);
+}
+.workflow-plan.plan-pending {
+    border-left-color: #fbbf24;
+}
+.workflow-plan-header {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 0.4rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.plan-actions {
+    display: flex;
+    gap: 0.4rem;
+}
+.btn-sm {
+    padding: 0.2rem 0.6rem;
+    font-size: 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    border: none;
+}
+.workflow-step {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    padding: 0.2rem 0;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+.workflow-step.ws-done { color: #4ade80; }
+.workflow-step.ws-running { color: var(--text); font-weight: 600; }
+.workflow-step.ws-rebooting { color: #fbbf24; }
+.workflow-step.ws-escalated { color: var(--accent); }
+.ws-check { width: 1.2em; text-align: center; flex-shrink: 0; }
+.ws-num { flex-shrink: 0; }
+.ws-goal { overflow: hidden; text-overflow: ellipsis; }
+.workflow-step:hover { background: rgba(255,255,255,0.05); border-radius: 3px; }
+.workflow-step.ws-selected { background: rgba(233,69,96,0.15); border-radius: 3px; }
+.ws-filter-hint {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    padding: 0.3rem 0;
+    text-decoration: underline;
+}
+
 .step-log {
     max-height: 300px;
     overflow-y: auto;

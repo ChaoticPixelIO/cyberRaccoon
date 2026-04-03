@@ -62,6 +62,7 @@ class AppEventType(Enum):
     # Task lifecycle
     TASK_STARTED = "task_started"
     TASK_STEP = "task_step"
+    WORKFLOW_EVENT = "workflow_event"
     TASK_FINISHED = "task_finished"
 
     # Config
@@ -636,7 +637,12 @@ class AppController:
         """
         config = self.get_config()
 
-        # Load skills (if configured)
+        # Load skills (if configured).
+        # When skills are loaded, the planner handles them (plan-then-execute
+        # mode). The executor protocol does NOT get skill_text — putting
+        # skills in the tool-enabled prompt is what causes the LLM to
+        # ignore them (it goes into autonomous mode instead of following
+        # the skill's procedure).
         skill_text: str | None = None
         if config.agent.skills:
             from agent.skills import load_skills
@@ -645,7 +651,8 @@ class AppController:
             except Exception as e:
                 raise TaskError(f"Failed to load skills: {e}") from e
 
-        # M3: Protocol
+        # M3: Protocol — skill_text intentionally NOT passed here.
+        # Skills go to the planner, not the executor.
         try:
             protocol = create_protocol(
                 provider=config.llm.provider,
@@ -655,7 +662,6 @@ class AppController:
                 history_max_turns=config.agent.history_max_turns,
                 protocol_override=config.agent.protocol_override,
                 enable_cache=config.agent.enable_cache,
-                skill_text=skill_text,
             )
         except Exception as e:
             raise TaskError(f"Protocol init failed: {e}") from e
@@ -725,6 +731,30 @@ class AppController:
             agent.abort()
             logger.info("Task abort requested")
 
+    def approve_plan(self) -> None:
+        """Approve the pending workflow plan. Unblocks execution."""
+        with self._lock:
+            agent = self._agent
+        if agent and hasattr(agent, '_workflow_runner') and agent._workflow_runner:
+            agent._workflow_runner.approve_plan()
+            logger.info("Workflow plan approved")
+
+    def reject_plan(self) -> None:
+        """Reject the pending workflow plan. Aborts the workflow."""
+        with self._lock:
+            agent = self._agent
+        if agent and hasattr(agent, '_workflow_runner') and agent._workflow_runner:
+            agent._workflow_runner.reject_plan()
+            logger.info("Workflow plan rejected")
+
+    def resolve_escalation(self) -> None:
+        """Signal that the user resolved an escalation. Unblocks workflow."""
+        with self._lock:
+            agent = self._agent
+        if agent and hasattr(agent, '_workflow_runner') and agent._workflow_runner:
+            agent._workflow_runner.resolve_escalation()
+            logger.info("Workflow escalation resolved")
+
     def get_task_status(self) -> dict[str, Any]:
         """Return current task state as a dict.
 
@@ -757,7 +787,7 @@ class AppController:
             return self._task_thread is not None and self._task_thread.is_alive()
 
     def _run_task(self, goal: str) -> None:
-        """Worker thread: run VisionAgent.run() and emit events."""
+        """Worker thread: run VisionAgent or workflow and emit events."""
         try:
             with self._lock:
                 agent = self._agent
@@ -765,24 +795,91 @@ class AppController:
                 logger.error("Agent not available in task thread")
                 return
 
-            result = agent.run(goal, on_step=self._on_step_bridge)
+            config = self.get_config()
+            use_workflow = bool(config.agent.skills)
 
-            with self._lock:
-                self._task_result = result
+            if use_workflow:
+                # Plan-then-execute: planner decomposes task into steps,
+                # agent executes each step individually.
+                from agent.planner import TaskPlanner
 
-            self._emit(AppEvent(
-                type=AppEventType.TASK_FINISHED,
-                data={
-                    "status": result.status.value,
-                    "reason": result.reason,
-                    "total_steps": result.total_steps,
-                    "total_duration_s": result.total_duration_s,
-                    "total_input_tokens": result.total_input_tokens,
-                    "total_output_tokens": result.total_output_tokens,
-                    "total_cache_read_tokens": result.total_cache_read_tokens,
-                    "total_cache_creation_tokens": result.total_cache_creation_tokens,
-                },
-            ))
+                planner = TaskPlanner(
+                    provider=config.llm.provider,
+                    model=config.llm.model,
+                    api_key=config.llm.api_key,
+                    base_url=config.llm.base_url,
+                )
+
+                # Load skill text for the planner
+                skill_text: str | None = None
+                if config.agent.skills:
+                    from agent.skills import load_skills
+                    try:
+                        skill_text = load_skills(config.agent.skills)
+                    except Exception as e:
+                        logger.warning("Failed to load skills for planner: %s", e)
+
+                workflow_result = agent.run_workflow(
+                    task_goal=goal,
+                    planner=planner,
+                    skill_text=skill_text,
+                    on_step=self._on_step_bridge,
+                )
+
+                # Convert WorkflowResult to TaskResult for UI.
+                # Token usage is aggregated from per-step results
+                # reported via the on_step callback (forwarded to
+                # agent.run() since fix 8).
+                status_map = {
+                    "completed": TaskStatus.COMPLETED,
+                    "aborted": TaskStatus.ABORTED,
+                }
+                with self._lock:
+                    self._task_result = TaskResult(
+                        status=status_map.get(
+                            workflow_result.status, TaskStatus.FAILED,
+                        ),
+                        reason=workflow_result.reason,
+                        total_steps=workflow_result.steps_completed,
+                        total_input_tokens=0,
+                        total_output_tokens=0,
+                        total_duration_s=workflow_result.total_duration_s,
+                    )
+
+                self._emit(AppEvent(
+                    type=AppEventType.TASK_FINISHED,
+                    data={
+                        "status": workflow_result.status,
+                        "reason": workflow_result.reason,
+                        "total_steps": workflow_result.steps_completed,
+                        "total_duration_s": workflow_result.total_duration_s,
+                        "total_input_tokens": 0,
+                        "total_output_tokens": 0,
+                        "total_cache_read_tokens": 0,
+                        "total_cache_creation_tokens": 0,
+                        "workflow": True,
+                        "steps_total": workflow_result.steps_total,
+                    },
+                ))
+            else:
+                result = agent.run(goal, on_step=self._on_step_bridge)
+
+                with self._lock:
+                    self._task_result = result
+
+                self._emit(AppEvent(
+                    type=AppEventType.TASK_FINISHED,
+                    data={
+                        "status": result.status.value,
+                        "reason": result.reason,
+                        "total_steps": result.total_steps,
+                        "total_duration_s": result.total_duration_s,
+                        "total_input_tokens": result.total_input_tokens,
+                        "total_output_tokens": result.total_output_tokens,
+                        "total_cache_read_tokens": result.total_cache_read_tokens,
+                        "total_cache_creation_tokens": result.total_cache_creation_tokens,
+                    },
+                ))
         except Exception as e:
             logger.error("Task thread error: %s", e, exc_info=True)
             with self._lock:
@@ -800,11 +897,24 @@ class AppController:
             ))
 
     def _on_step_bridge(self, step_info: dict[str, Any]) -> None:
-        """Bridge VisionAgent's on_step callback to the event system."""
-        self._emit(AppEvent(
-            type=AppEventType.TASK_STEP,
-            data=step_info,
-        ))
+        """Bridge VisionAgent's on_step callback to the event system.
+
+        Distinguishes between workflow-level events (plan_ready, step_start,
+        step_done, etc.) and per-action agent events (screenshots, clicks).
+        Workflow events go as 'workflow_event', agent events as 'task_step'.
+        """
+        if "type" in step_info:
+            # Workflow-level event from WorkflowRunner
+            self._emit(AppEvent(
+                type=AppEventType.WORKFLOW_EVENT,
+                data=step_info,
+            ))
+        else:
+            # Per-action event from VisionAgent.run()
+            self._emit(AppEvent(
+                type=AppEventType.TASK_STEP,
+                data=step_info,
+            ))
 
     # ------------------------------------------------------------------
     # Capture preview

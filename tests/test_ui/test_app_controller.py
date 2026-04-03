@@ -435,8 +435,13 @@ class TestSplitModuleLifecycle:
             ctrl.close_capture()
             assert ctrl._agent is None
 
-    def test_ensure_agent_passes_skill_text(self, tmp_path: Path) -> None:
-        """_ensure_agent should load skills and pass skill_text to create_protocol."""
+    def test_ensure_agent_loads_skills_but_not_in_protocol(self, tmp_path: Path) -> None:
+        """_ensure_agent loads skills but does NOT pass them to create_protocol.
+
+        Skills go to the planner (plan-then-execute mode), not the executor's
+        system prompt. Putting skills in the tool-enabled prompt causes the
+        LLM to ignore them.
+        """
         patches, _ = self._mock_modules()
         mock_create_protocol = MagicMock(return_value=MagicMock())
         patches["create_protocol"] = patch(
@@ -456,8 +461,10 @@ class TestSplitModuleLifecycle:
             ctrl._ensure_agent()
 
             mock_load.assert_called_once_with(["blender"])
+            # skill_text should NOT be passed to the protocol —
+            # skills are handled by the planner, not the executor
             _, kwargs = mock_create_protocol.call_args
-            assert kwargs["skill_text"] == "# Blender\nShortcuts"
+            assert kwargs.get("skill_text") is None
 
     def test_ensure_agent_skill_load_failure_raises(self, tmp_path: Path) -> None:
         """_ensure_agent should raise TaskError when skill loading fails."""

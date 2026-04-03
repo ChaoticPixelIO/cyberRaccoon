@@ -16,7 +16,7 @@ function cyberRaccoon() {
         steps: [],
         screenshot: null,
         taskResult: null,
-        selectedStep: null,  // index into steps[], null = follow latest
+        selectedStep: null,  // unique key string (e.g. "3-2"), null = follow latest
         stepDetailTab: 'detail',
         totalInputTokens: 0,
         totalOutputTokens: 0,
@@ -48,6 +48,16 @@ function cyberRaccoon() {
         },
         maxLogs: 500,
 
+        // --- Workflow Plan ---
+        workflowPlan: null,       // {steps: [{number, goal, status}], task_goal}
+        workflowActive: false,
+        planPending: false,       // true when plan is ready but not yet approved
+        planExecuting: false,     // true when plan is being executed
+        escalationPending: false, // true when escalation needs user action
+        escalationReason: '',     // why the agent escalated
+        currentWorkflowStep: 0,  // which workflow step is currently executing
+        selectedWorkflowStep: null, // which step the user clicked to filter actions (null = show all)
+
         // --- Skills ---
         skills: [],
         selectedSkill: null,
@@ -77,9 +87,17 @@ function cyberRaccoon() {
             return this.captureReady && this.executorReady;
         },
 
+        get filteredSteps() {
+            if (!this.workflowActive || this.selectedWorkflowStep === null) {
+                return this.steps;
+            }
+            return this.steps.filter(s => s._workflowStep === this.selectedWorkflowStep);
+        },
+
         get activeStep() {
-            if (this.selectedStep !== null && this.steps[this.selectedStep]) {
-                return this.steps[this.selectedStep];
+            if (this.selectedStep !== null) {
+                const found = this.steps.find(s => this._stepKey(s) === this.selectedStep);
+                if (found) return found;
             }
             return this.steps.length > 0 ? this.steps[this.steps.length - 1] : null;
         },
@@ -189,9 +207,25 @@ function cyberRaccoon() {
                     this.totalOutputTokens = 0;
                     this.totalCacheReadTokens = 0;
                     this.totalCacheCreationTokens = 0;
+                    this.workflowPlan = null;
+                    this.workflowActive = false;
+                    this.planPending = false;
+                    this.planExecuting = false;
+                    this.escalationPending = false;
+                    this.escalationReason = '';
+                    this.currentWorkflowStep = 0;
+                    this.selectedWorkflowStep = null;
+                    break;
+
+                case 'workflow_event':
+                    this.handleWorkflowEvent(data);
                     break;
 
                 case 'task_step':
+                    // Tag with workflow step number for filtering
+                    if (this.workflowActive) {
+                        data._workflowStep = this.currentWorkflowStep;
+                    }
                     this.steps.push(data);
                     if (data.total_input_tokens !== undefined) {
                         this.totalInputTokens = data.total_input_tokens;
@@ -278,6 +312,100 @@ function cyberRaccoon() {
 
                 default:
                     console.log('Unknown WS event:', event, data);
+            }
+        },
+
+        // ================================================================
+        // Workflow event handling
+        // ================================================================
+
+        handleWorkflowEvent(data) {
+            switch (data.type) {
+                case 'plan_ready':
+                    this.workflowActive = true;
+                    this.planPending = true;
+                    this.planExecuting = false;
+                    this.workflowPlan = {
+                        task_goal: data.task_goal,
+                        steps: data.steps.map(s => ({
+                            number: s.number,
+                            goal: s.goal,
+                            reboot_expected: s.reboot_expected,
+                            status: 'pending',
+                        })),
+                    };
+                    break;
+
+                case 'step_start':
+                    this.planPending = false;
+                    this.planExecuting = true;
+                    this.currentWorkflowStep = data.step_number;
+                    this.selectedWorkflowStep = data.step_number;
+                    if (this.workflowPlan) {
+                        const step = this.workflowPlan.steps.find(
+                            s => s.number === data.step_number
+                        );
+                        if (step) step.status = 'running';
+                    }
+                    this.selectedStep = null;
+                    break;
+
+                case 'step_done':
+                    if (this.workflowPlan) {
+                        const step = this.workflowPlan.steps.find(
+                            s => s.number === data.step_number
+                        );
+                        if (step) step.status = 'done';
+                    }
+                    break;
+
+                case 'reboot_transition':
+                    if (this.workflowPlan) {
+                        const step = this.workflowPlan.steps.find(
+                            s => s.number === data.step_number
+                        );
+                        if (step) step.status = 'rebooting';
+                    }
+                    break;
+
+                case 'replanned':
+                    if (this.workflowPlan) {
+                        const completedCount = data.steps_completed || 0;
+                        const kept = this.workflowPlan.steps.slice(0, completedCount);
+                        const newSteps = data.new_steps.map(s => ({
+                            number: s.number,
+                            goal: s.goal,
+                            reboot_expected: false,
+                            status: 'pending',
+                        }));
+                        this.workflowPlan.steps = [...kept, ...newSteps];
+                    }
+                    break;
+
+                case 'escalate':
+                    this.escalationPending = true;
+                    this.escalationReason = data.reason || 'Human intervention required';
+                    if (this.workflowPlan) {
+                        const step = this.workflowPlan.steps.find(
+                            s => s.number === data.step_number
+                        );
+                        if (step) step.status = 'escalated';
+                    }
+                    break;
+
+                case 'escalation_resolved':
+                    this.escalationPending = false;
+                    this.escalationReason = '';
+                    break;
+
+                case 'workflow_done':
+                    this.planExecuting = false;
+                    if (this.workflowPlan) {
+                        this.workflowPlan.steps.forEach(s => {
+                            if (s.status === 'running') s.status = 'done';
+                        });
+                    }
+                    break;
             }
         },
 
@@ -424,6 +552,41 @@ function cyberRaccoon() {
             }
         },
 
+        async approvePlan() {
+            try {
+                await fetch('/api/task/approve-plan', { method: 'POST' });
+            } catch (e) {
+                console.error('Approve plan error:', e);
+            }
+        },
+
+        selectWorkflowStep(stepNumber) {
+            if (this.selectedWorkflowStep === stepNumber) {
+                this.selectedWorkflowStep = null; // toggle off = show all
+            } else {
+                this.selectedWorkflowStep = stepNumber;
+            }
+            this.selectedStep = null;
+        },
+
+        async rejectPlan() {
+            try {
+                await fetch('/api/task/reject-plan', { method: 'POST' });
+            } catch (e) {
+                console.error('Reject plan error:', e);
+            }
+        },
+
+        async resolveEscalation() {
+            try {
+                await fetch('/api/task/resolve-escalation', { method: 'POST' });
+                this.escalationPending = false;
+                this.escalationReason = '';
+            } catch (e) {
+                console.error('Resolve escalation error:', e);
+            }
+        },
+
         // ================================================================
         // Config API
         // ================================================================
@@ -535,13 +698,17 @@ function cyberRaccoon() {
         // Step selection
         // ================================================================
 
-        selectStep(index) {
-            if (this.selectedStep === index) {
+        _stepKey(step) {
+            return (step._workflowStep || 0) + '-' + step.step;
+        },
+
+        selectStep(step) {
+            const key = this._stepKey(step);
+            if (this.selectedStep === key) {
                 this.deselectStep();
                 return;
             }
-            this.selectedStep = index;
-            const step = this.steps[index];
+            this.selectedStep = key;
             if (step && step.screenshot_base64) {
                 this.screenshot = step.screenshot_base64;
             }

@@ -143,3 +143,44 @@ def try_parse_json(
         return None
 
     return obj
+
+
+# Valid completion statuses for the structured completion signal.
+VALID_STATUSES: set[str] = {"success", "gave_up", "stuck"}
+
+
+def extract_completion_status(text: str) -> str:
+    """Extract completion status from LLM done message text.
+
+    Searches for JSON objects containing a ``"status"`` field with a valid
+    completion value (``"success"``, ``"gave_up"``, or ``"stuck"``).
+
+    Returns ``"success"`` if not found (safe default per D-07).
+    """
+    if not text:
+        return "success"
+
+    # Try shallow JSON objects first: {...} with no nested braces
+    for m in re.finditer(r"\{[^{}]*\}", text):
+        try:
+            obj = json.loads(m.group(0))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        status = obj.get("status")
+        if status in VALID_STATUSES:
+            return status
+
+    # Try markdown code block extraction
+    code_block = re.search(
+        r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL,
+    )
+    if code_block:
+        try:
+            obj = json.loads(code_block.group(1))
+            status = obj.get("status")
+            if status in VALID_STATUSES:
+                return status
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return "success"

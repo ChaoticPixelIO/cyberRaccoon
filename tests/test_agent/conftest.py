@@ -2,13 +2,40 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 
+try:
+    from PIL import Image
+except ImportError:  # pragma: no cover
+    Image = None  # type: ignore[assignment,misc]
+
 from agent.protocols.base import ComputerUseProtocol, StepResult
 from capture.screen_capture import CaptureError
+
+
+# ---------------------------------------------------------------------------
+# Test image helpers
+# ---------------------------------------------------------------------------
+
+def make_test_image(
+    color: tuple[int, int, int] = (128, 128, 128),
+    size: tuple[int, int] = (4, 4),
+) -> Image.Image:
+    """Create a solid-color PIL Image for frame-diff testing.
+
+    Args:
+        color: RGB tuple (default mid-gray).
+        size:  (width, height) in pixels (default 4x4).
+
+    Returns:
+        A PIL Image in RGB mode filled with *color*.
+    """
+    if Image is None:  # pragma: no cover
+        raise RuntimeError("Pillow is required for make_test_image")
+    return Image.new("RGB", size, color)
 
 
 # ---------------------------------------------------------------------------
@@ -17,31 +44,56 @@ from capture.screen_capture import CaptureError
 
 @dataclass
 class FakeCaptureResult:
-    """Lightweight stand-in for CaptureResult — no PIL Image needed."""
+    """Lightweight stand-in for CaptureResult.
+
+    The *image* field defaults to a small solid-gray PIL Image so that
+    ``compute_frame_diff`` works out-of-the-box in tests that need it.
+    Existing tests that never inspect *image* are unaffected.
+    """
 
     base64_jpeg: str = "fake_base64_data"
     width: int = 1280
     height: int = 720
     timestamp: float = 0.0
     size_bytes: int = 1000
-    image: Any = None
+    image: Any = field(default_factory=lambda: make_test_image())
 
 
 class MockCapture:
     """Mock M1 that returns fake screenshots.
 
-    If fail_at_step is set, raises CaptureError on that call number.
+    Args:
+        fail_at_step: Raise ``CaptureError`` on this call number (-1 = never).
+        images: Optional list of PIL Images. Each ``capture()`` call pops the
+            next image from the list (cycling the last one). When *None*,
+            every call returns a default solid-gray image.
     """
 
-    def __init__(self, fail_at_step: int = -1) -> None:
+    def __init__(
+        self,
+        fail_at_step: int = -1,
+        images: list[Any] | None = None,
+    ) -> None:
         self.call_count = 0
         self.fail_at_step = fail_at_step
+        self._images = list(images) if images else None
+        self._image_index = 0
 
     def capture(self) -> FakeCaptureResult:
         self.call_count += 1
         if self.call_count == self.fail_at_step:
             raise CaptureError("Mock capture failure")
-        return FakeCaptureResult(timestamp=self.call_count)
+
+        img: Any = None
+        if self._images:
+            idx = min(self._image_index, len(self._images) - 1)
+            img = self._images[idx]
+            self._image_index += 1
+
+        return FakeCaptureResult(
+            timestamp=self.call_count,
+            image=img if img is not None else make_test_image(),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +152,7 @@ class MockProtocol(ComputerUseProtocol):
             # Check if last item is done
             is_done = bool(cmd) and cmd[-1].get("action") == "done"
             done_reason = cmd[-1].get("reason", "Task completed") if is_done else ""
+            completion_status = cmd[-1].get("status", "success") if is_done else "success"
             action_cmds = cmd[:-1] if is_done else cmd
             screen_summary = cmd[-1].get("screen_summary", "") if cmd else ""
 
@@ -114,10 +167,12 @@ class MockProtocol(ComputerUseProtocol):
                 latency_ms=500,
                 success=True,
                 commands=action_cmds,
+                completion_status=completion_status,
             )
 
         is_done = cmd.get("action") == "done"
         done_reason = cmd.get("reason", "Task completed") if is_done else ""
+        completion_status = cmd.get("status", "success") if is_done else "success"
         screen_summary = cmd.get("screen_summary", "")
 
         return StepResult(
@@ -130,6 +185,7 @@ class MockProtocol(ComputerUseProtocol):
             output_tokens=self.output_tokens,
             latency_ms=500,
             success=True,
+            completion_status=completion_status,
         )
 
     def report_result(self, success: bool, error: str | None = None) -> None:

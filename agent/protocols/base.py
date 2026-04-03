@@ -48,6 +48,7 @@ class StepResult:
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
     commands: list[dict[str, Any]] = field(default_factory=list)
+    completion_status: str = "success"  # "success", "gave_up", or "stuck"
 
     def get_commands(self) -> list[dict[str, Any]]:
         """Return the list of commands to execute.
