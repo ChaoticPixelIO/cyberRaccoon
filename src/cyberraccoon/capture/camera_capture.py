@@ -19,7 +19,7 @@ from typing import Any
 
 from PIL import Image
 
-from capture.base import CaptureError, CaptureResult, frame_to_capture_result
+from cyberraccoon.capture.base import CaptureError, CaptureResult, frame_to_capture_result
 
 logger = logging.getLogger("M1.camera")
 

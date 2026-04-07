@@ -12,7 +12,7 @@ import logging
 import struct
 import time
 
-from executor.hid_device import HIDDevice
+from cyberraccoon.executor.hid_device import HIDDevice
 
 logger = logging.getLogger("M4.mouse")
 

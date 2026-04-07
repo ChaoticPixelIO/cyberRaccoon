@@ -16,15 +16,15 @@ import math
 import random
 import time
 
-from config import HumanizeConfig
-from executor.keyboard import (
+from cyberraccoon.config import HumanizeConfig
+from cyberraccoon.executor.keyboard import (
     CHAR_MAP,
     KeyboardController,
     MODIFIER_MAP,
     SPECIAL_KEY_MAP,
     _build_report as _kb_build_report,
 )
-from executor.mouse import (
+from cyberraccoon.executor.mouse import (
     BUTTON_LEFT,
     MouseController,
     _screen_to_hid,

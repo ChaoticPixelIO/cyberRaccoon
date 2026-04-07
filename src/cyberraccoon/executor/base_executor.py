@@ -13,14 +13,14 @@ from abc import ABC, abstractmethod
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
-from config import HumanizeConfig
-from executor.clipboard_bridge import TargetOS, has_non_typeable
-from executor.hid_device import HIDDeviceError
-from executor.keyboard import KeyboardController
-from executor.mouse import MouseController
+from cyberraccoon.config import HumanizeConfig
+from cyberraccoon.executor.clipboard_bridge import TargetOS, has_non_typeable
+from cyberraccoon.executor.hid_device import HIDDeviceError
+from cyberraccoon.executor.keyboard import KeyboardController
+from cyberraccoon.executor.mouse import MouseController
 
 if TYPE_CHECKING:
-    from executor.humanize import HumanizedKeyboardController, HumanizedMouseController
+    from cyberraccoon.executor.humanize import HumanizedKeyboardController, HumanizedMouseController
 
 logger = logging.getLogger("M4.executor")
 
@@ -217,7 +217,7 @@ class BaseExecutor(ABC):
     ) -> MouseController | HumanizedMouseController:
         """Optionally wrap a MouseController with humanization proxy."""
         if self._humanize_config and self._humanize_config.enabled:
-            from executor.humanize import HumanizedMouseController
+            from cyberraccoon.executor.humanize import HumanizedMouseController
             logger.info("Mouse humanization enabled")
             return HumanizedMouseController(mouse, self._humanize_config)
         return mouse
@@ -227,7 +227,7 @@ class BaseExecutor(ABC):
     ) -> KeyboardController | HumanizedKeyboardController:
         """Optionally wrap a KeyboardController with humanization proxy."""
         if self._humanize_config and self._humanize_config.enabled:
-            from executor.humanize import HumanizedKeyboardController
+            from cyberraccoon.executor.humanize import HumanizedKeyboardController
             logger.info("Keyboard humanization enabled")
             return HumanizedKeyboardController(keyboard, self._humanize_config)
         return keyboard

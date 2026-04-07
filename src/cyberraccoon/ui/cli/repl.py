@@ -6,8 +6,8 @@ real-time step output, and graceful shutdown. Falls back to plain
 
 Usage::
 
-    from ui.app_controller import AppController
-    from ui.cli.repl import CLIRepl
+    from cyberraccoon.ui.app_controller import AppController
+    from cyberraccoon.ui.cli.repl import CLIRepl
 
     ctrl = AppController()
     repl = CLIRepl(ctrl)
@@ -24,8 +24,8 @@ import logging
 import sys
 from typing import Any
 
-from ui.app_controller import AppController, AppEvent, AppEventType
-from ui.cli.commands import CommandHandler
+from cyberraccoon.ui.app_controller import AppController, AppEvent, AppEventType
+from cyberraccoon.ui.cli.commands import CommandHandler
 
 logger = logging.getLogger("M5.cli")
 

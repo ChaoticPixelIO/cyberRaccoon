@@ -6,7 +6,7 @@ import struct
 
 import pytest
 
-from executor.mouse import (
+from cyberraccoon.executor.mouse import (
     HID_MAX,
     REPORT_ID,
     SCREEN_HEIGHT,

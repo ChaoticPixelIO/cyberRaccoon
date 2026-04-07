@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from ui.app_controller import AppController
-from ui.web.server import create_app
+from cyberraccoon.ui.app_controller import AppController
+from cyberraccoon.ui.web.server import create_app
 
 
 @pytest.fixture()
@@ -18,8 +18,8 @@ def skill_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, P
     user = tmp_path / "user"
     bundled.mkdir()
     user.mkdir()
-    monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-    monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+    monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+    monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
     return bundled, user
 
 

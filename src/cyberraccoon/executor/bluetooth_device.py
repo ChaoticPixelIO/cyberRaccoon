@@ -35,7 +35,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from executor.hid_device import HIDDeviceError
+from cyberraccoon.executor.hid_device import HIDDeviceError
 
 logger = logging.getLogger("M4.bluetooth")
 
@@ -400,7 +400,7 @@ class BluetoothHIDConnection:
     def _kill_stale_l2cap_holder(self) -> None:
         """Kill a stale CyberRaccoon process holding L2CAP PSM 17/19 sockets.
 
-        Only kills Python processes whose command line contains ``main.py``
+        Only kills Python processes whose command line contains ``cyberraccoon``
         to avoid accidentally terminating unrelated Bluetooth services.
         """
         try:
@@ -420,7 +420,7 @@ class BluetoothHIDConnection:
                     cmdline = Path(f"/proc/{pid}/cmdline").read_text()
                 except OSError:
                     continue
-                if "main.py" not in cmdline:
+                if "cyberraccoon" not in cmdline:
                     logger.warning(
                         "PID %d holds L2CAP sockets but is not ours, skipping", pid,
                     )

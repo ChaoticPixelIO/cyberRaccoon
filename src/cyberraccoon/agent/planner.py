@@ -28,9 +28,9 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from agent.prompts import CHAT_ABOUT_PLAN_SYSTEM_PROMPT  # noqa: F401 — re-exported for tests + external imports
-from agent.prompts import REWRITE_PLAN_SYSTEM_PROMPT  # noqa: F401 — re-exported for tests + external imports
-from agent.prompts import build_rewrite_plan_system_prompt
+from cyberraccoon.agent.prompts import CHAT_ABOUT_PLAN_SYSTEM_PROMPT  # noqa: F401 — re-exported for tests + external imports
+from cyberraccoon.agent.prompts import REWRITE_PLAN_SYSTEM_PROMPT  # noqa: F401 — re-exported for tests + external imports
+from cyberraccoon.agent.prompts import build_rewrite_plan_system_prompt
 
 logger = logging.getLogger("M2.planner")
 

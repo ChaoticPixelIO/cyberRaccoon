@@ -919,6 +919,7 @@ function cyberRaccoon() {
 
         beginEditStep(step) {
             if (this.planExecuting || this.planPreview || this.editingStep !== null) return;
+            if (step.status === 'done') return;
             this.editingStep = step.number;
             this.editingDraft = step.goal || '';
             this.$nextTick(() => {

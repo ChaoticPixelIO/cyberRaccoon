@@ -3,19 +3,19 @@
 Usage::
 
     # One-shot task execution
-    python main.py --task "Open Notepad and type Hello"
-    python main.py --task "Click the Start menu" --provider openai --model gpt-4o
-    python main.py --task "Open Chrome" --device 0 --max-steps 20
-    python main.py --task "Open Notepad" --source csi    # use Pi camera
-    python main.py --task "Open Chrome" --transport bt   # use Bluetooth HID
-    python main.py --task "Open Safari" --source airplay --transport bt
+    python -m cyberraccoon --task "Open Notepad and type Hello"
+    python -m cyberraccoon --task "Click the Start menu" --provider openai --model gpt-4o
+    python -m cyberraccoon --task "Open Chrome" --device 0 --max-steps 20
+    python -m cyberraccoon --task "Open Notepad" --source csi    # use Pi camera
+    python -m cyberraccoon --task "Open Chrome" --transport bt   # use Bluetooth HID
+    python -m cyberraccoon --task "Open Safari" --source airplay --transport bt
 
     # Web UI (FastAPI + Alpine.js)
-    python main.py --web
-    python main.py --web --host 0.0.0.0 --port 8080
+    python -m cyberraccoon --web
+    python -m cyberraccoon --web --host 0.0.0.0 --port 8080
 
     # Interactive CLI REPL
-    python main.py --cli
+    python -m cyberraccoon --cli
 """
 
 from __future__ import annotations
@@ -27,13 +27,13 @@ import os
 import sys
 import time
 
-from capture import available_sources, create_capture
-from config import HumanizeConfig, HUMANIZE_PRESETS, resolve_api_key
-from agent.protocols import create_protocol
-from agent.skills import SkillNotFoundError, load_skills
-from agent.vision_agent import TaskStatus, VisionAgent
-from executor.bluetooth_executor import BluetoothExecutor
-from executor.hid_executor import ActionExecutor
+from cyberraccoon.capture import available_sources, create_capture
+from cyberraccoon.config import HumanizeConfig, HUMANIZE_PRESETS, resolve_api_key
+from cyberraccoon.agent.protocols import create_protocol
+from cyberraccoon.agent.skills import SkillNotFoundError, load_skills
+from cyberraccoon.agent.vision_agent import TaskStatus, VisionAgent
+from cyberraccoon.executor.bluetooth_executor import BluetoothExecutor
+from cyberraccoon.executor.hid_executor import ActionExecutor
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -90,7 +90,7 @@ def _start_web(args: argparse.Namespace, ctrl: "AppController",
     """
     import threading
     import uvicorn
-    from ui.web.server import create_app
+    from cyberraccoon.ui.web.server import create_app
 
     config = ctrl.get_config()
     host = args.host or config.network.web_host
@@ -114,7 +114,7 @@ def _start_web(args: argparse.Namespace, ctrl: "AppController",
 
 def _start_cli(ctrl: "AppController") -> None:
     """Start the interactive CLI REPL (blocking)."""
-    from ui.cli.repl import CLIRepl
+    from cyberraccoon.ui.cli.repl import CLIRepl
 
     repl = CLIRepl(ctrl, auto_init=False)
     repl.run()
@@ -284,12 +284,12 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            '  python main.py --task "Open Notepad and type Hello"\n'
-            '  python main.py --task "Click Start menu" --provider openai\n'
-            '  python main.py --web                      # Web UI at :8000\n'
-            '  python main.py --web --port 8080           # custom port\n'
-            '  python main.py --cli                       # interactive REPL\n'
-            '  python main.py --web --cli                 # both at once\n'
+            '  python -m cyberraccoon --task "Open Notepad and type Hello"\n'
+            '  python -m cyberraccoon --task "Click Start menu" --provider openai\n'
+            '  python -m cyberraccoon --web                      # Web UI at :8000\n'
+            '  python -m cyberraccoon --web --port 8080           # custom port\n'
+            '  python -m cyberraccoon --cli                       # interactive REPL\n'
+            '  python -m cyberraccoon --web --cli                 # both at once\n'
         ),
     )
 
@@ -442,7 +442,7 @@ def main() -> None:
         return
 
     # --web and/or --cli: share a single AppController
-    from ui.app_controller import AppController
+    from cyberraccoon.ui.app_controller import AppController
 
     ctrl = AppController()
     ctrl.load_config()

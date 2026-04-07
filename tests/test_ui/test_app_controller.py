@@ -11,14 +11,14 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
-from config import AppConfig
-from ui.app_controller import (
+from cyberraccoon.config import AppConfig
+from cyberraccoon.ui.app_controller import (
     AppController,
     AppEvent,
     AppEventType,
     LogCaptureHandler,
 )
-from ui.exceptions import TaskError
+from cyberraccoon.ui.exceptions import TaskError
 
 
 # ---------------------------------------------------------------------------
@@ -204,23 +204,23 @@ class TestModuleLifecycle:
 
         patches = {
             "create_capture": patch(
-                "ui.app_controller.create_capture",
+                "cyberraccoon.ui.app_controller.create_capture",
                 return_value=mock_capture,
             ),
             "create_protocol": patch(
-                "ui.app_controller.create_protocol",
+                "cyberraccoon.ui.app_controller.create_protocol",
                 return_value=MagicMock(),
             ),
             "ActionExecutor": patch(
-                "ui.app_controller.ActionExecutor",
+                "cyberraccoon.ui.app_controller.ActionExecutor",
                 return_value=MagicMock(),
             ),
             "BluetoothExecutor": patch(
-                "ui.app_controller.BluetoothExecutor",
+                "cyberraccoon.ui.app_controller.BluetoothExecutor",
                 return_value=MagicMock(),
             ),
             "VisionAgent": patch(
-                "ui.app_controller.VisionAgent",
+                "cyberraccoon.ui.app_controller.VisionAgent",
                 return_value=MagicMock(),
             ),
         }
@@ -285,23 +285,23 @@ class TestSplitModuleLifecycle:
 
         patches = {
             "create_capture": patch(
-                "ui.app_controller.create_capture",
+                "cyberraccoon.ui.app_controller.create_capture",
                 return_value=mock_capture,
             ),
             "create_protocol": patch(
-                "ui.app_controller.create_protocol",
+                "cyberraccoon.ui.app_controller.create_protocol",
                 return_value=MagicMock(),
             ),
             "ActionExecutor": patch(
-                "ui.app_controller.ActionExecutor",
+                "cyberraccoon.ui.app_controller.ActionExecutor",
                 return_value=MagicMock(),
             ),
             "BluetoothExecutor": patch(
-                "ui.app_controller.BluetoothExecutor",
+                "cyberraccoon.ui.app_controller.BluetoothExecutor",
                 return_value=MagicMock(),
             ),
             "VisionAgent": patch(
-                "ui.app_controller.VisionAgent",
+                "cyberraccoon.ui.app_controller.VisionAgent",
                 return_value=MagicMock(),
             ),
         }
@@ -445,13 +445,13 @@ class TestSplitModuleLifecycle:
         patches, _ = self._mock_modules()
         mock_create_protocol = MagicMock(return_value=MagicMock())
         patches["create_protocol"] = patch(
-            "ui.app_controller.create_protocol",
+            "cyberraccoon.ui.app_controller.create_protocol",
             mock_create_protocol,
         )
         with patches["create_capture"], patches["create_protocol"], \
              patches["ActionExecutor"], patches["BluetoothExecutor"], \
              patches["VisionAgent"], \
-             patch("agent.skills.load_skills", return_value="# Blender\nShortcuts") as mock_load:
+             patch("cyberraccoon.agent.skills.load_skills", return_value="# Blender\nShortcuts") as mock_load:
             ctrl = AppController(config_path=str(tmp_path / "cfg.yaml"))
             ctrl.load_config()
             ctrl.get_config().agent.skills = ["blender"]
@@ -472,7 +472,7 @@ class TestSplitModuleLifecycle:
         with patches["create_capture"], patches["create_protocol"], \
              patches["ActionExecutor"], patches["BluetoothExecutor"], \
              patches["VisionAgent"], \
-             patch("agent.skills.load_skills", side_effect=FileNotFoundError("not found")):
+             patch("cyberraccoon.agent.skills.load_skills", side_effect=FileNotFoundError("not found")):
             ctrl = AppController(config_path=str(tmp_path / "cfg.yaml"))
             ctrl.load_config()
             ctrl.get_config().agent.skills = ["missing"]
@@ -499,7 +499,7 @@ class TestSplitModuleLifecycle:
         # Phase 4 (HIGH-1): AppController now forces workflow mode for all
         # tasks so the approval gate protects every task. This test mocks
         # run_workflow instead of run accordingly.
-        from agent.workflow_runner import WorkflowResult
+        from cyberraccoon.agent.workflow_runner import WorkflowResult
 
         mock_workflow_result = WorkflowResult(
             status="completed", reason="done",
@@ -511,7 +511,7 @@ class TestSplitModuleLifecycle:
 
         patches, _ = self._mock_modules()
         patches["VisionAgent"] = patch(
-            "ui.app_controller.VisionAgent",
+            "cyberraccoon.ui.app_controller.VisionAgent",
             return_value=mock_agent,
         )
         with patches["create_capture"], patches["create_protocol"], \
@@ -606,7 +606,7 @@ class TestTaskControl:
         """Start a task, wait for it to finish, verify events."""
         # Phase 4 (HIGH-1): AppController forces workflow mode so mock
         # run_workflow instead of run.
-        from agent.workflow_runner import WorkflowResult
+        from cyberraccoon.agent.workflow_runner import WorkflowResult
 
         mock_workflow_result = WorkflowResult(
             status="completed",
@@ -621,11 +621,11 @@ class TestTaskControl:
 
         mock_capture = MagicMock()
 
-        with patch("ui.app_controller.create_capture", return_value=mock_capture), \
-             patch("ui.app_controller.create_protocol", return_value=MagicMock()), \
-             patch("ui.app_controller.ActionExecutor", return_value=MagicMock()), \
-             patch("ui.app_controller.BluetoothExecutor", return_value=MagicMock()), \
-             patch("ui.app_controller.VisionAgent", return_value=mock_agent):
+        with patch("cyberraccoon.ui.app_controller.create_capture", return_value=mock_capture), \
+             patch("cyberraccoon.ui.app_controller.create_protocol", return_value=MagicMock()), \
+             patch("cyberraccoon.ui.app_controller.ActionExecutor", return_value=MagicMock()), \
+             patch("cyberraccoon.ui.app_controller.BluetoothExecutor", return_value=MagicMock()), \
+             patch("cyberraccoon.ui.app_controller.VisionAgent", return_value=mock_agent):
 
             ctrl = AppController(config_path=str(tmp_path / "cfg.yaml"))
             ctrl.load_config()
@@ -664,7 +664,7 @@ class TestTaskControl:
         # Phase 4 (HIGH-1): workflow mode forced — slow run_workflow.
         def slow_run_workflow(*args, **kwargs):
             time.sleep(2)
-            from agent.workflow_runner import WorkflowResult
+            from cyberraccoon.agent.workflow_runner import WorkflowResult
             return WorkflowResult(
                 status="completed", reason="done",
                 steps_completed=0, steps_total=0,
@@ -674,11 +674,11 @@ class TestTaskControl:
         mock_agent = MagicMock()
         mock_agent.run_workflow.side_effect = slow_run_workflow
 
-        with patch("ui.app_controller.create_capture", return_value=MagicMock()), \
-             patch("ui.app_controller.create_protocol", return_value=MagicMock()), \
-             patch("ui.app_controller.ActionExecutor", return_value=MagicMock()), \
-             patch("ui.app_controller.BluetoothExecutor", return_value=MagicMock()), \
-             patch("ui.app_controller.VisionAgent", return_value=mock_agent):
+        with patch("cyberraccoon.ui.app_controller.create_capture", return_value=MagicMock()), \
+             patch("cyberraccoon.ui.app_controller.create_protocol", return_value=MagicMock()), \
+             patch("cyberraccoon.ui.app_controller.ActionExecutor", return_value=MagicMock()), \
+             patch("cyberraccoon.ui.app_controller.BluetoothExecutor", return_value=MagicMock()), \
+             patch("cyberraccoon.ui.app_controller.VisionAgent", return_value=mock_agent):
 
             ctrl = AppController(config_path=str(tmp_path / "cfg.yaml"))
             ctrl.load_config()
@@ -774,7 +774,7 @@ class TestStatus:
 # ---------------------------------------------------------------------------
 
 try:
-    from ui.app_controller import PlanDiscussionState  # added in plan 04
+    from cyberraccoon.ui.app_controller import PlanDiscussionState  # added in plan 04
     _PD_AVAILABLE = True
 except ImportError:
     _PD_AVAILABLE = False
@@ -783,9 +783,9 @@ except ImportError:
 try:
     # These symbols are added in plan 05-04 (PlanDiscussionState extension + methods)
     # and 05-02 (RewriteResult).
-    from agent.planner import RewriteResult, PlanStep  # plan 05-02 / existing
+    from cyberraccoon.agent.planner import RewriteResult, PlanStep  # plan 05-02 / existing
     # Probe: does PlanDiscussionState have the Phase 5 fields yet?
-    from ui.app_controller import PlanDiscussionState as _PDS
+    from cyberraccoon.ui.app_controller import PlanDiscussionState as _PDS
     import dataclasses as _dc
     _pds_field_names = {f.name for f in _dc.fields(_PDS)}
     _PLAN_MOD_AVAILABLE = (
@@ -879,7 +879,7 @@ class TestPlanDiscussion:
         # Plan 04 decides the exact wiring; these two hook paths are both
         # attempted so whichever one lands can be observed by this test.
         monkeypatch.setattr(
-            "ui.app_controller._build_planner_for_chat",
+            "cyberraccoon.ui.app_controller._build_planner_for_chat",
             lambda cfg: FakePlanner(),
             raising=False,
         )
@@ -930,7 +930,7 @@ class TestPlanDiscussion:
         This proves the AppController layer does not skip WorkflowRunner
         when skills are empty.
         """
-        from agent.workflow_runner import WorkflowResult
+        from cyberraccoon.agent.workflow_runner import WorkflowResult
 
         ctrl = self._ctrl(tmp_path)
         # Force config to have no skills — the regression scenario
@@ -985,7 +985,7 @@ class TestPlanDiscussion:
             ctrl._agent = fake_agent  # type: ignore[assignment]
 
         # Stub the TaskPlanner so no real LLM call happens
-        from agent import planner as planner_mod
+        from cyberraccoon.agent import planner as planner_mod
         monkeypatch.setattr(
             planner_mod, "TaskPlanner",
             lambda **kw: object(),  # placeholder, FakeAgent doesn't use it
@@ -1020,7 +1020,7 @@ class TestPlanDiscussion:
         agent that raises mid-run, then asserts both are None after
         _run_task returns.
         """
-        from agent.planner import PlanStep
+        from cyberraccoon.agent.planner import PlanStep
 
         ctrl = self._ctrl(tmp_path)
         # Pre-populate cache state
@@ -1040,7 +1040,7 @@ class TestPlanDiscussion:
         with ctrl._lock:
             ctrl._agent = RaisingAgent()  # type: ignore[assignment]
 
-        from agent import planner as planner_mod
+        from cyberraccoon.agent import planner as planner_mod
         monkeypatch.setattr(
             planner_mod, "TaskPlanner", lambda **kw: object(),
         )
@@ -1523,7 +1523,7 @@ class TestPauseLifecycle:
 
     def test_resume_task_pushes_plan_and_unblocks(self, tmp_path: Path) -> None:
         """resume_task() calls set_current_plan with remaining steps + runner.resume()."""
-        from agent.planner import PlanStep
+        from cyberraccoon.agent.planner import PlanStep
         ctrl = self._ctrl(tmp_path)
         agent = self._inject_agent(ctrl)
         runner = agent._workflow_runner
@@ -1576,7 +1576,7 @@ class TestPauseLifecycle:
 
     def test_plan_discussion_cleared_on_task_finish(self, tmp_path: Path) -> None:
         """PlanDiscussionState is cleared when the task finishes after resume."""
-        from ui.app_controller import AppEvent, AppEventType
+        from cyberraccoon.ui.app_controller import AppEvent, AppEventType
         ctrl = self._ctrl(tmp_path)
         self._fire_task_paused(ctrl)
 
@@ -1648,7 +1648,7 @@ class TestPauseLifecycle:
 
 # Feature-detect _validate_completed_step_lock
 try:
-    from ui.app_controller import _validate_completed_step_lock
+    from cyberraccoon.ui.app_controller import _validate_completed_step_lock
     _LOCK_AVAILABLE = True
 except ImportError:
     _LOCK_AVAILABLE = False

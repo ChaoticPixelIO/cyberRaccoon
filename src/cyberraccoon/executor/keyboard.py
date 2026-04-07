@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import time
 
-from executor.hid_device import HIDDevice
+from cyberraccoon.executor.hid_device import HIDDevice
 
 logger = logging.getLogger("M4.keyboard")
 

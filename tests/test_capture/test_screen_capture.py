@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 import numpy as np
 from PIL import Image
 
-from capture.screen_capture import CaptureError, CaptureResult, ScreenCapture
+from cyberraccoon.capture.screen_capture import CaptureError, CaptureResult, ScreenCapture
 from tests.test_capture.conftest import make_mock_capture
 
 

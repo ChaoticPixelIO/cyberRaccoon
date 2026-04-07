@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from capture.screen_capture import ScreenCapture
+from cyberraccoon.capture.screen_capture import ScreenCapture
 
 
 @pytest.fixture

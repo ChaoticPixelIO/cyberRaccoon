@@ -12,8 +12,8 @@ try:
 except ImportError:  # pragma: no cover
     Image = None  # type: ignore[assignment,misc]
 
-from agent.protocols.base import ComputerUseProtocol, StepResult
-from capture.screen_capture import CaptureError
+from cyberraccoon.agent.protocols.base import ComputerUseProtocol, StepResult
+from cyberraccoon.capture.screen_capture import CaptureError
 
 
 # ---------------------------------------------------------------------------

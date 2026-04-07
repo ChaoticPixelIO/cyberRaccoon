@@ -6,11 +6,11 @@ from typing import Any
 
 import pytest
 
-from agent.planner import PlanStep, TaskPlanner, parse_steps, VALIDATE_PLAN_SYSTEM_PROMPT
+from cyberraccoon.agent.planner import PlanStep, TaskPlanner, parse_steps, VALIDATE_PLAN_SYSTEM_PROMPT
 
 # Feature-detect _format_calibration_lines (plan 02 implementation)
 try:
-    from agent.planner import _format_calibration_lines
+    from cyberraccoon.agent.planner import _format_calibration_lines
     _CALIBRATION_AVAILABLE = True
 except ImportError:
     _CALIBRATION_AVAILABLE = False
@@ -457,29 +457,29 @@ class TestGranularityGuidelines:
 
     def test_planning_prompt_no_fixed_action_rule(self) -> None:
         """PLAN-02: The rigid '1-5 agent actions' rule must be removed."""
-        from agent.planner import PLANNING_SYSTEM_PROMPT
+        from cyberraccoon.agent.planner import PLANNING_SYSTEM_PROMPT
         assert "1-5 agent actions" not in PLANNING_SYSTEM_PROMPT
 
     def test_replan_prompt_no_fixed_action_rule(self) -> None:
         """PLAN-02: REPLAN prompt also must not have the fixed rule."""
-        from agent.planner import REPLAN_SYSTEM_PROMPT
+        from cyberraccoon.agent.planner import REPLAN_SYSTEM_PROMPT
         assert "1-5 agent actions" not in REPLAN_SYSTEM_PROMPT
 
     def test_planning_prompt_has_granularity_examples(self) -> None:
         """PLAN-01: Prompt contains calibration examples for different complexity levels."""
-        from agent.planner import PLANNING_SYSTEM_PROMPT
+        from cyberraccoon.agent.planner import PLANNING_SYSTEM_PROMPT
         assert "Simple tasks" in PLANNING_SYSTEM_PROMPT or "simple tasks" in PLANNING_SYSTEM_PROMPT
         assert "Complex tasks" in PLANNING_SYSTEM_PROMPT or "complex tasks" in PLANNING_SYSTEM_PROMPT
         assert "Application Skill" in PLANNING_SYSTEM_PROMPT
 
     def test_planning_prompt_has_actions_tag_instruction(self) -> None:
         """PLAN-03/D-08: Prompt instructs LLM to add [ACTIONS: N] tags."""
-        from agent.planner import PLANNING_SYSTEM_PROMPT
+        from cyberraccoon.agent.planner import PLANNING_SYSTEM_PROMPT
         assert "[ACTIONS:" in PLANNING_SYSTEM_PROMPT
 
     def test_replan_prompt_has_actions_tag_instruction(self) -> None:
         """Consistency: REPLAN prompt also instructs [ACTIONS: N] tags."""
-        from agent.planner import REPLAN_SYSTEM_PROMPT
+        from cyberraccoon.agent.planner import REPLAN_SYSTEM_PROMPT
         assert "[ACTIONS:" in REPLAN_SYSTEM_PROMPT
 
 
@@ -641,7 +641,7 @@ def test_calibration_rule_in_replan_prompt() -> None:
     existing constant (REPLAN_SYSTEM_PROMPT) and should FAIL (not skip)
     until plan 02 adds the calibration rule.
     """
-    from agent.planner import REPLAN_SYSTEM_PROMPT
+    from cyberraccoon.agent.planner import REPLAN_SYSTEM_PROMPT
     assert "[ACTIONS:" in REPLAN_SYSTEM_PROMPT
     # D-04: must instruct LLM to adjust estimates based on calibration data
     prompt_lower = REPLAN_SYSTEM_PROMPT.lower()

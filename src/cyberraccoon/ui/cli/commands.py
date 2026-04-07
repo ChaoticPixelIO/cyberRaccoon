@@ -29,7 +29,7 @@ import textwrap
 from dataclasses import fields
 from typing import Any, Callable
 
-from ui.app_controller import AppController
+from cyberraccoon.ui.app_controller import AppController
 
 logger = logging.getLogger("M5.cli.cmd")
 

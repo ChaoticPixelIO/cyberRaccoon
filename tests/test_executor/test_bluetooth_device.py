@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch, ANY
 
-from executor.bluetooth_device import BluetoothHIDConnection, BluetoothHIDDevice
-from executor.bluetooth_executor import BluetoothExecutor
-from executor.hid_device import HIDDeviceError
+from cyberraccoon.executor.bluetooth_device import BluetoothHIDConnection, BluetoothHIDDevice
+from cyberraccoon.executor.bluetooth_executor import BluetoothExecutor
+from cyberraccoon.executor.hid_device import HIDDeviceError
 
 
 # ---------------------------------------------------------------------------
@@ -54,8 +54,8 @@ def make_mock_bt_executor() -> BluetoothExecutor:
     ms_dev = BluetoothHIDDevice(conn, report_id=0x02)
 
     # Reuse real controllers
-    from executor.keyboard import KeyboardController
-    from executor.mouse import MouseController
+    from cyberraccoon.executor.keyboard import KeyboardController
+    from cyberraccoon.executor.mouse import MouseController
 
     executor._keyboard = KeyboardController(kb_dev)
     executor._mouse = MouseController(ms_dev)
@@ -356,7 +356,7 @@ class TestBluetoothExecutorReportFormat:
 class TestBluetoothWaitAction:
     """Tests for the wait action via BluetoothExecutor."""
 
-    @patch("executor.base_executor.time.sleep")
+    @patch("cyberraccoon.executor.base_executor.time.sleep")
     def test_wait_sleeps_for_duration(self, mock_sleep: MagicMock) -> None:
         executor = make_mock_bt_executor()
         result = executor.execute(
@@ -366,7 +366,7 @@ class TestBluetoothWaitAction:
         assert result["action"] == "wait"
         mock_sleep.assert_called_once_with(3.0)
 
-    @patch("executor.base_executor.time.sleep")
+    @patch("cyberraccoon.executor.base_executor.time.sleep")
     def test_wait_duration_capped_at_10(self, mock_sleep: MagicMock) -> None:
         executor = make_mock_bt_executor()
         executor.execute(
@@ -374,14 +374,14 @@ class TestBluetoothWaitAction:
         )
         mock_sleep.assert_called_once_with(10.0)
 
-    @patch("executor.base_executor.time.sleep")
+    @patch("cyberraccoon.executor.base_executor.time.sleep")
     def test_wait_default_duration(self, mock_sleep: MagicMock) -> None:
         """No duration_s field should default to 1.0."""
         executor = make_mock_bt_executor()
         executor.execute({"id": "w3", "action": "wait"})
         mock_sleep.assert_called_once_with(1.0)
 
-    @patch("executor.base_executor.time.sleep")
+    @patch("cyberraccoon.executor.base_executor.time.sleep")
     def test_wait_no_bt_reports(self, mock_sleep: MagicMock) -> None:
         """Wait action should not send any Bluetooth reports."""
         executor = make_mock_bt_executor()

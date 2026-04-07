@@ -11,10 +11,10 @@ import logging
 import time
 from typing import Any
 
-from agent.prompts import build_prompt_based_system_prompt
-from agent.protocols.anthropic_cu import AnthropicCUProtocol
-from agent.protocols.base import ComputerUseProtocol, StepResult
-from agent.protocols.parsing import parse_json_actions
+from cyberraccoon.agent.prompts import build_prompt_based_system_prompt
+from cyberraccoon.agent.protocols.anthropic_cu import AnthropicCUProtocol
+from cyberraccoon.agent.protocols.base import ComputerUseProtocol, StepResult
+from cyberraccoon.agent.protocols.parsing import parse_json_actions
 
 logger = logging.getLogger("M3.prompt_based")
 

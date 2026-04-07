@@ -18,7 +18,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
-from ui.exceptions import WiFiError
+from cyberraccoon.ui.exceptions import WiFiError
 
 logger = logging.getLogger("M5.wifi")
 

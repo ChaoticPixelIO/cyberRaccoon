@@ -2,9 +2,9 @@
 
 Usage::
 
-    python -m agent.cli --image screenshot.jpg --goal "Open Notepad"
-    python -m agent.cli --image screenshot.jpg --goal "Click start menu" --provider openai
-    python -m agent.cli --image screenshot.jpg --goal "Open Chrome" --protocol prompt
+    python -m cyberraccoon.agent.cli --image screenshot.jpg --goal "Open Notepad"
+    python -m cyberraccoon.agent.cli --image screenshot.jpg --goal "Click start menu" --provider openai
+    python -m cyberraccoon.agent.cli --image screenshot.jpg --goal "Open Chrome" --protocol prompt
 """
 
 from __future__ import annotations
@@ -15,9 +15,9 @@ import json
 import os
 import sys
 
-from agent.protocols import create_protocol
-from agent.skills import SkillNotFoundError, load_skills
-from config import resolve_api_key
+from cyberraccoon.agent.protocols import create_protocol
+from cyberraccoon.agent.skills import SkillNotFoundError, load_skills
+from cyberraccoon.config import resolve_api_key
 
 
 def main() -> None:

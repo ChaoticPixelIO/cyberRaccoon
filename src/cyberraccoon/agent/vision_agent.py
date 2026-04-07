@@ -27,9 +27,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
 
-from capture.base import CaptureError, CaptureResult, CaptureSource, compute_frame_diff
-from agent.protocols.base import ComputerUseProtocol, StepResult
-from executor.base_executor import BaseExecutor
+from cyberraccoon.capture.base import CaptureError, CaptureResult, CaptureSource, compute_frame_diff
+from cyberraccoon.agent.protocols.base import ComputerUseProtocol, StepResult
+from cyberraccoon.executor.base_executor import BaseExecutor
 
 logger = logging.getLogger("M2.agent")
 
@@ -124,14 +124,14 @@ class VisionAgent:
         Returns:
             WorkflowResult with status and step details.
         """
-        from agent.workflow_runner import WorkflowRunner
+        from cyberraccoon.agent.workflow_runner import WorkflowRunner
 
         # Capture initial screenshot for the planner
         try:
             cap = self._capture.capture()
             screenshot_b64 = cap.base64_jpeg
         except CaptureError as e:
-            from agent.workflow_runner import WorkflowResult
+            from cyberraccoon.agent.workflow_runner import WorkflowResult
             return WorkflowResult(
                 status="failed",
                 reason=f"Initial capture failed: {e}",
@@ -223,7 +223,7 @@ class VisionAgent:
                 detected = self._protocol.detect_os(cap_result.base64_jpeg)
                 if detected:
                     try:
-                        from executor.clipboard_bridge import TargetOS
+                        from cyberraccoon.executor.clipboard_bridge import TargetOS
                         self._executor._target_os = TargetOS(detected)
                         logger.info("Auto-detected target OS: %s", detected)
                     except ValueError:

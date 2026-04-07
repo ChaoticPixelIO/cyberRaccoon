@@ -6,7 +6,7 @@ import base64
 
 import pytest
 
-from executor.clipboard_bridge import (
+from cyberraccoon.executor.clipboard_bridge import (
     TargetOS,
     build_clipboard_sequence,
     has_non_typeable,

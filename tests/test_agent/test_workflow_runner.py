@@ -9,9 +9,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from agent.planner import PlanStep, TaskPlanner
-from agent.vision_agent import TaskResult, TaskStatus, VisionAgent
-from agent.workflow_runner import WorkflowResult, WorkflowRunner
+from cyberraccoon.agent.planner import PlanStep, TaskPlanner
+from cyberraccoon.agent.vision_agent import TaskResult, TaskStatus, VisionAgent
+from cyberraccoon.agent.workflow_runner import WorkflowResult, WorkflowRunner
 from tests.test_agent.conftest import (
     FakeCaptureResult,
     MockCapture,
@@ -321,7 +321,7 @@ class TestWorkflowRebootTag:
         agent._wait_for_reboot_transition.assert_called_once()
 
     def test_reboot_transition_failure(self) -> None:
-        from capture.base import CaptureError
+        from cyberraccoon.capture.base import CaptureError
 
         agent = _make_agent([{"action": "done", "reason": "ok"}])
         planner = MockPlanner([
@@ -1673,7 +1673,7 @@ class TestFrameDiffDebug:
         monkeypatch.setenv("CYBERRACCOON_FRAME_DIFF_DEBUG", "1")
 
         # Force module-level flag to reload (it was evaluated at import time)
-        import agent.workflow_runner as wr_module
+        import cyberraccoon.agent.workflow_runner as wr_module
         monkeypatch.setattr(wr_module, "_FRAME_DIFF_DEBUG", True)
 
         img_before = make_test_image(color=(0, 0, 0))
@@ -1706,7 +1706,7 @@ class TestFrameDiffDebug:
         """When CYBERRACCOON_FRAME_DIFF_DEBUG is unset, no debug log fires."""
         monkeypatch.delenv("CYBERRACCOON_FRAME_DIFF_DEBUG", raising=False)
 
-        import agent.workflow_runner as wr_module
+        import cyberraccoon.agent.workflow_runner as wr_module
         monkeypatch.setattr(wr_module, "_FRAME_DIFF_DEBUG", False)
 
         img_before = make_test_image(color=(0, 0, 0))

@@ -44,7 +44,7 @@ The loop repeats until the task is complete. The target computer sees CyberRacco
 ```bash
 git clone https://github.com/ChaoticPixelIO/cyberRaccoon.git
 cd cyberRaccoon
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
 
 ### 2. Set your API key
@@ -74,13 +74,13 @@ sudo scripts/setup_airplay.sh
 
 ```bash
 # USB mode (Pi 4B)
-python main.py --task "Open Notepad and type Hello World"
+python -m cyberraccoon --task "Open Notepad and type Hello World"
 
 # Bluetooth mode (Pi 5)
-python main.py --task "Open Notepad and type Hello World" --transport bt
+python -m cyberraccoon --task "Open Notepad and type Hello World" --transport bt
 
 # AirPlay + Bluetooth
-python main.py --task "Open Safari" --source airplay --transport bt
+python -m cyberraccoon --task "Open Safari" --source airplay --transport bt
 ```
 
 ## Usage
@@ -89,17 +89,17 @@ python main.py --task "Open Safari" --source airplay --transport bt
 
 ```bash
 # One-shot task
-python main.py --task "Click the Start menu"
+python -m cyberraccoon --task "Click the Start menu"
 
 # Web UI (FastAPI + Alpine.js)
-python main.py --web
-python main.py --web --host 0.0.0.0 --port 8080
+python -m cyberraccoon --web
+python -m cyberraccoon --web --host 0.0.0.0 --port 8080
 
 # Interactive CLI REPL
-python main.py --cli
+python -m cyberraccoon --cli
 
 # Web + CLI together
-python main.py --web --cli
+python -m cyberraccoon --web --cli
 ```
 
 ### CLI flags
@@ -162,7 +162,7 @@ python main.py --web --cli
 The web UI provides remote task management from any browser on the same network.
 
 ```bash
-python main.py --web
+python -m cyberraccoon --web
 # Open http://<pi-ip>:8000 in your browser
 ```
 
@@ -199,8 +199,8 @@ CyberRaccoon can simulate human-like input patterns to avoid bot detection on we
 | `aggressive` | Slow movements, high jitter, 25% overshoot | Slow typing, high variance | Sites with aggressive bot detection |
 
 ```bash
-python main.py --task "Fill out the form" --humanize
-python main.py --task "Fill out the form" --humanize --humanize-preset aggressive
+python -m cyberraccoon --task "Fill out the form" --humanize
+python -m cyberraccoon --task "Fill out the form" --humanize --humanize-preset aggressive
 ```
 
 Or via environment variable: `CYBERRACCOON_HUMANIZE=1`
@@ -215,11 +215,11 @@ pytest tests/
 pytest tests/test_capture/test_screen_capture.py
 
 # Module CLI tools (test hardware/APIs independently)
-python -m capture.cli --device 0 --output screenshot.jpg
-python -m agent.cli --image screenshot.jpg --goal "Open Notepad" --provider anthropic
-python -m executor.cli click 640 360
-python -m executor.cli type "hello world"
-python -m executor.cli key ctrl c
+python -m cyberraccoon.capture.cli --device 0 --output screenshot.jpg
+python -m cyberraccoon.agent.cli --image screenshot.jpg --goal "Open Notepad" --provider anthropic
+python -m cyberraccoon.executor.cli click 640 360
+python -m cyberraccoon.executor.cli type "hello world"
+python -m cyberraccoon.executor.cli key ctrl c
 ```
 
 ### Architecture

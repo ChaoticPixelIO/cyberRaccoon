@@ -15,8 +15,8 @@ import random
 
 import pytest
 
-from config import HumanizeConfig
-from executor.humanize import (
+from cyberraccoon.config import HumanizeConfig
+from cyberraccoon.executor.humanize import (
     HumanizedKeyboardController,
     HumanizedMouseController,
     apply_jitter,
@@ -29,8 +29,8 @@ from executor.humanize import (
     generate_micro_movements,
     generate_overshoot_path,
 )
-from executor.keyboard import KeyboardController
-from executor.mouse import MouseController, SCREEN_WIDTH, SCREEN_HEIGHT
+from cyberraccoon.executor.keyboard import KeyboardController
+from cyberraccoon.executor.mouse import MouseController, SCREEN_WIDTH, SCREEN_HEIGHT
 
 from tests.test_executor.conftest import MockHIDDevice
 
@@ -719,7 +719,7 @@ class TestConfigEdgeCases:
 
     def test_disabled_config_skips_humanization(self) -> None:
         """When enabled=False, wrapping helpers return the original controller."""
-        from executor.base_executor import BaseExecutor
+        from cyberraccoon.executor.base_executor import BaseExecutor
         config = HumanizeConfig(enabled=False)
         device = MockHIDDevice()
         device.open()
@@ -743,7 +743,7 @@ class TestConfigEdgeCases:
 
     def test_enabled_config_wraps_controllers(self) -> None:
         """When enabled=True, wrapping helpers return humanized proxies."""
-        from executor.base_executor import BaseExecutor
+        from cyberraccoon.executor.base_executor import BaseExecutor
         config = HumanizeConfig(enabled=True)
         device = MockHIDDevice()
         device.open()
@@ -914,7 +914,7 @@ class TestHumanizeConfigValidation:
 class TestExecuteBeforeOpen:
     def test_execute_before_open_returns_error(self) -> None:
         """Calling execute() before open() should return a structured error."""
-        from executor.base_executor import BaseExecutor
+        from cyberraccoon.executor.base_executor import BaseExecutor
 
         class _TestExecutor(BaseExecutor):
             def open(self) -> None:
@@ -930,9 +930,9 @@ class TestExecuteBeforeOpen:
 
     def test_execute_missing_field_returns_error(self) -> None:
         """execute() with a malformed command (missing 'x') returns error, not exception."""
-        from executor.base_executor import BaseExecutor
-        from executor.keyboard import KeyboardController
-        from executor.mouse import MouseController
+        from cyberraccoon.executor.base_executor import BaseExecutor
+        from cyberraccoon.executor.keyboard import KeyboardController
+        from cyberraccoon.executor.mouse import MouseController
 
         class _TestExecutor(BaseExecutor):
             def open(self) -> None:
@@ -954,7 +954,7 @@ class TestLoadHumanizeConfigEnvErrors:
     def test_invalid_float_env_var_raises_valueerror(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from config import load_humanize_config
+        from cyberraccoon.config import load_humanize_config
         monkeypatch.setenv("CYBERRACCOON_HUMANIZE_SPEED", "fast")
         with pytest.raises(ValueError, match="CYBERRACCOON_HUMANIZE_SPEED"):
             load_humanize_config()
@@ -962,7 +962,7 @@ class TestLoadHumanizeConfigEnvErrors:
     def test_invalid_int_env_var_raises_valueerror(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from config import load_humanize_config
+        from cyberraccoon.config import load_humanize_config
         monkeypatch.setenv("CYBERRACCOON_HUMANIZE_JITTER", "2px")
         with pytest.raises(ValueError, match="CYBERRACCOON_HUMANIZE_JITTER"):
             load_humanize_config()
@@ -970,7 +970,7 @@ class TestLoadHumanizeConfigEnvErrors:
     def test_valid_env_vars_load_correctly(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from config import load_humanize_config
+        from cyberraccoon.config import load_humanize_config
         monkeypatch.setenv("CYBERRACCOON_HUMANIZE", "1")
         monkeypatch.setenv("CYBERRACCOON_HUMANIZE_SPEED", "1.5")
         monkeypatch.setenv("CYBERRACCOON_HUMANIZE_JITTER", "3")
@@ -982,7 +982,7 @@ class TestLoadHumanizeConfigEnvErrors:
     def test_micro_movement_env_vars_loaded(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        from config import load_humanize_config
+        from cyberraccoon.config import load_humanize_config
         monkeypatch.setenv("CYBERRACCOON_HUMANIZE_MICRO_ENABLED", "0")
         monkeypatch.setenv("CYBERRACCOON_HUMANIZE_MICRO_AMP", "1.5")
         config = load_humanize_config()
@@ -992,7 +992,7 @@ class TestLoadHumanizeConfigEnvErrors:
 
 class TestBaseExecutorCacheEviction:
     def _make_executor(self) -> object:
-        from executor.base_executor import BaseExecutor
+        from cyberraccoon.executor.base_executor import BaseExecutor
 
         class _TestExecutor(BaseExecutor):
             def open(self) -> None:

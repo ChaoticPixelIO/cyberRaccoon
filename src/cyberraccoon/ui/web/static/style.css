@@ -1460,13 +1460,6 @@ fieldset select:focus {
 }
 
 /* Inline edit */
-.ws-goal-editable {
-    cursor: text;
-}
-.ws-goal-editable:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 3px;
-}
 .ws-goal-strike {
     text-decoration: line-through;
 }
@@ -1504,6 +1497,25 @@ fieldset select:focus {
 .ws-seg-added { color: var(--ok); }
 
 /* Structural edit controls */
+.ws-edit-btn {
+    margin-left: 0.4rem;
+    padding: 0 0.35rem;
+    min-width: 20px;
+    min-height: 20px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.75rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.ws-edit-btn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(100, 200, 255, 0.10);
+}
 .ws-delete-btn {
     margin-left: 0.4rem;
     padding: 0 0.35rem;

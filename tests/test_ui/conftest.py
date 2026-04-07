@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from config import AppConfig
+from cyberraccoon.config import AppConfig
 
 
 @pytest.fixture()
@@ -66,11 +66,11 @@ def mock_wifi_manager():
             assert wm.is_connected() is True
     """
     with patch(
-        "ui.wifi_manager.WiFiManager._detect_backend",
+        "cyberraccoon.ui.wifi_manager.WiFiManager._detect_backend",
         return_value="networkmanager",
     ), patch(
-        "ui.wifi_manager.WiFiManager._run_cmd",
+        "cyberraccoon.ui.wifi_manager.WiFiManager._run_cmd",
     ) as mock_run:
-        from ui.wifi_manager import WiFiManager
+        from cyberraccoon.ui.wifi_manager import WiFiManager
         wm = WiFiManager()
         yield wm, mock_run

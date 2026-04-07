@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from capture.base import (
+from cyberraccoon.capture.base import (
     CaptureError,
     CaptureResult,
     CaptureSource,
@@ -101,12 +101,12 @@ class TestCaptureSourceProtocol:
     """Tests for the CaptureSource Protocol (runtime_checkable)."""
 
     def test_screen_capture_satisfies_protocol(self) -> None:
-        from capture.screen_capture import ScreenCapture
+        from cyberraccoon.capture.screen_capture import ScreenCapture
         cap = ScreenCapture()
         assert isinstance(cap, CaptureSource)
 
     def test_camera_capture_satisfies_protocol(self) -> None:
-        from capture.camera_capture import CameraCapture
+        from cyberraccoon.capture.camera_capture import CameraCapture
         cam = CameraCapture()
         assert isinstance(cam, CaptureSource)
 
@@ -137,38 +137,38 @@ class TestRegistry:
     """Tests for the source registry and create_capture factory."""
 
     def test_hdmi_registered(self) -> None:
-        from capture import available_sources
+        from cyberraccoon.capture import available_sources
         assert "hdmi" in available_sources()
 
     def test_csi_registered(self) -> None:
-        from capture import available_sources
+        from cyberraccoon.capture import available_sources
         assert "csi" in available_sources()
 
     def test_create_hdmi(self) -> None:
-        from capture import create_capture
-        from capture.screen_capture import ScreenCapture
+        from cyberraccoon.capture import create_capture
+        from cyberraccoon.capture.screen_capture import ScreenCapture
         cap = create_capture("hdmi", device_index=0)
         assert isinstance(cap, ScreenCapture)
 
     def test_create_csi(self) -> None:
-        from capture import create_capture
-        from capture.csi_capture import CsiHdmiCapture
+        from cyberraccoon.capture import create_capture
+        from cyberraccoon.capture.csi_capture import CsiHdmiCapture
         cap = create_capture("csi")
         assert isinstance(cap, CsiHdmiCapture)
 
     def test_create_picamera(self) -> None:
-        from capture import create_capture
-        from capture.camera_capture import CameraCapture
+        from cyberraccoon.capture import create_capture
+        from cyberraccoon.capture.camera_capture import CameraCapture
         cap = create_capture("picamera", camera_index=0)
         assert isinstance(cap, CameraCapture)
 
     def test_create_unknown_raises(self) -> None:
-        from capture import create_capture
+        from cyberraccoon.capture import create_capture
         with pytest.raises(ValueError, match="Unknown capture source"):
             create_capture("nonexistent")
 
     def test_register_custom_source(self) -> None:
-        from capture import register_source, create_capture, available_sources
+        from cyberraccoon.capture import register_source, create_capture, available_sources
 
         class DummyCapture:
             def __init__(self, **kwargs: object) -> None:
@@ -186,7 +186,7 @@ class TestRegistry:
             assert cap.kwargs == {"foo": "bar"}
         finally:
             # Clean up: remove from registry
-            from capture import _REGISTRY
+            from cyberraccoon.capture import _REGISTRY
             _REGISTRY.pop("dummy_test", None)
 
 

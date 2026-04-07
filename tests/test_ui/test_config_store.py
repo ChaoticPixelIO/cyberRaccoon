@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from config import AppConfig, LLMConfig, NetworkConfig
-from ui.config_store import ConfigStore
-from ui.exceptions import ConfigError
+from cyberraccoon.config import AppConfig, LLMConfig, NetworkConfig
+from cyberraccoon.ui.config_store import ConfigStore
+from cyberraccoon.ui.exceptions import ConfigError
 
 
 class TestSaveAndLoad:
@@ -264,15 +264,15 @@ class TestListCoercion:
     """_coerce_value handles list types from YAML."""
 
     def test_list_passthrough(self) -> None:
-        from ui.config_store import _coerce_value
+        from cyberraccoon.ui.config_store import _coerce_value
         assert _coerce_value(["a", "b"], "list[str]") == ["a", "b"]
 
     def test_csv_string_to_list(self) -> None:
-        from ui.config_store import _coerce_value
+        from cyberraccoon.ui.config_store import _coerce_value
         assert _coerce_value("a, b, c", "list[str]") == ["a", "b", "c"]
 
     def test_empty_string_to_empty_list(self) -> None:
-        from ui.config_store import _coerce_value
+        from cyberraccoon.ui.config_store import _coerce_value
         assert _coerce_value("", "list[str]") == []
 
 

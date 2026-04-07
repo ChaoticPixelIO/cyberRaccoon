@@ -11,7 +11,7 @@ Lookup order:
 
 Usage::
 
-    from agent.skills import load_skill, list_skills
+    from cyberraccoon.agent.skills import load_skill, list_skills
 
     text = load_skill("blender")       # returns markdown content
     names = list_skills()              # ["blender", ...]
@@ -20,6 +20,8 @@ Usage::
 from __future__ import annotations
 
 from pathlib import Path
+
+from cyberraccoon._project_root import PROJECT_ROOT
 
 
 class SkillNotFoundError(FileNotFoundError):
@@ -36,7 +38,7 @@ class SkillNotFoundError(FileNotFoundError):
 
 def _bundled_skills_dir() -> Path:
     """Return the path to the bundled skills directory (<repo>/skills/)."""
-    return Path(__file__).resolve().parent.parent / "skills"
+    return PROJECT_ROOT / "skills"
 
 
 def _user_skills_dir() -> Path:

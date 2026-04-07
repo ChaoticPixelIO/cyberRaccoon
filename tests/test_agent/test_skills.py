@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agent.skills import (
+from cyberraccoon.agent.skills import (
     SkillNotFoundError,
     _bundled_skills_dir,
     _user_skills_dir,
@@ -42,8 +42,8 @@ class TestLoadSkill:
     def test_bundled_skill(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(bundled, "kicad", "# KiCad Skill\nPCB layout tips.")
 
@@ -54,8 +54,8 @@ class TestLoadSkill:
     def test_user_skill(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(user, "myapp", "# My Custom App\nCustom instructions.")
 
@@ -65,8 +65,8 @@ class TestLoadSkill:
     def test_user_overrides_bundled(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(bundled, "blender", "# Bundled Blender")
         _write_skill(user, "blender", "# User Blender Override")
@@ -78,8 +78,8 @@ class TestLoadSkill:
     def test_not_found(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         with pytest.raises(SkillNotFoundError) as exc_info:
             load_skill("nonexistent")
@@ -91,8 +91,8 @@ class TestLoadSkill:
     def test_empty_file_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(bundled, "empty", "   \n  \n  ")
 
@@ -102,8 +102,8 @@ class TestLoadSkill:
     def test_whitespace_only_file_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(user, "blank", "")
 
@@ -124,8 +124,8 @@ class TestLoadSkills:
     def test_single_skill(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(bundled, "kicad", "# KiCad Skill")
 
@@ -135,8 +135,8 @@ class TestLoadSkills:
     def test_multiple_skills_concatenated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(bundled, "alpha", "# Alpha")
         _write_skill(bundled, "beta", "# Beta")
@@ -150,8 +150,8 @@ class TestLoadSkills:
     def test_one_missing_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(bundled, "good", "# Good Skill")
 
@@ -197,8 +197,8 @@ class TestListSkills:
     def test_bundled_only(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(bundled, "alpha", "# Alpha")
         _write_skill(bundled, "beta", "# Beta")
@@ -209,8 +209,8 @@ class TestListSkills:
     def test_both_dirs_deduplicated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(bundled, "blender", "# Bundled")
         _write_skill(bundled, "kicad", "# KiCad")
@@ -223,8 +223,8 @@ class TestListSkills:
     def test_empty_dirs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         result = list_skills()
         assert result == []
@@ -232,8 +232,8 @@ class TestListSkills:
     def test_ignores_non_md_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(bundled, "valid", "# Valid")
         bundled.mkdir(parents=True, exist_ok=True)
@@ -274,7 +274,7 @@ class TestProtocolIntegration:
 
         mock_openai = MagicMock()
         with patch.dict("sys.modules", {"openai": mock_openai}):
-            from agent.protocols.prompt_based import PromptBasedProtocol
+            from cyberraccoon.agent.protocols.prompt_based import PromptBasedProtocol
 
             proto = PromptBasedProtocol(
                 provider="openai",
@@ -292,7 +292,7 @@ class TestProtocolIntegration:
 
         mock_openai = MagicMock()
         with patch.dict("sys.modules", {"openai": mock_openai}):
-            from agent.protocols.prompt_based import PromptBasedProtocol
+            from cyberraccoon.agent.protocols.prompt_based import PromptBasedProtocol
 
             proto_no_skill = PromptBasedProtocol(
                 provider="openai",
@@ -313,7 +313,7 @@ class TestProtocolIntegration:
 
         mock_anthropic = MagicMock()
         with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
-            from agent.protocols.anthropic_cu import AnthropicCUProtocol
+            from cyberraccoon.agent.protocols.anthropic_cu import AnthropicCUProtocol
 
             proto = AnthropicCUProtocol(
                 model="claude-opus-4-6",
@@ -328,7 +328,7 @@ class TestProtocolIntegration:
 
         mock_anthropic = MagicMock()
         with patch.dict("sys.modules", {"anthropic": mock_anthropic}):
-            from agent.protocols.anthropic_cu import AnthropicCUProtocol
+            from cyberraccoon.agent.protocols.anthropic_cu import AnthropicCUProtocol
 
             proto = AnthropicCUProtocol(
                 model="claude-opus-4-6",
@@ -347,7 +347,7 @@ class TestProtocolIntegration:
 
         mock_openai = MagicMock()
         with patch.dict("sys.modules", {"openai": mock_openai}):
-            from agent.protocols.openai_cu import OpenAICUProtocol
+            from cyberraccoon.agent.protocols.openai_cu import OpenAICUProtocol
 
             proto = OpenAICUProtocol(
                 model="gpt-5.4",
@@ -362,7 +362,7 @@ class TestProtocolIntegration:
 
         mock_openai = MagicMock()
         with patch.dict("sys.modules", {"openai": mock_openai}):
-            from agent.protocols.openai_cu import OpenAICUProtocol
+            from cyberraccoon.agent.protocols.openai_cu import OpenAICUProtocol
 
             proto = OpenAICUProtocol(
                 model="gpt-5.4",
@@ -381,7 +381,7 @@ class TestProtocolIntegration:
 
         mock_openai = MagicMock()
         with patch.dict("sys.modules", {"openai": mock_openai}):
-            from agent.protocols.base import create_protocol
+            from cyberraccoon.agent.protocols.base import create_protocol
 
             proto = create_protocol(
                 provider="openai",
@@ -402,8 +402,8 @@ class TestGetSkillSource:
     def test_bundled_source(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(bundled, "kicad", "# KiCad")
         assert get_skill_source("kicad") == "bundled"
@@ -411,8 +411,8 @@ class TestGetSkillSource:
     def test_user_source(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(user, "myapp", "# My App")
         assert get_skill_source("myapp") == "user"
@@ -420,8 +420,8 @@ class TestGetSkillSource:
     def test_user_override_returns_user(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(bundled, "blender", "# Bundled")
         _write_skill(user, "blender", "# User Override")
@@ -430,8 +430,8 @@ class TestGetSkillSource:
     def test_not_found_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         with pytest.raises(SkillNotFoundError):
             get_skill_source("missing")
@@ -447,8 +447,8 @@ class TestGetSkillInfo:
     def test_returns_name_content_source(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(bundled, "kicad", "# KiCad\nTips.")
         info = get_skill_info("kicad")
@@ -466,7 +466,7 @@ class TestSaveUserSkill:
 
     def test_creates_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         user = tmp_path / "user_skills"
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         path = save_user_skill("myapp", "# My App\nContent.")
         assert path.exists()
@@ -474,14 +474,14 @@ class TestSaveUserSkill:
 
     def test_creates_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         user = tmp_path / "deep" / "nested" / "skills"
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         save_user_skill("test", "# Test")
         assert (user / "test.md").exists()
 
     def test_empty_content_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         with pytest.raises(ValueError, match="empty"):
             save_user_skill("test", "  \n  ")
@@ -492,7 +492,7 @@ class TestSaveUserSkill:
 
     def test_overwrites_existing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         save_user_skill("app", "# Version 1")
         save_user_skill("app", "# Version 2")
@@ -508,7 +508,7 @@ class TestDeleteUserSkill:
 
     def test_deletes_existing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         user = tmp_path / "user"
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         _write_skill(user, "temp", "# Temp")
         assert delete_user_skill("temp") is True
@@ -517,7 +517,7 @@ class TestDeleteUserSkill:
     def test_returns_false_if_not_found(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         user = tmp_path / "user"
         user.mkdir()
-        monkeypatch.setattr("agent.skills._user_skills_dir", lambda: user)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
         assert delete_user_skill("nope") is False
 

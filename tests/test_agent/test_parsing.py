@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent.protocols.parsing import (
+from cyberraccoon.agent.protocols.parsing import (
     extract_completion_status,
     parse_json_action,
     parse_json_actions,

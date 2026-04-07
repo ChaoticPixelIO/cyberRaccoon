@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from executor.hid_executor import ActionExecutor
+from cyberraccoon.executor.hid_executor import ActionExecutor
 from tests.test_executor.conftest import MockHIDDevice
 
 
@@ -22,8 +22,8 @@ class MockActionExecutor(ActionExecutor):
         self._mock_dev = MockHIDDevice("/dev/hidg0")
 
     def open(self) -> None:
-        from executor.mouse import MouseController
-        from executor.keyboard import KeyboardController
+        from cyberraccoon.executor.mouse import MouseController
+        from cyberraccoon.executor.keyboard import KeyboardController
 
         self._mock_dev.open()
 
@@ -43,7 +43,7 @@ class TestCommandRouting:
     """Tests for action-to-controller routing."""
 
     def test_click_routes_to_mouse(self, executor: MockActionExecutor) -> None:
-        from executor.mouse import REPORT_ID as MOUSE_ID
+        from cyberraccoon.executor.mouse import REPORT_ID as MOUSE_ID
         result = executor.execute(
             {"id": "t1", "action": "click", "x": 640, "y": 360}
         )
@@ -59,7 +59,7 @@ class TestCommandRouting:
         assert len(executor._mock_dev.reports) > 0
 
     def test_type_routes_to_keyboard(self, executor: MockActionExecutor) -> None:
-        from executor.keyboard import REPORT_ID as KB_ID
+        from cyberraccoon.executor.keyboard import REPORT_ID as KB_ID
         result = executor.execute(
             {"id": "t3", "action": "type", "text": "hi"}
         )
@@ -179,7 +179,7 @@ class TestResultFormat:
 class TestWaitAction:
     """Tests for the wait action dispatch."""
 
-    @patch("executor.base_executor.time.sleep")
+    @patch("cyberraccoon.executor.base_executor.time.sleep")
     def test_wait_sleeps_for_duration(
         self, mock_sleep: object, executor: MockActionExecutor
     ) -> None:
@@ -190,7 +190,7 @@ class TestWaitAction:
         assert result["action"] == "wait"
         mock_sleep.assert_called_once_with(3.0)
 
-    @patch("executor.base_executor.time.sleep")
+    @patch("cyberraccoon.executor.base_executor.time.sleep")
     def test_wait_duration_capped_at_10(
         self, mock_sleep: object, executor: MockActionExecutor
     ) -> None:
@@ -199,7 +199,7 @@ class TestWaitAction:
         )
         mock_sleep.assert_called_once_with(10.0)
 
-    @patch("executor.base_executor.time.sleep")
+    @patch("cyberraccoon.executor.base_executor.time.sleep")
     def test_wait_default_duration(
         self, mock_sleep: object, executor: MockActionExecutor
     ) -> None:

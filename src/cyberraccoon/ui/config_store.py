@@ -29,7 +29,7 @@ from typing import Any
 
 import yaml
 
-from config import (
+from cyberraccoon.config import (
     AgentConfig,
     AppConfig,
     BLEConfig,
@@ -40,7 +40,7 @@ from config import (
     load_app_config,
     resolve_api_key,
 )
-from ui.exceptions import ConfigError
+from cyberraccoon.ui.exceptions import ConfigError
 
 logger = logging.getLogger("M5.config")
 

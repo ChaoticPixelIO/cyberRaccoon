@@ -10,9 +10,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from config import AppConfig
-from ui.app_controller import AppController, AppEvent, AppEventType
-from ui.web.server import create_app
+from cyberraccoon.config import AppConfig
+from cyberraccoon.ui.app_controller import AppController, AppEvent, AppEventType
+from cyberraccoon.ui.web.server import create_app
 
 
 @pytest.fixture()
@@ -133,7 +133,7 @@ class TestWiFiAPI:
             assert resp.status_code == 503
 
     def test_scan_with_mock(self, client: TestClient, ctrl: AppController) -> None:
-        from ui.wifi_manager import WiFiNetwork
+        from cyberraccoon.ui.wifi_manager import WiFiNetwork
         mock_wm = MagicMock()
         mock_wm.scan.return_value = [
             WiFiNetwork(ssid="Home", signal_strength=-45, security="WPA2", connected=True),
@@ -215,7 +215,7 @@ class TestWebSocket:
         self, ctrl: AppController, tmp_path: Path,
     ) -> None:
         """Verify that AppController events reach the server's event queue."""
-        from ui.web.server import create_app
+        from cyberraccoon.ui.web.server import create_app
 
         app = create_app(ctrl)
 
@@ -232,7 +232,7 @@ class TestWebSocket:
     def test_connection_manager_broadcast(self) -> None:
         """ConnectionManager broadcasts to all connected clients."""
         import asyncio
-        from ui.web.server import ConnectionManager
+        from cyberraccoon.ui.web.server import ConnectionManager
 
         async def _test() -> None:
             mgr = ConnectionManager()
@@ -246,7 +246,7 @@ class TestWebSocket:
 # ---------------------------------------------------------------------------
 
 try:
-    from ui.app_controller import PlanDiscussionState  # added in plan 04
+    from cyberraccoon.ui.app_controller import PlanDiscussionState  # added in plan 04
     _CHAT_ENDPOINT_AVAILABLE = True
 except ImportError:
     _CHAT_ENDPOINT_AVAILABLE = False
@@ -319,7 +319,7 @@ class TestChatEndpoint:
 # ---------------------------------------------------------------------------
 
 try:
-    from ui.app_controller import AppController as _AC
+    from cyberraccoon.ui.app_controller import AppController as _AC
     _REWRITE_ENDPOINTS_AVAILABLE = all(
         hasattr(_AC, name)
         for name in (

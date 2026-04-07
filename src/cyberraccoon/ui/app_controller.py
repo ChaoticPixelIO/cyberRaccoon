@@ -38,17 +38,18 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
 
-from agent.planner import PlanStep, RewriteResult
-from agent.vision_agent import TaskResult, TaskStatus, VisionAgent
-from agent.protocols import create_protocol
-from capture import create_capture
-from capture.base import CaptureError, CaptureResult, CaptureSource
-from config import AppConfig
-from executor.hid_executor import ActionExecutor
-from executor.bluetooth_executor import BluetoothExecutor
-from ui.config_store import ConfigStore
-from ui.exceptions import TaskError
-from ui.wifi_manager import WiFiManager
+from cyberraccoon._project_root import PROJECT_ROOT
+from cyberraccoon.agent.planner import PlanStep, RewriteResult
+from cyberraccoon.agent.vision_agent import TaskResult, TaskStatus, VisionAgent
+from cyberraccoon.agent.protocols import create_protocol
+from cyberraccoon.capture import create_capture
+from cyberraccoon.capture.base import CaptureError, CaptureResult, CaptureSource
+from cyberraccoon.config import AppConfig
+from cyberraccoon.executor.hid_executor import ActionExecutor
+from cyberraccoon.executor.bluetooth_executor import BluetoothExecutor
+from cyberraccoon.ui.config_store import ConfigStore
+from cyberraccoon.ui.exceptions import TaskError
+from cyberraccoon.ui.wifi_manager import WiFiManager
 
 logger = logging.getLogger("M5.controller")
 
@@ -439,7 +440,7 @@ class AppController:
 
         # When provider changes, re-resolve API key from env vars
         if "llm.provider" in kwargs:
-            from config import resolve_api_key
+            from cyberraccoon.config import resolve_api_key
             env_key = resolve_api_key(config.llm.provider)
             if env_key:
                 config.llm.api_key = env_key
@@ -614,7 +615,7 @@ class AppController:
         Raises:
             TaskError: If the setup script fails.
         """
-        script = Path(__file__).resolve().parent.parent / "scripts" / "setup_gadget.sh"
+        script = PROJECT_ROOT / "scripts" / "setup_gadget.sh"
         if not script.exists():
             raise TaskError(f"USB Gadget setup script not found: {script}")
         logger.info("USB Gadget device not found, running setup_gadget.sh ...")
@@ -804,7 +805,7 @@ class AppController:
         # the skill's procedure).
         skill_text: str | None = None
         if config.agent.skills:
-            from agent.skills import load_skills
+            from cyberraccoon.agent.skills import load_skills
             try:
                 skill_text = load_skills(config.agent.skills)
             except Exception as e:
@@ -1035,7 +1036,7 @@ class AppController:
             planner = chat_planner_factory()
         else:
             try:
-                from agent.planner import TaskPlanner
+                from cyberraccoon.agent.planner import TaskPlanner
                 config = self.get_config()
                 planner = TaskPlanner(
                     provider=config.llm.provider,
@@ -1134,7 +1135,7 @@ class AppController:
             planner = chat_planner_factory()
         else:
             try:
-                from agent.planner import TaskPlanner
+                from cyberraccoon.agent.planner import TaskPlanner
                 config = self.get_config()
                 planner = TaskPlanner(
                     provider=config.llm.provider,
@@ -1507,7 +1508,7 @@ class AppController:
             if use_workflow:
                 # Plan-then-execute: planner decomposes task into steps,
                 # agent executes each step individually.
-                from agent.planner import TaskPlanner
+                from cyberraccoon.agent.planner import TaskPlanner
 
                 planner = TaskPlanner(
                     provider=config.llm.provider,
@@ -1519,7 +1520,7 @@ class AppController:
                 # Load skill text for the planner
                 skill_text: str | None = None
                 if config.agent.skills:
-                    from agent.skills import load_skills
+                    from cyberraccoon.agent.skills import load_skills
                     try:
                         skill_text = load_skills(config.agent.skills)
                     except Exception as e:

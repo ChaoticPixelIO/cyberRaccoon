@@ -2,15 +2,15 @@
 
 Usage::
 
-    python -m executor.cli click 640 360
-    python -m executor.cli click 640 360 right
-    python -m executor.cli double_click 100 200
-    python -m executor.cli type "hello world"
-    python -m executor.cli key ctrl c
-    python -m executor.cli scroll 640 400 down 5
-    python -m executor.cli drag 100 200 500 300
-    python -m executor.cli json '{"action":"click","x":640,"y":360}'
-    python -m executor.cli --transport bt type "hello bluetooth"
+    python -m cyberraccoon.executor.cli click 640 360
+    python -m cyberraccoon.executor.cli click 640 360 right
+    python -m cyberraccoon.executor.cli double_click 100 200
+    python -m cyberraccoon.executor.cli type "hello world"
+    python -m cyberraccoon.executor.cli key ctrl c
+    python -m cyberraccoon.executor.cli scroll 640 400 down 5
+    python -m cyberraccoon.executor.cli drag 100 200 500 300
+    python -m cyberraccoon.executor.cli json '{"action":"click","x":640,"y":360}'
+    python -m cyberraccoon.executor.cli --transport bt type "hello bluetooth"
 """
 
 from __future__ import annotations
@@ -20,9 +20,9 @@ import json
 import sys
 import uuid
 
-from config import HumanizeConfig, HUMANIZE_PRESETS
-from executor.bluetooth_executor import BluetoothExecutor
-from executor.hid_executor import ActionExecutor
+from cyberraccoon.config import HumanizeConfig, HUMANIZE_PRESETS
+from cyberraccoon.executor.bluetooth_executor import BluetoothExecutor
+from cyberraccoon.executor.hid_executor import ActionExecutor
 
 
 def build_command(action: str, params: list[str], cmd_id: str) -> dict:

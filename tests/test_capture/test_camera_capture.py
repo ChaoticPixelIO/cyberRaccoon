@@ -13,8 +13,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 from PIL import Image
 
-from capture.camera_capture import CameraCapture
-from capture.screen_capture import CaptureError
+from cyberraccoon.capture.camera_capture import CameraCapture
+from cyberraccoon.capture.screen_capture import CaptureError
 
 
 # ---------------------------------------------------------------------------

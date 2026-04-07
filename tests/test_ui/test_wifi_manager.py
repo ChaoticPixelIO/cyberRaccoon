@@ -7,8 +7,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from ui.exceptions import WiFiError
-from ui.wifi_manager import WiFiManager, WiFiNetwork
+from cyberraccoon.ui.exceptions import WiFiError
+from cyberraccoon.ui.wifi_manager import WiFiManager, WiFiNetwork
 
 
 # ---------------------------------------------------------------------------

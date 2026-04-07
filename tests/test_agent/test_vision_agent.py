@@ -12,9 +12,9 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image
 
-from agent.protocols.base import StepResult
-from agent.vision_agent import TaskResult, TaskStatus, VisionAgent
-from capture.base import CaptureError, CaptureResult, frame_to_capture_result
+from cyberraccoon.agent.protocols.base import StepResult
+from cyberraccoon.agent.vision_agent import TaskResult, TaskStatus, VisionAgent
+from cyberraccoon.capture.base import CaptureError, CaptureResult, frame_to_capture_result
 from tests.test_agent.conftest import (
     FailAtIndexExecutor,
     MockCapture,
@@ -480,7 +480,7 @@ class TestWaitAction:
 
 def _make_image(value: int = 0, width: int = 1280, height: int = 720) -> Image.Image:
     """Create a solid-color test image."""
-    arr = np.full((height, width, 3), value, dtype=np.uint8)
+    arr = np.full((height, width, 3), value % 256, dtype=np.uint8)
     return Image.fromarray(arr, mode="RGB")
 
 
@@ -502,7 +502,7 @@ class ImageCapture:
 class TestUIStability:
     """Tests for automatic UI stability detection (frame diffing)."""
 
-    @patch("agent.vision_agent.time.sleep")
+    @patch("cyberraccoon.agent.vision_agent.time.sleep")
     def test_stability_waits_for_stable_screen(self, mock_sleep: Any) -> None:
         """Agent should capture extra frames until the screen stabilizes."""
         # Frame sequence: initial (black), then changing, then stable
@@ -533,7 +533,7 @@ class TestUIStability:
         # 1 initial + 3 stability captures = 4 total
         assert cap.call_count == 4
 
-    @patch("agent.vision_agent.time.sleep")
+    @patch("cyberraccoon.agent.vision_agent.time.sleep")
     def test_stability_timeout_proceeds(self, mock_sleep: Any) -> None:
         """If screen never stabilizes, agent should proceed after max_wait."""
         # All frames are different
@@ -557,7 +557,7 @@ class TestUIStability:
 
         assert result.status == TaskStatus.COMPLETED
 
-    @patch("agent.vision_agent.time.sleep")
+    @patch("cyberraccoon.agent.vision_agent.time.sleep")
     def test_stability_disabled_single_capture(self, mock_sleep: Any) -> None:
         """With stability_check=False, only one capture per step."""
         images = [_make_image(0), _make_image(100)]
@@ -756,7 +756,7 @@ class TestTruncateBase64InMessages:
 class TestCaptureErrorEdgeCases:
     """Tests for CaptureError during stability check and re-capture paths."""
 
-    @patch("agent.vision_agent.time.sleep")
+    @patch("cyberraccoon.agent.vision_agent.time.sleep")
     def test_capture_failure_during_stability_check(self, mock_sleep: Any) -> None:
         """CaptureError inside _wait_for_stable_screen should abort with FAILED."""
         # Capture 1: initial (ok), Capture 2: stability frame_a (ok),
@@ -809,7 +809,7 @@ class TestAutoDetectTargetOS:
 
     def test_auto_detect_sets_target_os(self) -> None:
         """When executor._target_os is None, detect_os should be called and result applied."""
-        from executor.clipboard_bridge import TargetOS
+        from cyberraccoon.executor.clipboard_bridge import TargetOS
 
         protocol = MockProtocol(
             [{"action": "done", "reason": "ok"}],
@@ -855,7 +855,7 @@ class TestAutoDetectTargetOS:
 
     def test_manual_target_os_skips_detect(self) -> None:
         """When _target_os is already set, detect_os should not be called."""
-        from executor.clipboard_bridge import TargetOS
+        from cyberraccoon.executor.clipboard_bridge import TargetOS
 
         protocol = MockProtocol(
             [{"action": "done", "reason": "ok"}],

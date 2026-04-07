@@ -12,9 +12,9 @@ import logging
 import time
 from typing import Any
 
-from agent.prompts import build_openai_cu_system_prompt
-from agent.protocols.base import ComputerUseProtocol, StepResult
-from agent.protocols.parsing import extract_completion_status
+from cyberraccoon.agent.prompts import build_openai_cu_system_prompt
+from cyberraccoon.agent.protocols.base import ComputerUseProtocol, StepResult
+from cyberraccoon.agent.protocols.parsing import extract_completion_status
 
 logger = logging.getLogger("M3.openai_cu")
 

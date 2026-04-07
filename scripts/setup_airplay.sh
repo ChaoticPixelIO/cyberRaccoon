@@ -146,7 +146,7 @@ if $PASS; then
     echo "    # Or: Control Center > Screen Mirroring > CyberRaccoon"
     echo ""
     echo "    # Full agent with AirPlay:"
-    echo "    python main.py --task 'Open Notepad' --source airplay"
+    echo "    python -m cyberraccoon --task 'Open Notepad' --source airplay"
     echo "==========================================="
 else
     echo "==========================================="

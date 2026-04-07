@@ -23,7 +23,7 @@ open(), not at import time. open() will fail with CaptureError on non-Pi.
 
 Usage::
 
-    from capture import create_capture
+    from cyberraccoon.capture import create_capture
 
     cap = create_capture("csi")
     cap.open()                    # pipeline setup + OpenCV open
@@ -45,7 +45,7 @@ import time
 import cv2
 from PIL import Image
 
-from capture.base import CaptureError, CaptureResult, frame_to_capture_result
+from cyberraccoon.capture.base import CaptureError, CaptureResult, frame_to_capture_result
 
 logger = logging.getLogger("M1.csi_hdmi")
 

@@ -2,14 +2,14 @@
 
 Usage::
 
-    python -m capture.cli --device 0 --output screenshot.jpg
-    python -m capture.cli --source csi --output camera.jpg
-    python -m capture.cli --source airplay --output airplay.jpg
-    python -m capture.cli --count 5
-    python -m capture.cli --width 1920 --height 1080 --quality 95
-    python -m capture.cli --info
-    python -m capture.cli --diag          # hardware diagnostics (no file saved)
-    python -m capture.cli --find USB      # find device index by name keyword
+    python -m cyberraccoon.capture.cli --device 0 --output screenshot.jpg
+    python -m cyberraccoon.capture.cli --source csi --output camera.jpg
+    python -m cyberraccoon.capture.cli --source airplay --output airplay.jpg
+    python -m cyberraccoon.capture.cli --count 5
+    python -m cyberraccoon.capture.cli --width 1920 --height 1080 --quality 95
+    python -m cyberraccoon.capture.cli --info
+    python -m cyberraccoon.capture.cli --diag          # hardware diagnostics (no file saved)
+    python -m cyberraccoon.capture.cli --find USB      # find device index by name keyword
 """
 
 from __future__ import annotations
@@ -19,9 +19,9 @@ import logging
 import sys
 import time
 
-from capture import available_sources, create_capture
-from capture.base import CaptureError
-from capture.screen_capture import find_capture_device
+from cyberraccoon.capture import available_sources, create_capture
+from cyberraccoon.capture.base import CaptureError
+from cyberraccoon.capture.screen_capture import find_capture_device
 
 logging.basicConfig(
     level=logging.DEBUG,

@@ -15,8 +15,8 @@ from PIL import Image
 
 # Canonical definitions live in capture.base.
 # Re-export here for backward compatibility:
-#   from capture.screen_capture import CaptureResult, CaptureError
-from capture.base import (  # noqa: F401 — re-exported
+#   from cyberraccoon.capture.screen_capture import CaptureResult, CaptureError
+from cyberraccoon.capture.base import (  # noqa: F401 — re-exported
     CaptureError,
     CaptureResult,
     frame_to_capture_result,

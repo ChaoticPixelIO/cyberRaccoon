@@ -1,3 +1,44 @@
+[build-system]
+requires = ["setuptools >= 67.6"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cyberraccoon"
+version = "0.1.0"
+description = "AI computer control via HDMI capture + USB HID"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "ChaoticPixelIO"}]
+
+# NOTE: opencv-python intentionally excluded -- Pi venv inherits system
+# python3-opencv (4.10.0 w/ GStreamer). pip-installing opencv-python
+# shadows it and breaks AirPlay capture. See CLAUDE.md for details.
+dependencies = [
+    "Pillow>=10.0.0",
+    "numpy>=1.24.0",
+    "anthropic>=0.45.0",
+    "openai>=1.66.0",
+    "pyyaml>=6.0",
+    "prompt_toolkit>=3.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.34.0",
+    "websockets>=13.0,<14",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "httpx>=0.27.0"]
+
+[project.scripts]
+cyberraccoon = "cyberraccoon.__main__:main"
+
+[tool.setuptools.package-data]
+cyberraccoon = [
+    "executor/sdp_record.xml",
+    "ui/web/static/*.html",
+    "ui/web/static/*.js",
+    "ui/web/static/*.css",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["src"]

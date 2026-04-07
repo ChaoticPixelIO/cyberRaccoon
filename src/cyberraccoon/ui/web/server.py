@@ -23,14 +23,14 @@ Static files:
 
 Usage::
 
-    from ui.app_controller import AppController
-    from ui.web.server import create_app
+    from cyberraccoon.ui.app_controller import AppController
+    from cyberraccoon.ui.web.server import create_app
 
     ctrl = AppController()
     ctrl.load_config()
     app = create_app(ctrl)
 
-    # Run with: uvicorn ui.web.server:app
+    # Run with: uvicorn cyberraccoon.ui.web.server:app
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from agent.skills import (
+from cyberraccoon.agent.skills import (
     SkillNotFoundError,
     delete_user_skill,
     get_skill_info,
@@ -57,7 +57,7 @@ from agent.skills import (
     list_skills,
     save_user_skill,
 )
-from ui.app_controller import AppController, AppEvent, AppEventType
+from cyberraccoon.ui.app_controller import AppController, AppEvent, AppEventType
 
 logger = logging.getLogger("M5.web")
 
@@ -709,16 +709,16 @@ def create_app(controller: AppController) -> FastAPI:
 
 
 # ---------------------------------------------------------------------------
-# Module-level app (for `uvicorn ui.web.server:app`)
+# Module-level app (for `uvicorn cyberraccoon.ui.web.server:app`)
 # ---------------------------------------------------------------------------
 
 
 def _lazy_app() -> FastAPI:
     """Create the module-level app on first access.
 
-    Only used when running standalone via ``uvicorn ui.web.server:app``.
-    When launched from ``main.py --web``, this is never called because
-    ``main.py`` imports ``create_app`` directly.
+    Only used when running standalone via ``uvicorn cyberraccoon.ui.web.server:app``.
+    When launched from ``python -m cyberraccoon --web``, this is never called
+    because ``__main__.py`` imports ``create_app`` directly.
     """
     ctrl = AppController()
     ctrl.load_config()

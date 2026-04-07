@@ -11,8 +11,8 @@ the planner's step decomposition.
 
 Usage::
 
-    from agent.planner import TaskPlanner
-    from agent.workflow_runner import WorkflowRunner
+    from cyberraccoon.agent.planner import TaskPlanner
+    from cyberraccoon.agent.workflow_runner import WorkflowRunner
 
     planner = TaskPlanner(provider, model, api_key)
     runner = WorkflowRunner(agent, planner, capture)
@@ -27,9 +27,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from agent.planner import PlanStep, TaskPlanner
-from agent.vision_agent import TaskResult, TaskStatus, VisionAgent
-from capture.base import compute_frame_diff
+from cyberraccoon.agent.planner import PlanStep, TaskPlanner
+from cyberraccoon.agent.vision_agent import TaskResult, TaskStatus, VisionAgent
+from cyberraccoon.capture.base import compute_frame_diff
 
 logger = logging.getLogger("M2.workflow")
 

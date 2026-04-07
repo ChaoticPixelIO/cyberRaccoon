@@ -289,13 +289,10 @@
                                 <span class="ws-pill ws-pill-modified">&#x270E; MODIFIED</span>
                             </template>
 
-                            <!-- Editable goal text (in-place textarea when editing) -->
+                            <!-- Goal text (click toggles step detail via parent div) -->
                             <template x-if="editingStep !== diffEntry.number">
                                 <span class="ws-goal"
-                                      :class="[diffEntry.diffState === 'removed' ? 'ws-goal-strike' : '',
-                                               !planExecuting ? 'ws-goal-editable' : '']"
-                                      @click.stop="planExecuting || (planPaused && diffEntry.status === 'done') ? null : beginEditStep(diffEntry)"
-                                      :title="planExecuting ? '' : 'Click to edit'"
+                                      :class="diffEntry.diffState === 'removed' ? 'ws-goal-strike' : ''"
                                       x-text="diffEntry.goal"></span>
                             </template>
                             <template x-if="editingStep === diffEntry.number">
@@ -333,6 +330,13 @@
                                 </span>
                             </template>
 
+                            <!-- Edit pencil button (visible when step is editable) -->
+                            <template x-if="(planPending || planPaused) && !planPreview && editingStep === null && diffEntry.status !== 'done'">
+                                <button type="button"
+                                        class="ws-edit-btn"
+                                        @click.stop="beginEditStep(diffEntry)"
+                                        title="Edit this step">&#x270E;</button>
+                            </template>
                             <!-- Delete x button (hidden during preview or active inline edit) -->
                             <template x-if="(planPending || planPaused) && !planPreview && editingStep === null">
                                 <button type="button"

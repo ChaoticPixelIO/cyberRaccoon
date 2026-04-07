@@ -15,8 +15,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from capture.base import CaptureError
-from capture.csi_capture import (
+from cyberraccoon.capture.base import CaptureError
+from cyberraccoon.capture.csi_capture import (
     CsiHdmiCapture,
     EDID_720P,
     EDID_1080P,
@@ -548,12 +548,12 @@ def _make_run_side_effects(
 class TestOpen:
     """Tests for the full open() pipeline with mocked subprocesses."""
 
-    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
-    @patch("capture.csi_capture.time.sleep")
-    @patch("capture.csi_capture.cv2.VideoCapture")
-    @patch("capture.csi_capture.subprocess.run")
-    @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
-    @patch("capture.csi_capture.os.path.exists")
+    @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
+    @patch("cyberraccoon.capture.csi_capture.time.sleep")
+    @patch("cyberraccoon.capture.csi_capture.cv2.VideoCapture")
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
+    @patch("cyberraccoon.capture.csi_capture.os.path.exists")
     def test_open_success(
         self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
         mock_lanes,
@@ -589,27 +589,27 @@ class TestOpen:
         assert cap._signal_width == 1280
         assert cap._signal_height == 720
 
-    @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
-    @patch("capture.csi_capture.os.path.exists", return_value=False)
+    @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
+    @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=False)
     def test_open_no_media_device(self, mock_exists, mock_which) -> None:
         """Should raise CaptureError if no rp1-cfe media device found."""
         cap = CsiHdmiCapture()
         with pytest.raises(CaptureError, match="TC358743.*not detected"):
             cap.open()
 
-    @patch("capture.csi_capture.shutil.which", return_value=None)
+    @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value=None)
     def test_open_missing_tools(self, mock_which) -> None:
         """Should raise CaptureError if v4l2-ctl is not installed."""
         cap = CsiHdmiCapture()
         with pytest.raises(CaptureError, match="not found"):
             cap.open()
 
-    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
-    @patch("capture.csi_capture.time.sleep")
-    @patch("capture.csi_capture.cv2.VideoCapture")
-    @patch("capture.csi_capture.subprocess.run")
-    @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
-    @patch("capture.csi_capture.os.path.exists", return_value=True)
+    @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
+    @patch("cyberraccoon.capture.csi_capture.time.sleep")
+    @patch("cyberraccoon.capture.csi_capture.cv2.VideoCapture")
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
+    @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=True)
     def test_open_signal_retry(
         self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
         mock_lanes,
@@ -636,12 +636,12 @@ class TestOpen:
         cap.open()
         assert cap.is_open()
 
-    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
-    @patch("capture.csi_capture.subprocess.run")
-    @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
-    @patch("capture.csi_capture.os.path.exists", return_value=True)
-    @patch("capture.csi_capture.time.monotonic")
-    @patch("capture.csi_capture.time.sleep")
+    @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
+    @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=True)
+    @patch("cyberraccoon.capture.csi_capture.time.monotonic")
+    @patch("cyberraccoon.capture.csi_capture.time.sleep")
     def test_open_signal_timeout(
         self, mock_sleep, mock_monotonic, mock_exists, mock_which, mock_run,
         mock_lanes,
@@ -671,11 +671,11 @@ class TestOpen:
         with pytest.raises(CaptureError, match="No HDMI signal"):
             cap.open()
 
-    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
-    @patch("capture.csi_capture.time.sleep")
-    @patch("capture.csi_capture.subprocess.run")
-    @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
-    @patch("capture.csi_capture.os.path.exists", return_value=True)
+    @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
+    @patch("cyberraccoon.capture.csi_capture.time.sleep")
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
+    @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=True)
     def test_open_pipeline_failure(
         self, mock_exists, mock_which, mock_run, mock_sleep, mock_lanes,
     ) -> None:
@@ -691,12 +691,12 @@ class TestOpen:
         with pytest.raises(CaptureError, match="Pipeline setup failed"):
             cap.open()
 
-    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
-    @patch("capture.csi_capture.time.sleep")
-    @patch("capture.csi_capture.cv2.VideoCapture")
-    @patch("capture.csi_capture.subprocess.run")
-    @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
-    @patch("capture.csi_capture.os.path.exists", return_value=True)
+    @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
+    @patch("cyberraccoon.capture.csi_capture.time.sleep")
+    @patch("cyberraccoon.capture.csi_capture.cv2.VideoCapture")
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
+    @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=True)
     def test_open_opencv_fails(
         self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
         mock_lanes,
@@ -711,13 +711,13 @@ class TestOpen:
         with pytest.raises(CaptureError, match="Cannot open"):
             cap.open()
 
-    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
-    @patch("capture.csi_capture.time.sleep")
-    @patch("capture.csi_capture.time.monotonic")
-    @patch("capture.csi_capture.cv2.VideoCapture")
-    @patch("capture.csi_capture.subprocess.run")
-    @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
-    @patch("capture.csi_capture.os.path.exists", return_value=True)
+    @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
+    @patch("cyberraccoon.capture.csi_capture.time.sleep")
+    @patch("cyberraccoon.capture.csi_capture.time.monotonic")
+    @patch("cyberraccoon.capture.csi_capture.cv2.VideoCapture")
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
+    @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=True)
     def test_open_warmup_timeout(
         self, mock_exists, mock_which, mock_run, mock_cv2_cap,
         mock_monotonic, mock_sleep, mock_lanes,
@@ -747,12 +747,12 @@ class TestOpen:
         with pytest.raises(CaptureError, match="only producing black frames"):
             cap.open()
 
-    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
-    @patch("capture.csi_capture.subprocess.run")
-    @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
-    @patch("capture.csi_capture.os.path.exists", return_value=True)
-    @patch("capture.csi_capture.time.monotonic")
-    @patch("capture.csi_capture.time.sleep")
+    @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
+    @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=True)
+    @patch("cyberraccoon.capture.csi_capture.time.monotonic")
+    @patch("cyberraccoon.capture.csi_capture.time.sleep")
     def test_open_source_stuck_at_1080p(
         self, mock_sleep, mock_monotonic, mock_exists, mock_which, mock_run,
         mock_lanes,
@@ -783,12 +783,12 @@ class TestOpen:
         with pytest.raises(CaptureError, match="2-lane CSI bandwidth"):
             cap.open()
 
-    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=4)
-    @patch("capture.csi_capture.time.sleep")
-    @patch("capture.csi_capture.cv2.VideoCapture")
-    @patch("capture.csi_capture.subprocess.run")
-    @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
-    @patch("capture.csi_capture.os.path.exists", return_value=True)
+    @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=4)
+    @patch("cyberraccoon.capture.csi_capture.time.sleep")
+    @patch("cyberraccoon.capture.csi_capture.cv2.VideoCapture")
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
+    @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=True)
     def test_open_4lane_accepts_1080p(
         self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
         mock_lanes,
@@ -823,12 +823,12 @@ class TestOpen:
         assert cap._max_capture_height == 1080
         assert cap._lane_count == 4
 
-    @patch("capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=4)
-    @patch("capture.csi_capture.time.sleep")
-    @patch("capture.csi_capture.cv2.VideoCapture")
-    @patch("capture.csi_capture.subprocess.run")
-    @patch("capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
-    @patch("capture.csi_capture.os.path.exists", return_value=True)
+    @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=4)
+    @patch("cyberraccoon.capture.csi_capture.time.sleep")
+    @patch("cyberraccoon.capture.csi_capture.cv2.VideoCapture")
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
+    @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=True)
     def test_open_4lane_loads_1080p_edid(
         self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
         mock_lanes,
@@ -874,7 +874,7 @@ class TestOpen:
 class TestQuerySignal:
     """Tests for signal query error discrimination."""
 
-    @patch("capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
     def test_permission_denied_raises(self, mock_run) -> None:
         """Should raise CaptureError on permission denied."""
         mock_run.return_value = subprocess.CompletedProcess(
@@ -886,7 +886,7 @@ class TestQuerySignal:
         with pytest.raises(CaptureError, match="Permission denied"):
             cap._query_current_signal()
 
-    @patch("capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
     def test_no_signal_returns_none(self, mock_run) -> None:
         """Should return None when no HDMI signal."""
         mock_run.return_value = subprocess.CompletedProcess(
@@ -897,7 +897,7 @@ class TestQuerySignal:
         cap._subdev_path = "/dev/v4l-subdev2"
         assert cap._query_current_signal() is None
 
-    @patch("capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
     def test_locked_signal_returns_resolution(self, mock_run) -> None:
         """Should return (w, h) when signal is locked."""
         mock_run.return_value = subprocess.CompletedProcess(
@@ -915,7 +915,7 @@ class TestQuerySignal:
 class TestRunCmd:
     """Tests for the subprocess helper."""
 
-    @patch("capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
     def test_success(self, mock_run) -> None:
         mock_run.return_value = subprocess.CompletedProcess(
             args=["echo"], returncode=0, stdout="ok", stderr="",
@@ -924,14 +924,14 @@ class TestRunCmd:
         result = cap._run_cmd(["echo", "hello"])
         assert result.stdout == "ok"
 
-    @patch("capture.csi_capture.subprocess.run", side_effect=FileNotFoundError)
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run", side_effect=FileNotFoundError)
     def test_command_not_found(self, mock_run) -> None:
         cap = CsiHdmiCapture()
         with pytest.raises(CaptureError, match="Command not found"):
             cap._run_cmd(["nonexistent"])
 
     @patch(
-        "capture.csi_capture.subprocess.run",
+        "cyberraccoon.capture.csi_capture.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd=["slow"], timeout=5),
     )
     def test_timeout(self, mock_run) -> None:
@@ -939,7 +939,7 @@ class TestRunCmd:
         with pytest.raises(CaptureError, match="timed out"):
             cap._run_cmd(["slow"], timeout=5.0)
 
-    @patch("capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
     def test_nonzero_exit_checked(self, mock_run) -> None:
         mock_run.return_value = subprocess.CompletedProcess(
             args=["fail"], returncode=1, stdout="", stderr="bad thing happened",
@@ -948,7 +948,7 @@ class TestRunCmd:
         with pytest.raises(CaptureError, match="bad thing happened"):
             cap._run_cmd(["fail"], error_msg="Test failed")
 
-    @patch("capture.csi_capture.subprocess.run")
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
     def test_nonzero_exit_unchecked(self, mock_run) -> None:
         mock_run.return_value = subprocess.CompletedProcess(
             args=["fail"], returncode=1, stdout="", stderr="",

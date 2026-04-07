@@ -3,7 +3,7 @@
 Provides a unified interface (:class:`CaptureSource`) for all capture
 backends and a registry / factory for instantiating them by name::
 
-    from capture import create_capture
+    from cyberraccoon.capture import create_capture
 
     cap = create_capture("hdmi", device_index=0)
     cap.open()
@@ -25,15 +25,15 @@ To add a new backend, implement the :class:`CaptureSource` protocol and
 call ``register_source("name", YourClass)``.
 """
 
-from capture.base import (
+from .base import (
     CaptureError,
     CaptureResult,
     CaptureSource,
     frame_to_capture_result,
 )
-from capture.camera_capture import CameraCapture
-from capture.csi_capture import CsiHdmiCapture
-from capture.screen_capture import ScreenCapture, find_capture_device
+from .camera_capture import CameraCapture
+from .csi_capture import CsiHdmiCapture
+from .screen_capture import ScreenCapture, find_capture_device
 
 # ---------------------------------------------------------------------------
 # Source registry + factory
@@ -91,7 +91,7 @@ register_source("picamera", CameraCapture)
 # GStreamer / uxplay.  The import is wrapped in try/except so that the
 # capture package remains importable everywhere.
 try:
-    from capture.airplay_capture import AirPlayCapture
+    from .airplay_capture import AirPlayCapture
 
     register_source("airplay", AirPlayCapture)
 except ImportError:

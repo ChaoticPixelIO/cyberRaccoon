@@ -11,7 +11,7 @@ import base64
 import logging
 from enum import Enum
 
-from executor.keyboard import CHAR_MAP
+from cyberraccoon.executor.keyboard import CHAR_MAP
 
 logger = logging.getLogger("M4.clipboard_bridge")
 

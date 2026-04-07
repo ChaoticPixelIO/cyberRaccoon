@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from executor.mouse import MouseController
-from executor.keyboard import KeyboardController
+from cyberraccoon.executor.mouse import MouseController
+from cyberraccoon.executor.keyboard import KeyboardController
 
 
 class MockHIDDevice:

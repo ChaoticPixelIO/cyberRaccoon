@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from executor.keyboard import (
+from cyberraccoon.executor.keyboard import (
     CHAR_MAP,
     MODIFIER_MAP,
     REPORT_ID,

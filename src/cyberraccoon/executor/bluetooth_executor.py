@@ -16,14 +16,14 @@ from __future__ import annotations
 
 import logging
 
-from config import HumanizeConfig
-from executor.base_executor import BaseExecutor
-from executor.bluetooth_device import (
+from cyberraccoon.config import HumanizeConfig
+from cyberraccoon.executor.base_executor import BaseExecutor
+from cyberraccoon.executor.bluetooth_device import (
     BluetoothHIDConnection,
     BluetoothHIDDevice,
 )
-from executor.keyboard import KeyboardController
-from executor.mouse import MouseController
+from cyberraccoon.executor.keyboard import KeyboardController
+from cyberraccoon.executor.mouse import MouseController
 
 logger = logging.getLogger("M4.bt_executor")
 

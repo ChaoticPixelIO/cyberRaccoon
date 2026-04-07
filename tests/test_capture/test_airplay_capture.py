@@ -24,8 +24,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from capture.airplay_capture import AirPlayCapture
-from capture.base import CaptureError, CaptureSource
+from cyberraccoon.capture.airplay_capture import AirPlayCapture
+from cyberraccoon.capture.base import CaptureError, CaptureSource
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +310,7 @@ class TestCaptureErrors:
         with pytest.raises(CaptureError, match="uxplay process exited"):
             cap.capture()
 
-    @patch("capture.airplay_capture.shutil")
+    @patch("cyberraccoon.capture.airplay_capture.shutil")
     def test_open_uxplay_not_installed(self, mock_shutil: MagicMock) -> None:
         """open() should raise CaptureError if uxplay is not found."""
         mock_shutil.which.return_value = None
@@ -318,9 +318,9 @@ class TestCaptureErrors:
         with pytest.raises(CaptureError, match="uxplay is not installed"):
             cap.open()
 
-    @patch("capture.airplay_capture.time")
-    @patch("capture.airplay_capture.subprocess")
-    @patch("capture.airplay_capture.shutil")
+    @patch("cyberraccoon.capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.shutil")
     def test_open_no_gstreamer(
         self,
         mock_shutil: MagicMock,
@@ -338,9 +338,9 @@ class TestCaptureErrors:
             with pytest.raises(CaptureError, match="GStreamer"):
                 cap.open()
 
-    @patch("capture.airplay_capture.time")
-    @patch("capture.airplay_capture.subprocess")
-    @patch("capture.airplay_capture.shutil")
+    @patch("cyberraccoon.capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.shutil")
     def test_open_uxplay_exits_immediately(
         self,
         mock_shutil: MagicMock,
@@ -367,9 +367,9 @@ class TestCaptureErrors:
             with pytest.raises(CaptureError, match="uxplay exited immediately"):
                 cap.open()
 
-    @patch("capture.airplay_capture.time")
-    @patch("capture.airplay_capture.subprocess")
-    @patch("capture.airplay_capture.shutil")
+    @patch("cyberraccoon.capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.shutil")
     def test_open_gstreamer_pipeline_fails(
         self,
         mock_shutil: MagicMock,
@@ -481,9 +481,9 @@ class TestDeviceLifecycle:
         cap.close()
         assert cap._stream_connected is False
 
-    @patch("capture.airplay_capture.time")
-    @patch("capture.airplay_capture.subprocess")
-    @patch("capture.airplay_capture.shutil")
+    @patch("cyberraccoon.capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.shutil")
     def test_full_open_lifecycle(
         self,
         mock_shutil: MagicMock,
@@ -518,10 +518,10 @@ class TestDeviceLifecycle:
         mock_cv_cap.release.assert_called_once()
         mock_proc.terminate.assert_called_once()
 
-    @patch("capture.airplay_capture.tempfile")
-    @patch("capture.airplay_capture.time")
-    @patch("capture.airplay_capture.subprocess")
-    @patch("capture.airplay_capture.shutil")
+    @patch("cyberraccoon.capture.airplay_capture.tempfile")
+    @patch("cyberraccoon.capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.shutil")
     def test_full_open_lifecycle_file_mode(
         self,
         mock_shutil: MagicMock,
@@ -595,7 +595,7 @@ class TestInit:
 class TestVersionCheck:
     """Tests for _detect_uxplay_version()."""
 
-    @patch("capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
     def test_parses_version_173(self, mock_subprocess: MagicMock) -> None:
         result = MagicMock()
         result.stdout = "UxPlay 1.73 : An open-source AirPlay mirroring server\n"
@@ -603,7 +603,7 @@ class TestVersionCheck:
         mock_subprocess.run.return_value = result
         assert AirPlayCapture._detect_uxplay_version() == 1.73
 
-    @patch("capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
     def test_parses_version_171(self, mock_subprocess: MagicMock) -> None:
         result = MagicMock()
         result.stdout = "UxPlay 1.71\n"
@@ -611,7 +611,7 @@ class TestVersionCheck:
         mock_subprocess.run.return_value = result
         assert AirPlayCapture._detect_uxplay_version() == 1.71
 
-    @patch("capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
     def test_version_from_stderr(self, mock_subprocess: MagicMock) -> None:
         """Some uxplay versions print version to stderr."""
         result = MagicMock()
@@ -620,7 +620,7 @@ class TestVersionCheck:
         mock_subprocess.run.return_value = result
         assert AirPlayCapture._detect_uxplay_version() == 1.68
 
-    @patch("capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
     def test_unparseable_returns_none(self, mock_subprocess: MagicMock) -> None:
         result = MagicMock()
         result.stdout = "Usage: uxplay [options]\n"
@@ -628,12 +628,12 @@ class TestVersionCheck:
         mock_subprocess.run.return_value = result
         assert AirPlayCapture._detect_uxplay_version() is None
 
-    @patch("capture.airplay_capture.subprocess.run")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess.run")
     def test_timeout_returns_none(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = subprocess.TimeoutExpired("uxplay", 5)
         assert AirPlayCapture._detect_uxplay_version() is None
 
-    @patch("capture.airplay_capture.subprocess.run")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess.run")
     def test_file_not_found_returns_none(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = FileNotFoundError("uxplay not found")
         assert AirPlayCapture._detect_uxplay_version() is None
@@ -646,9 +646,9 @@ class TestVersionCheck:
 class TestModeAutoDetection:
     """Tests for mode selection based on uxplay version."""
 
-    @patch("capture.airplay_capture.time")
-    @patch("capture.airplay_capture.subprocess")
-    @patch("capture.airplay_capture.shutil")
+    @patch("cyberraccoon.capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.shutil")
     def test_version_173_selects_rtp(
         self,
         mock_shutil: MagicMock,
@@ -675,10 +675,10 @@ class TestModeAutoDetection:
         assert cap._use_rtp is True
         cap.close()
 
-    @patch("capture.airplay_capture.tempfile")
-    @patch("capture.airplay_capture.time")
-    @patch("capture.airplay_capture.subprocess")
-    @patch("capture.airplay_capture.shutil")
+    @patch("cyberraccoon.capture.airplay_capture.tempfile")
+    @patch("cyberraccoon.capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.shutil")
     def test_version_171_selects_file(
         self,
         mock_shutil: MagicMock,
@@ -701,9 +701,9 @@ class TestModeAutoDetection:
         assert cap._frame_dir == "/tmp/test_frames"
         cap.close()
 
-    @patch("capture.airplay_capture.time")
-    @patch("capture.airplay_capture.subprocess")
-    @patch("capture.airplay_capture.shutil")
+    @patch("cyberraccoon.capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.shutil")
     def test_unknown_version_defaults_to_rtp(
         self,
         mock_shutil: MagicMock,
@@ -795,14 +795,14 @@ class TestSubprocessManagement:
 class TestSystemReadyCheck:
     """Tests for _wait_for_system_ready() — pre-start network/mDNS checks."""
 
-    @patch("capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
     def test_skips_on_macos(self, mock_subprocess: MagicMock) -> None:
         """Should silently return if systemctl is not available (macOS dev)."""
         mock_subprocess.run.side_effect = FileNotFoundError("systemctl")
         cap = AirPlayCapture()
         cap._wait_for_system_ready()  # should not raise
 
-    @patch("capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
     def test_warns_if_avahi_not_active(self, mock_subprocess: MagicMock) -> None:
         """Should return early with warning if avahi-daemon is not active."""
         result = MagicMock()
@@ -811,8 +811,8 @@ class TestSystemReadyCheck:
         cap = AirPlayCapture()
         cap._wait_for_system_ready()  # should not raise
 
-    @patch("capture.airplay_capture.time")
-    @patch("capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
     def test_waits_for_routable_ip(
         self, mock_subprocess: MagicMock, mock_time: MagicMock,
     ) -> None:
@@ -851,8 +851,8 @@ class TestSystemReadyCheck:
         # Should have slept once waiting for IP
         mock_time.sleep.assert_called_with(1.0)
 
-    @patch("capture.airplay_capture.time")
-    @patch("capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
     def test_waits_for_avahi_resolve(
         self, mock_subprocess: MagicMock, mock_time: MagicMock,
     ) -> None:
@@ -891,8 +891,8 @@ class TestSystemReadyCheck:
         # Should have slept once during avahi polling
         assert mock_time.sleep.call_count >= 1
 
-    @patch("capture.airplay_capture.time")
-    @patch("capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
     def test_all_ready_immediately(
         self, mock_subprocess: MagicMock, mock_time: MagicMock,
     ) -> None:
@@ -926,7 +926,7 @@ class TestSystemReadyCheck:
         # No sleep needed — everything was ready
         mock_time.sleep.assert_not_called()
 
-    @patch("capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
     def test_skips_avahi_resolve_if_not_installed(
         self, mock_subprocess: MagicMock,
     ) -> None:
@@ -972,7 +972,7 @@ class TestStreamWait:
         assert ret is False
         assert frame is None
 
-    @patch("capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.time")
     def test_returns_frame_when_stream_connects(self, mock_time: MagicMock) -> None:
         cap = make_mock_airplay()
         cap._stream_wait_timeout = 5.0
@@ -986,7 +986,7 @@ class TestStreamWait:
         assert ret is True
         assert result_frame is frame
 
-    @patch("capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.time")
     def test_returns_none_on_timeout(self, mock_time: MagicMock) -> None:
         cap = make_mock_airplay()
         cap._stream_wait_timeout = 1.0
@@ -998,7 +998,7 @@ class TestStreamWait:
         assert ret is False
         assert frame is None
 
-    @patch("capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.time")
     def test_returns_none_when_uxplay_dies(self, mock_time: MagicMock) -> None:
         cap = make_mock_airplay()
         cap._stream_wait_timeout = 10.0
@@ -1096,7 +1096,7 @@ class TestFileModeStreamWait:
         cap._stream_wait_timeout = 0.0
         assert cap._wait_for_stream_file() is None
 
-    @patch("capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.time")
     def test_returns_frame_when_file_appears(
         self, mock_time: MagicMock, tmp_path: Path,
     ) -> None:
@@ -1114,7 +1114,7 @@ class TestFileModeStreamWait:
         assert img is not None
         assert img.mode == "RGB"
 
-    @patch("capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.time")
     def test_returns_none_on_timeout(
         self, mock_time: MagicMock, tmp_path: Path,
     ) -> None:
@@ -1128,7 +1128,7 @@ class TestFileModeStreamWait:
 
         assert cap._wait_for_stream_file() is None
 
-    @patch("capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.time")
     def test_returns_none_when_uxplay_dies(
         self, mock_time: MagicMock, tmp_path: Path,
     ) -> None:
@@ -1187,9 +1187,9 @@ class TestFileModeClosure:
 class TestGStreamerPipeline:
     """Tests for the GStreamer pipeline string used in RTP mode."""
 
-    @patch("capture.airplay_capture.time")
-    @patch("capture.airplay_capture.subprocess")
-    @patch("capture.airplay_capture.shutil")
+    @patch("cyberraccoon.capture.airplay_capture.time")
+    @patch("cyberraccoon.capture.airplay_capture.subprocess")
+    @patch("cyberraccoon.capture.airplay_capture.shutil")
     def test_pipeline_uses_correct_port(
         self,
         mock_shutil: MagicMock,

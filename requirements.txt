@@ -15,7 +15,8 @@ prompt_toolkit>=3.0
 
 # Web UI
 fastapi>=0.110.0
-uvicorn>=0.27.0
+uvicorn>=0.34.0
+websockets>=13.0,<14  # uvicorn (even 0.39) uses websockets.legacy — broken in v14+
 
 # Development
 pytest>=8.0.0

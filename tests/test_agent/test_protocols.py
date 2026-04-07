@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from agent.protocols.base import (
+from cyberraccoon.agent.protocols.base import (
     ANTHROPIC_CU_MODEL_PREFIXES,
     OPENAI_CU_MODEL_PREFIXES,
     ComputerUseProtocol,
@@ -22,8 +22,8 @@ from agent.protocols.base import (
     _supports_openai_cu,
     create_protocol,
 )
-from agent.protocols.anthropic_cu import AnthropicCUProtocol
-from agent.protocols.prompt_based import PromptBasedProtocol, VALID_ACTIONS
+from cyberraccoon.agent.protocols.anthropic_cu import AnthropicCUProtocol
+from cyberraccoon.agent.protocols.prompt_based import PromptBasedProtocol, VALID_ACTIONS
 
 
 # ===========================================================================
@@ -459,7 +459,7 @@ class TestPromptBasedParsing:
 
     def _parse(self, text: str) -> dict[str, Any] | None:
         """Convenience: call the shared try_parse_json utility."""
-        from agent.protocols.parsing import try_parse_json
+        from cyberraccoon.agent.protocols.parsing import try_parse_json
         return try_parse_json(text, VALID_ACTIONS)
 
     def test_valid_json_direct(self) -> None:
@@ -584,7 +584,7 @@ class TestCreateProtocol:
                 api_key="test-key",
                 protocol_override="native",
             )
-            from agent.protocols.openai_cu import OpenAICUProtocol
+            from cyberraccoon.agent.protocols.openai_cu import OpenAICUProtocol
             assert isinstance(protocol, OpenAICUProtocol)
 
     def test_auto_openai_gpt54_creates_openai_cu(self) -> None:
@@ -598,7 +598,7 @@ class TestCreateProtocol:
                 model="gpt-5.4",
                 api_key="test-key",
             )
-            from agent.protocols.openai_cu import OpenAICUProtocol
+            from cyberraccoon.agent.protocols.openai_cu import OpenAICUProtocol
             assert isinstance(protocol, OpenAICUProtocol)
 
     def test_supports_openai_cu_prefixes(self) -> None:
@@ -711,7 +711,7 @@ class TestExecutorNewActions:
 
     def _make_executor(self):
         from unittest.mock import MagicMock
-        from executor.base_executor import BaseExecutor
+        from cyberraccoon.executor.base_executor import BaseExecutor
 
         class TestExecutor(BaseExecutor):
             def open(self) -> None:
@@ -1107,7 +1107,7 @@ class TestCompletionStatusPropagation:
     def _make_openai_cu(self) -> "OpenAICUProtocol":
         """Create an OpenAICUProtocol with mocked client for testing."""
         from unittest.mock import MagicMock
-        from agent.protocols.openai_cu import OpenAICUProtocol
+        from cyberraccoon.agent.protocols.openai_cu import OpenAICUProtocol
         proto = OpenAICUProtocol.__new__(OpenAICUProtocol)
         proto._model = "gpt-5.4"
         proto._display_width = 1280

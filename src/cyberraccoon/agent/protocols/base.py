@@ -213,7 +213,7 @@ def create_protocol(
         use_openai_native = True
 
     if use_anthropic_native:
-        from agent.protocols.anthropic_cu import AnthropicCUProtocol
+        from cyberraccoon.agent.protocols.anthropic_cu import AnthropicCUProtocol
 
         logger.info("Using Anthropic native computer-use protocol for %s", model)
         return AnthropicCUProtocol(
@@ -229,7 +229,7 @@ def create_protocol(
         )
 
     if use_openai_native:
-        from agent.protocols.openai_cu import OpenAICUProtocol
+        from cyberraccoon.agent.protocols.openai_cu import OpenAICUProtocol
 
         logger.info("Using OpenAI native computer-use protocol for %s", model)
         return OpenAICUProtocol(
@@ -240,7 +240,7 @@ def create_protocol(
             skill_text=skill_text,
         )
 
-    from agent.protocols.prompt_based import PromptBasedProtocol
+    from cyberraccoon.agent.protocols.prompt_based import PromptBasedProtocol
 
     logger.info("Using prompt-based protocol for %s/%s", provider_lower, model)
     return PromptBasedProtocol(

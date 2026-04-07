@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import logging
 
-from config import HumanizeConfig
-from executor.base_executor import BaseExecutor
-from executor.hid_device import HIDDevice
-from executor.keyboard import KeyboardController
-from executor.mouse import MouseController
+from cyberraccoon.config import HumanizeConfig
+from cyberraccoon.executor.base_executor import BaseExecutor
+from cyberraccoon.executor.hid_device import HIDDevice
+from cyberraccoon.executor.keyboard import KeyboardController
+from cyberraccoon.executor.mouse import MouseController
 
 logger = logging.getLogger("M4.executor")
 

@@ -16,8 +16,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from agent.vision_agent import VisionAgent, TaskStatus
-from capture.base import CaptureError, CaptureResult, frame_to_capture_result
+from cyberraccoon.agent.vision_agent import VisionAgent, TaskStatus
+from cyberraccoon.capture.base import CaptureError, CaptureResult, frame_to_capture_result
 from tests.test_agent.conftest import (
     FakeCaptureResult,
     MockCapture,

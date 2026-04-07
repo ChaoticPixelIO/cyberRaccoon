@@ -8,9 +8,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from config import AppConfig
-from ui.app_controller import AppController
-from ui.cli.commands import CommandHandler
+from cyberraccoon.config import AppConfig
+from cyberraccoon.ui.app_controller import AppController
+from cyberraccoon.ui.cli.commands import CommandHandler
 
 
 @pytest.fixture()
@@ -135,7 +135,7 @@ class TestWifiCommands:
             assert "not available" in output.lower()
 
     def test_wifi_scan(self, handler: CommandHandler, ctrl: AppController) -> None:
-        from ui.wifi_manager import WiFiNetwork
+        from cyberraccoon.ui.wifi_manager import WiFiNetwork
         mock_wm = MagicMock()
         mock_wm.scan.return_value = [
             WiFiNetwork(ssid="Home", signal_strength=-45, security="WPA2", connected=True),

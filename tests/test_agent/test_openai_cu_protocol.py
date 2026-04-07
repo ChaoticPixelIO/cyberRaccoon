@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from agent.protocols.openai_cu import OpenAICUProtocol, _normalize_key
+from cyberraccoon.agent.protocols.openai_cu import OpenAICUProtocol, _normalize_key
 
 
 # ---------------------------------------------------------------------------
