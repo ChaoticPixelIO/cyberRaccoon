@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from agent.planner import PlanStep, TaskPlanner, parse_steps, VALIDATE_PLAN_SYSTEM_PROMPT
+
+# Feature-detect _format_calibration_lines (plan 02 implementation)
+try:
+    from agent.planner import _format_calibration_lines
+    _CALIBRATION_AVAILABLE = True
+except ImportError:
+    _CALIBRATION_AVAILABLE = False
 
 
 # ===========================================================================
@@ -472,3 +481,312 @@ class TestGranularityGuidelines:
         """Consistency: REPLAN prompt also instructs [ACTIONS: N] tags."""
         from agent.planner import REPLAN_SYSTEM_PROMPT
         assert "[ACTIONS:" in REPLAN_SYSTEM_PROMPT
+
+
+# ===========================================================================
+# Calibration Line Formatting (BUDGET-02)
+# ===========================================================================
+
+@pytest.mark.skipif(
+    not _CALIBRATION_AVAILABLE,
+    reason="_format_calibration_lines not yet implemented (plan 02)",
+)
+class TestCalibrationLines:
+    """Tests for _format_calibration_lines() helper (D-01/D-02/D-03 format)."""
+
+    def test_step_within_budget(self) -> None:
+        """Step that used fewer actions than estimated shows OK (D-03)."""
+        entry = {
+            "step_number": 1,
+            "step_goal": "Click OK",
+            "expected_actions": 3,
+            "actions_used": 2,
+        }
+        result = _format_calibration_lines([entry])
+        assert result == "Step 1: Click OK [estimated 3, used 2] OK"
+
+    def test_step_over_budget(self) -> None:
+        """Step that exceeded budget shows +N over (D-03)."""
+        entry = {
+            "step_number": 2,
+            "step_goal": "Navigate to Settings",
+            "expected_actions": 3,
+            "actions_used": 7,
+        }
+        result = _format_calibration_lines([entry])
+        assert result == "Step 2: Navigate to Settings [estimated 3, used 7] +4 over"
+
+    def test_step_no_estimate(self) -> None:
+        """Step with no expected_actions shows [no estimate, used N] (D-02)."""
+        entry = {
+            "step_number": 3,
+            "step_goal": "Open browser",
+            "expected_actions": None,
+            "actions_used": 5,
+        }
+        result = _format_calibration_lines([entry])
+        assert result == "Step 3: Open browser [no estimate, used 5]"
+
+    def test_step_exact_budget(self) -> None:
+        """Step that used exactly the estimated actions shows OK (D-03)."""
+        entry = {
+            "step_number": 1,
+            "step_goal": "Type hello",
+            "expected_actions": 2,
+            "actions_used": 2,
+        }
+        result = _format_calibration_lines([entry])
+        assert result == "Step 1: Type hello [estimated 2, used 2] OK"
+
+    def test_multiple_steps(self) -> None:
+        """Multiple entries produce one line per step, joined by newlines."""
+        entries = [
+            {"step_number": 1, "step_goal": "Open app", "expected_actions": 2, "actions_used": 1},
+            {"step_number": 2, "step_goal": "Click menu", "expected_actions": 3, "actions_used": 5},
+            {"step_number": 3, "step_goal": "Save file", "expected_actions": None, "actions_used": 4},
+        ]
+        result = _format_calibration_lines(entries)
+        lines = result.split("\n")
+        assert len(lines) == 3
+        assert "Step 1:" in lines[0]
+        assert "Step 2:" in lines[1]
+        assert "Step 3:" in lines[2]
+
+    def test_missing_keys_tolerated(self) -> None:
+        """Entry missing step_goal does NOT crash (graceful degradation)."""
+        entry = {
+            "step_number": 1,
+            "expected_actions": 2,
+            "actions_used": 3,
+        }
+        # Must not raise KeyError
+        result = _format_calibration_lines([entry])
+        assert isinstance(result, str)
+        # Should still produce some output (with fallback or skip)
+        assert "Step 1" in result or result == ""
+
+
+# ===========================================================================
+# Replan Calibration (BUDGET-02)
+# ===========================================================================
+
+class CaptureReplanPlanner(MockTaskPlanner):
+    """MockTaskPlanner that captures user_text from replan's _call_llm call."""
+
+    def __init__(self) -> None:
+        super().__init__("1. Revised step [ACTIONS: 3]")
+        self._last_user_text: str | None = None
+
+    def _call_llm(
+        self, system_prompt: str, user_text: str,
+        screenshot_base64: str | None = None, **kwargs,
+    ) -> str | None:
+        self._last_user_text = user_text
+        return super()._call_llm(system_prompt, user_text, screenshot_base64, **kwargs)
+
+
+@pytest.mark.skipif(
+    not _CALIBRATION_AVAILABLE,
+    reason="calibration not yet implemented (plan 02)",
+)
+class TestReplanCalibration:
+    """Tests for calibration data threading into replan() prompt."""
+
+    def test_calibration_in_prompt(self) -> None:
+        """replan() with calibration_data includes calibration section in prompt."""
+        planner = CaptureReplanPlanner()
+        calibration = [
+            {
+                "step_number": 1,
+                "step_goal": "Open Chrome",
+                "expected_actions": 2,
+                "actions_used": 5,
+            },
+        ]
+        planner.replan(
+            task_goal="task",
+            failed_step=PlanStep(1, "s1"),
+            failure_reason="err",
+            screenshot_base64="fake",
+            remaining_steps=[PlanStep(2, "s2")],
+            calibration_data=calibration,
+        )
+        assert planner._last_user_text is not None
+        assert "Calibration data" in planner._last_user_text
+        assert "estimated 2, used 5" in planner._last_user_text
+
+    def test_no_calibration_backward_compat(self) -> None:
+        """replan() without calibration_data still works (backward compat)."""
+        planner = CaptureReplanPlanner()
+        result = planner.replan(
+            task_goal="task",
+            failed_step=PlanStep(1, "s1"),
+            failure_reason="err",
+            screenshot_base64="fake",
+            remaining_steps=[PlanStep(2, "s2")],
+        )
+        assert result is not None
+        assert planner._last_user_text is not None
+        assert "Calibration data" not in planner._last_user_text
+
+
+# ===========================================================================
+# Replan Prompt Calibration Rule (BUDGET-02, D-04)
+# ===========================================================================
+
+def test_calibration_rule_in_replan_prompt() -> None:
+    """REPLAN_SYSTEM_PROMPT contains calibration adjustment rule (D-04).
+
+    NOTE: This test intentionally has NO skipif guard. It tests an
+    existing constant (REPLAN_SYSTEM_PROMPT) and should FAIL (not skip)
+    until plan 02 adds the calibration rule.
+    """
+    from agent.planner import REPLAN_SYSTEM_PROMPT
+    assert "[ACTIONS:" in REPLAN_SYSTEM_PROMPT
+    # D-04: must instruct LLM to adjust estimates based on calibration data
+    prompt_lower = REPLAN_SYSTEM_PROMPT.lower()
+    assert "calibrat" in prompt_lower, (
+        "REPLAN_SYSTEM_PROMPT must contain a calibration instruction "
+        "(e.g., 'Calibration Data' section reference)"
+    )
+
+
+# ===========================================================================
+# Paused-State Rewrite (Phase 8, 08-02)
+# ===========================================================================
+
+class MockRewritePlanner(TaskPlanner):
+    """TaskPlanner that captures LLM call args for rewrite_plan tests."""
+
+    def __init__(self, response: str | None = None) -> None:
+        super().__init__(provider="anthropic", model="test", api_key="test")
+        self._mock_response = response
+        self._last_system_prompt: str = ""
+        self._last_user_text: str = ""
+
+    def _call_llm(
+        self, system_prompt: str, user_text: str,
+        screenshot_base64: str | None = None,
+        **kwargs: Any,
+    ) -> str | None:
+        self._last_system_prompt = system_prompt
+        self._last_user_text = user_text
+        return self._mock_response
+
+
+class TestPausedStateRewrite:
+    """Tests for paused-state rewrite support in TaskPlanner."""
+
+    _REWRITE_JSON = (
+        '{"action": "rewrite", "steps": ['
+        '{"number": 1, "goal": "Open Chrome", "expected_actions": 2, '
+        '"expected_outcome": "Chrome visible", "reboot_expected": false},'
+        '{"number": 2, "goal": "Type URL", "expected_actions": 1, '
+        '"expected_outcome": "URL entered", "reboot_expected": false},'
+        '{"number": 3, "goal": "Click Go", "expected_actions": 1, '
+        '"expected_outcome": "Page loaded", "reboot_expected": false},'
+        '{"number": 4, "goal": "Verify page", "expected_actions": 1, '
+        '"expected_outcome": "Correct page shown", "reboot_expected": false}'
+        '], "summary": "rewrote plan"}'
+    )
+
+    def _make_steps(self) -> list[PlanStep]:
+        return [
+            PlanStep(number=1, goal="Open Chrome", expected_actions=2),
+            PlanStep(number=2, goal="Type URL", expected_actions=1),
+            PlanStep(number=3, goal="Click Go", expected_actions=1),
+            PlanStep(number=4, goal="Verify page", expected_actions=1),
+        ]
+
+    def test_completed_steps_marked_in_prompt(self) -> None:
+        """rewrite_plan with completed_step_numbers marks steps in user_text."""
+        planner = MockRewritePlanner(self._REWRITE_JSON)
+        steps = self._make_steps()
+        planner.rewrite_plan(
+            task_goal="Browse web",
+            current_steps=steps,
+            screenshot_base64="fake",
+            modification_request="change step 3",
+            completed_step_numbers={1, 2},
+        )
+        user_text = planner._last_user_text
+        # Steps 1 and 2 should have [COMPLETED] prefix
+        assert "[COMPLETED] Open Chrome" in user_text
+        assert "[COMPLETED] Type URL" in user_text
+        # Steps 3 and 4 should NOT have [COMPLETED]
+        lines = user_text.split("\n")
+        for line in lines:
+            if "Click Go" in line and line.strip().startswith("3"):
+                assert "[COMPLETED]" not in line
+            if "Verify page" in line and line.strip().startswith("4"):
+                assert "[COMPLETED]" not in line
+
+    def test_no_completed_markers_without_param(self) -> None:
+        """rewrite_plan without completed_step_numbers has no [COMPLETED]."""
+        planner = MockRewritePlanner(self._REWRITE_JSON)
+        steps = self._make_steps()
+        planner.rewrite_plan(
+            task_goal="Browse web",
+            current_steps=steps,
+            screenshot_base64="fake",
+            modification_request="change step 3",
+        )
+        assert "[COMPLETED]" not in planner._last_user_text
+
+    def test_paused_addendum_in_system_prompt(self) -> None:
+        """rewrite_plan with completed steps includes paused addendum."""
+        planner = MockRewritePlanner(self._REWRITE_JSON)
+        steps = self._make_steps()
+        planner.rewrite_plan(
+            task_goal="Browse web",
+            current_steps=steps,
+            screenshot_base64="fake",
+            modification_request="change step 3",
+            completed_step_numbers={1},
+        )
+        assert "Some steps are marked [COMPLETED]" in planner._last_system_prompt
+
+    def test_no_paused_addendum_without_completed_steps(self) -> None:
+        """rewrite_plan without completed steps has no paused addendum."""
+        planner = MockRewritePlanner(self._REWRITE_JSON)
+        steps = self._make_steps()
+        planner.rewrite_plan(
+            task_goal="Browse web",
+            current_steps=steps,
+            screenshot_base64="fake",
+            modification_request="change step 3",
+        )
+        assert "Some steps are marked [COMPLETED]" not in planner._last_system_prompt
+
+    def test_completed_marker_not_in_rewrite_result(self) -> None:
+        """[COMPLETED] markers never leak to RewriteResult.steps."""
+        # LLM echoes back [COMPLETED] in step goals
+        response_with_markers = (
+            '{"action": "rewrite", "steps": ['
+            '{"number": 1, "goal": "[COMPLETED] Open Chrome", "expected_actions": 2, '
+            '"expected_outcome": "Chrome visible", "reboot_expected": false},'
+            '{"number": 2, "goal": "New step", "expected_actions": 1, '
+            '"expected_outcome": "Done", "reboot_expected": false}'
+            '], "summary": "rewrote"}'
+        )
+        planner = MockRewritePlanner(response_with_markers)
+        result = planner.rewrite_plan(
+            task_goal="Browse web",
+            current_steps=self._make_steps(),
+            screenshot_base64="fake",
+            modification_request="change",
+            completed_step_numbers={1},
+        )
+        assert result is not None
+        assert result.action == "rewrite"
+        for step in result.steps:
+            assert "[COMPLETED]" not in step.goal
+
+    def test_completed_marker_stripped_from_parsed_steps(self) -> None:
+        """parse_steps strips [COMPLETED] prefix from step goals."""
+        raw = "1. [COMPLETED] Open Chrome\n2. Type in search bar"
+        steps = parse_steps(raw)
+        assert len(steps) == 2
+        assert steps[0].goal == "Open Chrome"
+        assert "[COMPLETED]" not in steps[0].goal
+        assert steps[1].goal == "Type in search bar"

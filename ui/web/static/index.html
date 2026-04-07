@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CyberRaccoon</title>
-    <link rel="stylesheet" href="/static/style.css?v=7">
+    <link rel="stylesheet" href="/static/style.css?v=8">
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <script src="/static/app.js?v=10"></script>
+    <script src="/static/app.js?v=11"></script>
 </head>
 <body>
 
@@ -138,7 +138,18 @@
                 </template>
             </button>
             <button @click="abortTask()" :disabled="!taskRunning"
+                    x-show="taskRunning && !planExecuting && !planPaused"
                     class="btn btn-danger">Abort</button>
+            <button x-show="planExecuting && !pauseRequested"
+                    @click="pauseTask()"
+                    class="btn btn-pause">
+                Pause Execution
+            </button>
+            <button x-show="planExecuting && pauseRequested"
+                    class="btn btn-pause"
+                    disabled>
+                <span class="spinner-sm"></span> Pausing...
+            </button>
         </div>
 
         <!-- Screenshot preview -->
@@ -189,26 +200,253 @@
 
         <!-- Workflow plan checklist -->
         <template x-if="workflowPlan">
-            <div class="workflow-plan" :class="{ 'plan-pending': planPending }">
+            <div class="workflow-plan" :class="{ 'plan-pending': planPending, 'plan-paused': planPaused }">
                 <div class="workflow-plan-header">
-                    <span x-text="planPending ? 'Review Plan' : planExecuting ? 'Executing Plan' : 'Plan'"></span>
+                    <span x-text="planPending ? 'Review Plan' : planPaused ? 'Paused' : planExecuting ? 'Executing Plan' : 'Plan'"></span>
+                    <template x-if="planPaused">
+                        <span class="paused-badge">PAUSED</span>
+                    </template>
+                    <template x-if="planExecuting">
+                        <span class="plan-actions">
+                            <button x-show="!pauseRequested"
+                                    @click="pauseTask()"
+                                    class="btn btn-sm btn-pause">
+                                Pause Execution
+                            </button>
+                            <button x-show="pauseRequested"
+                                    class="btn btn-sm btn-pause"
+                                    disabled>
+                                <span class="spinner-sm"></span> Pausing...
+                            </button>
+                        </span>
+                    </template>
                     <template x-if="planPending">
                         <span class="plan-actions">
-                            <button class="btn btn-sm btn-start" @click="approvePlan()">Execute</button>
+                            <button class="btn btn-sm btn-start"
+                                    @click="approvePlan()"
+                                    :disabled="planPreview !== null || editingStep !== null"
+                                    :title="planPreview !== null ? 'Accept or discard the proposed changes first.' : (editingStep !== null ? 'Finish editing the step first.' : '')">Execute</button>
                             <button class="btn btn-sm btn-abort" @click="rejectPlan()">Cancel</button>
                         </span>
                     </template>
+                    <template x-if="planPaused">
+                        <span class="plan-actions">
+                            <button @click="resumeTask()"
+                                    class="btn btn-sm btn-resume"
+                                    :disabled="planPreview !== null || editingStep !== null"
+                                    :title="planPreview !== null ? 'Accept or discard the proposed changes first.' : editingStep !== null ? 'Finish editing the step first.' : ''">
+                                Resume Execution
+                            </button>
+                            <button @click="cancelPausedTask()"
+                                    class="btn btn-sm btn-abort">
+                                Abort Task
+                            </button>
+                        </span>
+                    </template>
                 </div>
-                <template x-for="step in workflowPlan.steps" :key="step.number">
-                    <div class="workflow-step" :class="['ws-' + step.status, selectedWorkflowStep === step.number ? 'ws-selected' : '']"
-                         @click="selectWorkflowStep(step.number)"
-                         style="cursor: pointer;">
-                        <span class="ws-check"
-                              x-text="step.status === 'done' ? '✓' : step.status === 'running' ? '▶' : step.status === 'rebooting' ? '⟳' : step.status === 'escalated' ? '!' : '○'"></span>
-                        <span class="ws-num" x-text="step.number + '.'"></span>
-                        <span class="ws-goal" x-text="step.goal"></span>
+                <template x-if="planPreview">
+                    <div class="plan-preview-banner">
+                        <div class="plan-preview-header">Proposed Changes</div>
+                        <div class="plan-preview-summary">Summary: <span x-text="planPreview.summary"></span></div>
+                        <div class="plan-preview-instruction">Review the highlighted changes and accept or discard.</div>
+                        <div class="plan-preview-actions">
+                            <button type="button" class="btn btn-sm btn-primary" @click="acceptPlanRewrite()">Accept Changes</button>
+                            <button type="button" class="btn btn-sm btn-discard" @click="discardPlanRewrite()">Discard</button>
+                        </div>
                     </div>
                 </template>
+                <template x-for="diffEntry in computedDiff" :key="diffEntry.key">
+                    <div>
+                        <div class="workflow-step"
+                             :class="['ws-' + (diffEntry.status || 'pending'),
+                                      diffEntry.diffState ? 'ws-diff-' + diffEntry.diffState : '',
+                                      selectedWorkflowStep === diffEntry.number ? 'ws-selected' : '',
+                                      planPaused && diffEntry.status === 'done' ? 'ws-step-completed-lock' : '']"
+                             @click="planPaused && diffEntry.status === 'done' ? null : selectWorkflowStep(diffEntry.number)"
+                             style="cursor: pointer;">
+                            <span class="ws-check"
+                                  x-text="diffEntry.status === 'done' ? '✓' : diffEntry.status === 'running' ? '▶' : diffEntry.status === 'rebooting' ? '⟳' : diffEntry.status === 'escalated' ? '!' : '○'"></span>
+                            <span class="ws-num" x-text="diffEntry.number + '.'"></span>
+
+                            <!-- Manually-edited marker (persists outside preview) -->
+                            <template x-if="diffEntry.edited && !diffEntry.diffState">
+                                <span class="ws-pill ws-pill-edited">&#x270E; edited</span>
+                            </template>
+
+                            <!-- Phase 7: Paused step pill -->
+                            <template x-if="diffEntry.status === 'partial'">
+                                <span class="ws-pill ws-pill-partial">PAUSED</span>
+                            </template>
+
+                            <!-- Diff pills (preview state only) -->
+                            <template x-if="diffEntry.diffState === 'added'">
+                                <span class="ws-pill ws-pill-added">+ NEW</span>
+                            </template>
+                            <template x-if="diffEntry.diffState === 'removed'">
+                                <span class="ws-pill ws-pill-removed">&mdash; REMOVED</span>
+                            </template>
+                            <template x-if="diffEntry.diffState === 'modified'">
+                                <span class="ws-pill ws-pill-modified">&#x270E; MODIFIED</span>
+                            </template>
+
+                            <!-- Editable goal text (in-place textarea when editing) -->
+                            <template x-if="editingStep !== diffEntry.number">
+                                <span class="ws-goal"
+                                      :class="[diffEntry.diffState === 'removed' ? 'ws-goal-strike' : '',
+                                               !planExecuting ? 'ws-goal-editable' : '']"
+                                      @click.stop="planExecuting || (planPaused && diffEntry.status === 'done') ? null : beginEditStep(diffEntry)"
+                                      :title="planExecuting ? '' : 'Click to edit'"
+                                      x-text="diffEntry.goal"></span>
+                            </template>
+                            <template x-if="editingStep === diffEntry.number">
+                                <textarea class="ws-goal-editor"
+                                          x-model="editingDraft"
+                                          x-ref="editingTextarea"
+                                          @click.stop
+                                          @keydown.enter.prevent="saveEditStep()"
+                                          @keydown.escape.prevent="cancelEditStep()"
+                                          @blur="saveEditStep()"
+                                          :aria-label="'Edit step ' + diffEntry.number + ' goal'"></textarea>
+                            </template>
+
+                            <!-- Phase 6: fraction badge after step completes -->
+                            <template x-if="diffEntry.actions_used !== undefined">
+                                <span class="ws-budget"
+                                      :class="diffEntry.expected_actions != null && diffEntry.expected_actions > 0 && diffEntry.actions_used > diffEntry.expected_actions
+                                          ? 'ws-budget-over'
+                                          : diffEntry.expected_actions != null && diffEntry.expected_actions > 0
+                                              ? 'ws-budget-ok'
+                                              : ''"
+                                      x-text="diffEntry.expected_actions != null && diffEntry.expected_actions > 0
+                                          ? diffEntry.actions_used + '/' + diffEntry.expected_actions + ' actions'
+                                          : diffEntry.actions_used + ' used'"
+                                      :title="diffEntry.expected_actions != null && diffEntry.expected_actions > 0
+                                          ? 'Used ' + diffEntry.actions_used + ' of ' + diffEntry.expected_actions + ' estimated actions'
+                                          : 'Used ' + diffEntry.actions_used + ' actions (no estimate)'">
+                                </span>
+                            </template>
+                            <!-- Estimate badge before step completes -->
+                            <template x-if="diffEntry.actions_used === undefined && diffEntry.expected_actions !== null && diffEntry.expected_actions !== undefined">
+                                <span class="ws-budget"
+                                      x-text="'~' + diffEntry.expected_actions"
+                                      :title="'Estimated ' + diffEntry.expected_actions + ' actions for this step'">
+                                </span>
+                            </template>
+
+                            <!-- Delete x button (hidden during preview or active inline edit) -->
+                            <template x-if="(planPending || planPaused) && !planPreview && editingStep === null">
+                                <button type="button"
+                                        class="ws-delete-btn"
+                                        @click.stop="deletePlanStep(diffEntry.number)"
+                                        title="Delete this step">&times;</button>
+                            </template>
+                        </div>
+
+                        <!-- Modified step: stacked old goal text with inline text diff -->
+                        <template x-if="diffEntry.diffState === 'modified' && Array.isArray(diffEntry.oldSegments)">
+                            <div class="ws-goal-old">
+                                <template x-for="(seg, si) in diffEntry.oldSegments" :key="si">
+                                    <span :class="'ws-seg-' + seg.type" x-text="seg.text"></span>
+                                </template>
+                            </div>
+                        </template>
+
+                        <template x-if="diffEntry.expected_outcome">
+                            <div class="ws-outcome">Expected: <span x-text="diffEntry.expected_outcome"></span></div>
+                        </template>
+
+                        <template x-if="editingStep === diffEntry.number">
+                            <div class="ws-edit-hint">Enter to save &middot; Esc to cancel</div>
+                        </template>
+                    </div>
+                </template>
+
+                <!-- + Add step button (hidden during preview or inline edit) -->
+                <template x-if="(planPending || planPaused) && !planPreview && editingStep === null">
+                    <button type="button" class="ws-add-step-btn" @click="addPlanStep()" title="Append a new empty step">+ Add step</button>
+                </template>
+
+                <!-- Delete confirmation banner (when plan would drop below 2 steps) -->
+                <template x-if="deleteConfirmStep !== null">
+                    <div class="ws-delete-confirm">
+                        <span x-text="deleteConfirmCopy"></span>
+                        <div class="ws-delete-confirm-actions">
+                            <button type="button" class="btn btn-sm btn-danger" @click="confirmDeleteStep()">Delete Step</button>
+                            <button type="button" class="btn btn-sm" @click="deleteConfirmStep = null">Keep Step</button>
+                        </div>
+                    </div>
+                </template>
+                <!-- Plan discussion chat panel (Phase 4, DISCUSS-02) -->
+                <div class="plan-chat" x-show="planPending || planPaused">
+                    <div class="plan-chat-header">Discuss Plan</div>
+
+                    <div class="plan-chat-messages" x-ref="chatMessages">
+                        <template x-if="chatHistory.length === 0 && !chatInFlight && !chatError">
+                            <div class="plan-chat-empty">
+                                <template x-if="planMode === 'ask'">
+                                    <div>
+                                        <div>Ask a question about this plan.</div>
+                                        <div class="plan-chat-empty-hint">The agent will answer using the plan and the captured screen.</div>
+                                    </div>
+                                </template>
+                                <template x-if="planMode === 'modify'">
+                                    <div>
+                                        <div>Describe how you want to change the plan.</div>
+                                        <div class="plan-chat-empty-hint">For example: "use Win+R instead of clicking Start" or "merge steps 3 and 4".</div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+
+                        <template x-for="(msg, idx) in chatHistory" :key="idx">
+                            <div class="plan-chat-msg" :class="'plan-chat-msg-' + msg.role">
+                                <span class="chat-role" x-text="msg.role === 'user' ? 'You' : 'Agent'"></span>
+                                <span class="chat-body" x-text="msg.text"></span>
+                            </div>
+                        </template>
+
+                        <template x-if="chatInFlight">
+                            <div class="plan-chat-msg plan-chat-msg-agent plan-chat-loading">
+                                <span class="chat-role">Agent</span>
+                                <span class="chat-body">Agent is thinking<span class="chat-dots"></span></span>
+                            </div>
+                        </template>
+
+                        <template x-if="chatError">
+                            <div class="plan-chat-error" x-text="chatError"></div>
+                        </template>
+                    </div>
+
+                    <div class="plan-mode-toggle" role="tablist" aria-label="Chat mode">
+                        <button type="button"
+                                class="plan-mode-pill"
+                                :class="{ 'plan-mode-pill-active': planMode === 'ask' }"
+                                @click="planMode = 'ask'"
+                                role="tab"
+                                :aria-selected="planMode === 'ask'"
+                                title="Ask a question about the plan">Ask</button>
+                        <button type="button"
+                                class="plan-mode-pill"
+                                :class="{ 'plan-mode-pill-active': planMode === 'modify' }"
+                                @click="planMode = 'modify'"
+                                role="tab"
+                                :aria-selected="planMode === 'modify'"
+                                title="Request a change to the plan">Modify</button>
+                    </div>
+                    <form class="plan-chat-input-row" @submit.prevent="sendChatMessage()">
+                        <input type="text"
+                               class="plan-chat-input"
+                               :placeholder="planMode === 'modify' ? 'Describe a change\u2026' : 'Ask about the plan\u2026'"
+                               x-model="chatInput"
+                               x-ref="chatInput"
+                               :disabled="chatInFlight || planPreview !== null"
+                               @keydown.enter.prevent="sendChatMessage()">
+                        <button type="submit"
+                                class="btn btn-sm btn-primary"
+                                :disabled="chatInFlight || !chatInput.trim() || planPreview !== null"
+                                x-text="chatInFlight ? (planMode === 'modify' ? 'Thinking\u2026' : 'Asking\u2026') : (planMode === 'modify' ? 'Request Change' : 'Ask Agent')"></button>
+                    </form>
+                </div>
                 <template x-if="!planPending && selectedWorkflowStep !== null">
                     <div class="ws-filter-hint" @click="selectedWorkflowStep = null" style="cursor: pointer;">
                         Showing actions for step <span x-text="selectedWorkflowStep"></span>. Click to show all.

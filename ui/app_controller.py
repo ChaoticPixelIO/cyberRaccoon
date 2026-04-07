@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
 
+from agent.planner import PlanStep, RewriteResult
 from agent.vision_agent import TaskResult, TaskStatus, VisionAgent
 from agent.protocols import create_protocol
 from capture import create_capture
@@ -97,7 +98,146 @@ class AppEvent:
     timestamp: float = field(default_factory=time.monotonic)
 
 
+@dataclass
+class PlanDiscussionState:
+    """Cached state during plan review, used for chat grounding and
+    (Phase 5) plan modification.
+
+    Populated when a plan_ready workflow event fires. Cleared on
+    task_finished or task_started (defensive). Readers must hold
+    AppController._lock; long-running operations (LLM calls) copy
+    the reference out of the lock first.
+
+    Phase 4 fields:
+        task_goal: The original task the plan was produced for.
+        steps: The numbered plan steps (CURRENT — executes on Approve).
+        screenshot_base64: The screenshot the planner used.
+        skill_text: The skill markdown loaded for this task, if any.
+        chat_history: Accumulated conversation turns.
+
+    Phase 5 fields (DISCUSS-03/04):
+        previous_steps: The plan one modification ago, for diff rendering
+            after a committed manual edit or an accepted rewrite. None
+            until the first modification is committed.
+        pending_rewrite: LLM-proposed replacement plan awaiting the user's
+            Accept/Discard decision. When non-None the UI is in preview
+            state and all mutation methods except accept/discard refuse.
+            Never mutates ``steps`` until Accept.
+        edited_step_numbers: Step numbers that have been manually edited
+            or newly added. Drives the ``edited`` pill in the UI.
+            [REVIEWS HIGH-2] After delete/renumber, markers are remapped
+            to new positions — never left pointing at stale numbers.
+        plan_version: Monotonic counter incremented on every committed
+            mutation (edit, add, delete, accept_rewrite). Threaded into
+            WorkflowRunner and WebSocket payloads for stale-state
+            detection. [REVIEWS HIGH-1]
+
+    State machine invariants [REVIEWS HIGH-4]:
+        IDLE (no preview):
+            steps = current committed plan (what executes on Approve)
+            pending_rewrite = None
+            previous_steps = last committed plan before current (or None)
+        PREVIEW (LLM rewrite proposed, awaiting Accept/Discard):
+            steps = unchanged live plan (still executes if somehow approved)
+            pending_rewrite = LLM proposal (not yet committed)
+            previous_steps = unchanged from before preview entry
+            Approve button DISABLED in UI
+            All mutation methods EXCEPT accept/discard REFUSE
+        POST-EDIT (after any committed mutation):
+            steps = updated plan (executes on next Approve)
+            pending_rewrite = None
+            previous_steps = plan before this most recent edit
+    """
+
+    task_goal: str
+    steps: list[PlanStep]
+    screenshot_base64: str
+    skill_text: str | None = None
+    chat_history: list[dict[str, str]] = field(default_factory=list)
+    previous_steps: list[PlanStep] | None = None
+    pending_rewrite: list[PlanStep] | None = None
+    edited_step_numbers: set[int] = field(default_factory=set)
+    plan_version: int = 0
+    completed_step_count: int = 0              # Phase 7: number of completed steps when paused
+    completed_step_numbers: set[int] = field(default_factory=set)  # Phase 7: step numbers that are done (addresses review HIGH-2: stable identity, not index-based)
+
+
 AppEventListener = Callable[[AppEvent], None]
+
+
+def _step_to_dict(step: PlanStep) -> dict[str, Any]:
+    """Serialize a PlanStep to a dict for WebSocket broadcast.
+
+    Phase 5 helper: the frontend expects the same shape it already
+    receives in the ``plan_ready`` event (ui/web/static/app.js
+    handleWorkflowEvent plan_ready case), so mutation broadcasts use
+    this exact mapping.
+    """
+    return {
+        "number": step.number,
+        "goal": step.goal,
+        "reboot_expected": step.reboot_expected,
+        "expected_actions": step.expected_actions,
+        "expected_outcome": step.expected_outcome,
+    }
+
+
+def _clone_steps(steps: list[PlanStep]) -> list[PlanStep]:
+    """Deep-copy a list of PlanStep instances.
+
+    Phase 5 helper: used to snapshot ``steps`` into ``previous_steps``
+    on every committed mutation so the diff view can render against a
+    stable prior version. PlanStep fields are all scalars (no nested
+    mutable state) so a field-by-field copy is sufficient.
+    """
+    return [
+        PlanStep(
+            number=s.number,
+            goal=s.goal,
+            reboot_expected=s.reboot_expected,
+            expected_outcome=s.expected_outcome,
+            expected_actions=s.expected_actions,
+        )
+        for s in steps
+    ]
+
+
+def _validate_completed_step_lock(
+    original_steps: list[PlanStep],
+    proposed_steps: list[PlanStep],
+    completed_numbers: set[int],
+) -> str | None:
+    """Return error message if any completed step was modified, else None.
+
+    Per D-08: backend enforces completed-step lock. Hard guarantee --
+    prompt-only protection is not sufficient.
+
+    Lock semantics:
+    - Step identity is by number (int)
+    - Immutability scope: goal field only (text the user sees)
+    - Rejects: goal modified, step removed, step renumbered (detected as
+      missing or changed goal at the original number)
+    """
+    if not completed_numbers:
+        return None
+    original_by_num = {
+        s.number: s.goal for s in original_steps
+        if s.number in completed_numbers
+    }
+    # Check that all completed steps are still present with unchanged goals
+    proposed_by_num = {s.number: s.goal for s in proposed_steps}
+    for num, original_goal in original_by_num.items():
+        if num not in proposed_by_num:
+            return (
+                "Cannot modify completed steps. Only remaining "
+                "steps can be changed during a paused task."
+            )
+        if proposed_by_num[num] != original_goal:
+            return (
+                "Cannot modify completed steps. Only remaining "
+                "steps can be changed during a paused task."
+            )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +323,13 @@ class AppController:
         self._task_result: TaskResult | None = None
         self._task_goal: str = ""
 
+        # Plan discussion state (Phase 4 — DISCUSS-02)
+        self._plan_discussion: PlanDiscussionState | None = None
+        self._current_skill_text: str | None = None
+        # Optional test hook: override the factory that builds a TaskPlanner
+        # for chat calls. When None, the real factory is used.
+        self._chat_planner_factory: Callable[[], Any] | None = None
+
         # Events
         self._listeners: list[AppEventListener] = []
 
@@ -214,6 +361,18 @@ class AppController:
 
     def _emit(self, event: AppEvent) -> None:
         """Broadcast an event to all registered listeners."""
+        # Clear plan discussion state on task lifecycle boundaries (D-05, D-13)
+        if event.type in (
+            AppEventType.TASK_FINISHED,
+            AppEventType.TASK_STARTED,
+        ):
+            with self._lock:
+                if self._plan_discussion is not None:
+                    self._plan_discussion = None
+                    logger.debug(
+                        "PlanDiscussion: cleared on %s",
+                        event.type.value,
+                    )
         with self._lock:
             listeners = list(self._listeners)
         for fn in listeners:
@@ -731,12 +890,107 @@ class AppController:
             agent.abort()
             logger.info("Task abort requested")
 
-    def approve_plan(self) -> None:
-        """Approve the pending workflow plan. Unblocks execution."""
+    def pause_task(self) -> bool:
+        """Request the running task to pause at the next opportunity (D-02).
+
+        Returns True if the pause request was accepted (agent exists and is running).
+        Returns False if no task is running (invalid state for pause).
+
+        Uses agent.pause() public API -- does NOT access _pause_event directly.
+        Addresses review HIGH-3 (control ownership / layer leakage).
+        """
         with self._lock:
             agent = self._agent
+        if agent and hasattr(agent, 'pause'):
+            agent.pause()
+            logger.info("Task pause requested")
+            return True
+        logger.debug("pause_task: no running agent, ignoring")
+        return False
+
+    def resume_task(self) -> bool:
+        """Resume a paused task, pushing any plan modifications (D-08, D-09).
+
+        Returns True if resume was accepted (agent exists and has a runner with resume).
+        Returns False if not in a resumable state.
+
+        Follows the same pattern as approve_plan(): push modified steps
+        via set_current_plan() before unblocking the gate. Resume does
+        NOT emit TASK_STARTED (Pitfall 2 -- would clear PlanDiscussionState).
+        """
+        with self._lock:
+            agent = self._agent
+            state = self._plan_discussion
+        if not (agent and hasattr(agent, '_workflow_runner') and agent._workflow_runner):
+            logger.debug("resume_task: no running agent/runner, ignoring")
+            return False
+        runner = agent._workflow_runner
+        if not hasattr(runner, 'resume'):
+            logger.debug("resume_task: runner has no resume method")
+            return False
+
+        if state is not None and hasattr(runner, 'set_current_plan'):
+            # Push only remaining (non-completed) steps as the override.
+            # Uses completed_step_numbers set for stable identity (review HIGH-2).
+            remaining = [
+                s for s in state.steps
+                if s.number not in state.completed_step_numbers
+            ]
+            runner.set_current_plan(
+                remaining,
+                plan_version=state.plan_version,
+            )
+            logger.info(
+                "Workflow: pushed %d remaining steps (version=%d) "
+                "to runner before resume",
+                len(remaining),
+                state.plan_version,
+            )
+
+        runner.resume()
+        logger.info("Task resumed")
+        return True
+
+    def cancel_paused_task(self) -> None:
+        """Cancel a paused task entirely (D-07). Delegates to abort."""
+        self.abort_task()
+        logger.info("Paused task cancelled (aborted)")
+
+    def approve_plan(self) -> None:
+        """Approve the pending workflow plan. Unblocks execution.
+
+        Phase 5 (DISCUSS-03/04, Integration Strategy A): before unblocking
+        the approval gate, push the current (possibly modified)
+        PlanDiscussionState.steps into the WorkflowRunner via
+        set_current_plan(). Without this push, the runner would execute
+        the original plan it captured at plan_ready time, ignoring any
+        LLM rewrites or manual edits the user made in the UI.
+
+        If no PlanDiscussionState is cached (e.g., in auto-approve mode
+        or unusual test paths), fall through to the original behavior
+        of just unblocking the gate.
+        """
+        with self._lock:
+            agent = self._agent
+            state = self._plan_discussion
         if agent and hasattr(agent, '_workflow_runner') and agent._workflow_runner:
-            agent._workflow_runner.approve_plan()
+            runner = agent._workflow_runner
+            if state is not None and hasattr(runner, 'set_current_plan'):
+                # Phase 5 Integration Strategy A: push the current plan
+                # (which may include LLM rewrite acceptances and manual
+                # edits made after plan_ready was broadcast) into the
+                # runner before the approval Event fires.
+                runner.set_current_plan(
+                    list(state.steps),
+                    plan_version=state.plan_version,
+                )
+                logger.info(
+                    "Workflow: pushed %d steps (version=%d) to runner"
+                    " before approve",
+                    len(state.steps),
+                    state.plan_version,
+                )
+            runner.approve_plan()
             logger.info("Workflow plan approved")
 
     def reject_plan(self) -> None:
@@ -746,6 +1000,454 @@ class AppController:
         if agent and hasattr(agent, '_workflow_runner') and agent._workflow_runner:
             agent._workflow_runner.reject_plan()
             logger.info("Workflow plan rejected")
+
+    def chat_about_plan(self, question: str) -> str | None:
+        """Answer a user question about the pending plan.
+
+        Returns None if no plan is currently pending or the LLM call fails.
+        Appends both the question and the answer to the cached chat_history
+        so follow-up questions have context. Stateless across tasks.
+
+        Thread safety: the cached state reference is copied out of self._lock
+        before the LLM call so the long-running network request does not hold
+        the lock. The final history mutation re-acquires the lock and guards
+        against mid-call cache replacement (Pitfall 7).
+
+        Args:
+            question: The user's latest question about the plan.
+
+        Returns:
+            The LLM's answer as a plain-text string, or None.
+        """
+        # Copy the reference out of the lock — the LLM call is long-running
+        # and we must not hold self._lock during it (Pitfall 7).
+        with self._lock:
+            state = self._plan_discussion
+            chat_planner_factory = self._chat_planner_factory
+        if state is None:
+            logger.debug("chat_about_plan: no plan cached, returning None")
+            return None
+
+        # Build a planner for this chat call. In tests, a factory override
+        # can inject a fake planner without importing TaskPlanner.
+        planner: Any
+        if chat_planner_factory is not None:
+            planner = chat_planner_factory()
+        else:
+            try:
+                from agent.planner import TaskPlanner
+                config = self.get_config()
+                planner = TaskPlanner(
+                    provider=config.llm.provider,
+                    model=config.llm.model,
+                    api_key=config.llm.api_key,
+                    base_url=config.llm.base_url,
+                )
+            except Exception as e:
+                logger.error(
+                    "chat_about_plan: failed to build planner: %s", e,
+                )
+                return None
+
+        try:
+            answer = planner.chat_about_plan(
+                task_goal=state.task_goal,
+                steps=state.steps,
+                screenshot_base64=state.screenshot_base64,
+                history=list(state.chat_history),  # pass a copy
+                new_question=question,
+                skill_text=state.skill_text,
+            )
+        except Exception as e:
+            logger.error("chat_about_plan: planner call raised: %s", e)
+            return None
+
+        if answer is None:
+            logger.warning("chat_about_plan: planner returned None")
+            return None
+
+        # Mutate the cached history under lock. Guard against the cache
+        # having been replaced or cleared mid-call (new plan / task finished).
+        with self._lock:
+            current = self._plan_discussion
+            if current is state:
+                current.chat_history.append(
+                    {"role": "user", "content": question},
+                )
+                current.chat_history.append(
+                    {"role": "assistant", "content": answer},
+                )
+            else:
+                logger.debug(
+                    "chat_about_plan: state replaced mid-call; "
+                    "discarding history update",
+                )
+        return answer
+
+    # ------------------------------------------------------------------
+    # Phase 5: Plan Modification (DISCUSS-03, DISCUSS-04)
+    # ------------------------------------------------------------------
+
+    def request_plan_rewrite(
+        self, modification_request: str,
+    ) -> RewriteResult | None:
+        """Ask the planner to rewrite the cached plan. Does NOT mutate steps.
+
+        On success with ``action="rewrite"``, stores the proposal in
+        ``pending_rewrite`` (not ``steps``) and broadcasts
+        ``plan_modification_proposed``. On ``action="no_change"``,
+        broadcasts ``plan_rewrite_no_change`` with the LLM's explanation.
+        On failure (None return), broadcasts ``plan_rewrite_error``.
+
+        Refuses (returns None) if no plan is cached or if a preview is
+        already active (``pending_rewrite is not None``).
+
+        Thread safety: state reference copied out of lock, LLM call
+        outside lock, final mutation under lock with stale-state guard
+        (same pattern as :meth:`chat_about_plan`, RESEARCH.md Pitfall 3).
+        """
+        with self._lock:
+            state = self._plan_discussion
+            chat_planner_factory = self._chat_planner_factory
+        if state is None:
+            logger.debug("request_plan_rewrite: no plan cached")
+            return None
+        if state.pending_rewrite is not None:
+            logger.warning(
+                "request_plan_rewrite: preview already active, refusing",
+            )
+            return None
+
+        # Snapshot fields needed for the LLM call.
+        steps_snapshot = list(state.steps)
+        task_goal = state.task_goal
+        screenshot = state.screenshot_base64
+        skill_text = state.skill_text
+        completed_numbers = (
+            set(state.completed_step_numbers)
+            if state.completed_step_numbers else set()
+        )
+
+        # Build a planner (test hook or real factory, same as chat).
+        planner: Any
+        if chat_planner_factory is not None:
+            planner = chat_planner_factory()
+        else:
+            try:
+                from agent.planner import TaskPlanner
+                config = self.get_config()
+                planner = TaskPlanner(
+                    provider=config.llm.provider,
+                    model=config.llm.model,
+                    api_key=config.llm.api_key,
+                    base_url=config.llm.base_url,
+                )
+            except Exception as e:
+                logger.error(
+                    "request_plan_rewrite: failed to build planner: %s", e,
+                )
+                return None
+
+        # LLM call OUTSIDE the lock.
+        try:
+            result = planner.rewrite_plan(
+                task_goal=task_goal,
+                current_steps=steps_snapshot,
+                screenshot_base64=screenshot,
+                modification_request=modification_request,
+                skill_text=skill_text,
+                completed_step_numbers=completed_numbers if completed_numbers else None,
+            )
+        except Exception as e:
+            logger.error(
+                "request_plan_rewrite: planner call raised: %s", e,
+            )
+            return None
+
+        if result is None:
+            logger.warning(
+                "request_plan_rewrite: planner returned None",
+            )
+            self._emit(AppEvent(
+                type=AppEventType.WORKFLOW_EVENT,
+                data={
+                    "type": "plan_rewrite_error",
+                    "message": (
+                        "The model returned an unexpected response. "
+                        "Try rephrasing your request."
+                    ),
+                },
+            ))
+            return None
+
+        # Mutate under lock with stale-state guard (Pitfall 3).
+        broadcast_data: dict[str, Any] | None = None
+        with self._lock:
+            current = self._plan_discussion
+            if current is not state:
+                logger.debug(
+                    "request_plan_rewrite: state replaced mid-call, "
+                    "discarding",
+                )
+                return result
+            if result.action == "rewrite" and result.steps:
+                # D-08: Validate completed-step lock
+                if completed_numbers:
+                    lock_error = _validate_completed_step_lock(
+                        steps_snapshot, result.steps, completed_numbers,
+                    )
+                    if lock_error:
+                        logger.warning(
+                            "request_plan_rewrite: completed-step lock violated",
+                        )
+                        self._emit(AppEvent(
+                            type=AppEventType.WORKFLOW_EVENT,
+                            data={
+                                "type": "plan_rewrite_error",
+                                "message": lock_error,
+                            },
+                        ))
+                        return None
+                current.pending_rewrite = list(result.steps)
+                broadcast_data = {
+                    "type": "plan_modification_proposed",
+                    "current_steps": [
+                        _step_to_dict(s) for s in current.steps
+                    ],
+                    "proposed_steps": [
+                        _step_to_dict(s) for s in result.steps
+                    ],
+                    "summary": result.summary or "",
+                }
+            elif result.action == "no_change":
+                broadcast_data = {
+                    "type": "plan_rewrite_no_change",
+                    "message": result.message or "",
+                }
+
+        # Broadcast outside the lock.
+        if broadcast_data is not None:
+            self._emit(AppEvent(
+                type=AppEventType.WORKFLOW_EVENT,
+                data=broadcast_data,
+            ))
+        return result
+
+    def accept_plan_rewrite(self) -> bool:
+        """Commit the pending rewrite to live steps.
+
+        Pushes current ``steps`` into ``previous_steps`` and replaces
+        ``steps`` with ``pending_rewrite``, then clears ``pending_rewrite``.
+        Broadcasts ``plan_modified`` with ``reason=accept_rewrite``.
+
+        Returns:
+            True on success, False if no preview is active.
+        """
+        broadcast_steps: list[dict[str, Any]] | None = None
+        edited: list[int] = []
+        with self._lock:
+            state = self._plan_discussion
+            if state is None or state.pending_rewrite is None:
+                return False
+            state.previous_steps = _clone_steps(state.steps)
+            state.steps = list(state.pending_rewrite)
+            state.pending_rewrite = None
+            # Clear edited markers — the plan is now LLM-authored again.
+            state.edited_step_numbers = set()
+            state.plan_version += 1  # [REVIEWS HIGH-1]
+            broadcast_steps = [_step_to_dict(s) for s in state.steps]
+            edited = list(state.edited_step_numbers)
+        self._emit(AppEvent(
+            type=AppEventType.WORKFLOW_EVENT,
+            data={
+                "type": "plan_modified",
+                "reason": "accept_rewrite",
+                "steps": broadcast_steps,
+                "edited_step_numbers": edited,
+                "plan_version": state.plan_version,  # [REVIEWS HIGH-1]
+            },
+        ))
+        return True
+
+    def discard_plan_rewrite(self) -> bool:
+        """Drop the pending rewrite without mutating steps.
+
+        Returns:
+            True on success, False if no preview is active.
+        """
+        with self._lock:
+            state = self._plan_discussion
+            if state is None or state.pending_rewrite is None:
+                return False
+            state.pending_rewrite = None
+        self._emit(AppEvent(
+            type=AppEventType.WORKFLOW_EVENT,
+            data={"type": "plan_rewrite_discarded"},
+        ))
+        return True
+
+    def edit_plan_step(
+        self, step_number: int, new_goal: str,
+    ) -> bool:
+        """Save a manual inline edit to a step's goal text.
+
+        Pushes current steps to previous_steps for one-step-back history.
+        Marks the step number as edited (drives the ``edited`` pill).
+        Broadcasts ``plan_modified`` with ``reason=manual_edit``.
+
+        Returns:
+            True on success; False if no plan cached, preview active,
+            or step_number not found.
+        """
+        broadcast_steps: list[dict[str, Any]] | None = None
+        edited: list[int] = []
+        with self._lock:
+            state = self._plan_discussion
+            if state is None or state.pending_rewrite is not None:
+                return False
+            # Phase 7: completed steps are non-editable in paused state (D-06)
+            # Uses completed_step_numbers set for stable identity (review HIGH-2)
+            if step_number in state.completed_step_numbers:
+                logger.debug(
+                    "edit_plan_step: step %d is completed (locked), refusing",
+                    step_number,
+                )
+                return False
+            idx = next(
+                (i for i, s in enumerate(state.steps)
+                 if s.number == step_number),
+                None,
+            )
+            if idx is None:
+                return False
+            state.previous_steps = _clone_steps(state.steps)
+            old = state.steps[idx]
+            state.steps[idx] = PlanStep(
+                number=old.number,
+                goal=new_goal.strip(),
+                reboot_expected=old.reboot_expected,
+                expected_outcome=old.expected_outcome,
+                expected_actions=old.expected_actions,
+            )
+            state.edited_step_numbers.add(step_number)
+            state.plan_version += 1  # [REVIEWS HIGH-1]
+            broadcast_steps = [_step_to_dict(s) for s in state.steps]
+            edited = sorted(state.edited_step_numbers)
+        self._emit(AppEvent(
+            type=AppEventType.WORKFLOW_EVENT,
+            data={
+                "type": "plan_modified",
+                "reason": "manual_edit",
+                "steps": broadcast_steps,
+                "edited_step_numbers": edited,
+                "plan_version": state.plan_version,  # [REVIEWS HIGH-1]
+            },
+        ))
+        return True
+
+    def add_plan_step(self) -> bool:
+        """Append a blank step to the plan.
+
+        The new step has number = max_existing + 1, empty goal, no
+        metadata. User is expected to inline-edit it immediately. The
+        new step number is added to ``edited_step_numbers``.
+
+        Returns:
+            True on success; False if no plan cached or preview active.
+        """
+        broadcast_steps: list[dict[str, Any]] | None = None
+        edited: list[int] = []
+        with self._lock:
+            state = self._plan_discussion
+            if state is None or state.pending_rewrite is not None:
+                return False
+            state.previous_steps = _clone_steps(state.steps)
+            next_num = (
+                max((s.number for s in state.steps), default=0) + 1
+            )
+            state.steps.append(PlanStep(
+                number=next_num,
+                goal="",
+                reboot_expected=False,
+                expected_outcome="",
+                expected_actions=None,
+            ))
+            state.edited_step_numbers.add(next_num)
+            state.plan_version += 1  # [REVIEWS HIGH-1]
+            broadcast_steps = [_step_to_dict(s) for s in state.steps]
+            edited = sorted(state.edited_step_numbers)
+        self._emit(AppEvent(
+            type=AppEventType.WORKFLOW_EVENT,
+            data={
+                "type": "plan_modified",
+                "reason": "add",
+                "steps": broadcast_steps,
+                "edited_step_numbers": edited,
+                "plan_version": state.plan_version,  # [REVIEWS HIGH-1]
+            },
+        ))
+        return True
+
+    def delete_plan_step(self, step_number: int) -> bool:
+        """Remove a step and renumber the remainder.
+
+        After deletion, remaining steps are renumbered sequentially
+        starting at 1. The deleted number is removed from
+        ``edited_step_numbers`` (if present).
+
+        Returns:
+            True on success; False if no plan cached, preview active,
+            or step_number not found.
+        """
+        broadcast_steps: list[dict[str, Any]] | None = None
+        edited: list[int] = []
+        with self._lock:
+            state = self._plan_discussion
+            if state is None or state.pending_rewrite is not None:
+                return False
+            # Phase 7: completed steps are non-deletable in paused state (D-06)
+            if step_number in state.completed_step_numbers:
+                return False
+            idx = next(
+                (i for i, s in enumerate(state.steps)
+                 if s.number == step_number),
+                None,
+            )
+            if idx is None:
+                return False
+            state.previous_steps = _clone_steps(state.steps)
+            # Preserve edited markers for steps OTHER than the one deleted,
+            # remapped to their new numbers.
+            old_edited = {n for n in state.edited_step_numbers if n != step_number}
+            del state.steps[idx]
+            # Renumber sequentially 1..N.
+            remapped_edited: set[int] = set()
+            for i, s in enumerate(state.steps):
+                new_num = i + 1
+                if s.number in old_edited:
+                    remapped_edited.add(new_num)
+                state.steps[i] = PlanStep(
+                    number=new_num,
+                    goal=s.goal,
+                    reboot_expected=s.reboot_expected,
+                    expected_outcome=s.expected_outcome,
+                    expected_actions=s.expected_actions,
+                )
+            state.edited_step_numbers = remapped_edited
+            state.plan_version += 1  # [REVIEWS HIGH-1]
+            broadcast_steps = [_step_to_dict(s) for s in state.steps]
+            edited = sorted(state.edited_step_numbers)
+        self._emit(AppEvent(
+            type=AppEventType.WORKFLOW_EVENT,
+            data={
+                "type": "plan_modified",
+                "reason": "delete",
+                "steps": broadcast_steps,
+                "edited_step_numbers": edited,
+                "plan_version": state.plan_version,  # [REVIEWS HIGH-1]
+            },
+        ))
+        return True
 
     def resolve_escalation(self) -> None:
         """Signal that the user resolved an escalation. Unblocks workflow."""
@@ -796,7 +1498,11 @@ class AppController:
                 return
 
             config = self.get_config()
-            use_workflow = bool(config.agent.skills)
+            # Phase 4 (DISCUSS-05): force workflow mode for ALL tasks so the
+            # approval gate protects every task, including skilless ones.
+            # The planner handles skilless tasks via its single-step fallback
+            # in TaskPlanner.plan().
+            use_workflow = True
 
             if use_workflow:
                 # Plan-then-execute: planner decomposes task into steps,
@@ -818,6 +1524,12 @@ class AppController:
                         skill_text = load_skills(config.agent.skills)
                     except Exception as e:
                         logger.warning("Failed to load skills for planner: %s", e)
+
+                # Expose skill_text to the plan discussion cache so the chat
+                # method can include it in its LLM call (D-05). The finally
+                # block below guarantees cleanup on every exit path.
+                with self._lock:
+                    self._current_skill_text = skill_text
 
                 workflow_result = agent.run_workflow(
                     task_goal=goal,
@@ -861,6 +1573,11 @@ class AppController:
                         "steps_total": workflow_result.steps_total,
                     },
                 ))
+            # [REVIEWS: HIGH-1] Phase 4: unreachable — use_workflow is forced
+            # True above so every task goes through the workflow path (skill
+            # or no skill). Kept for reference so module CLI (agent/cli.py)
+            # and any future direct-invocation callers have a precedent to
+            # copy. Do NOT reach this branch from _run_task.
             else:
                 result = agent.run(goal, on_step=self._on_step_bridge)
 
@@ -895,6 +1612,13 @@ class AppController:
                 type=AppEventType.TASK_FINISHED,
                 data={"status": "failed", "reason": str(e)},
             ))
+        finally:
+            # [REVIEWS: MEDIUM-1] Guaranteed cleanup on every exit path.
+            with self._lock:
+                self._current_skill_text = None
+                self._plan_discussion = None
+                # Relying on TASK_FINISHED alone would leave a race window
+                # between workflow end and event dispatch, so clear here too.
 
     def _on_step_bridge(self, step_info: dict[str, Any]) -> None:
         """Bridge VisionAgent's on_step callback to the event system.
@@ -902,9 +1626,119 @@ class AppController:
         Distinguishes between workflow-level events (plan_ready, step_start,
         step_done, etc.) and per-action agent events (screenshots, clicks).
         Workflow events go as 'workflow_event', agent events as 'task_step'.
+        Also captures plan discussion state on plan_ready for DISCUSS-02.
         """
         if "type" in step_info:
             # Workflow-level event from WorkflowRunner
+            event_type = step_info.get("type")
+            if event_type == "plan_ready":
+                try:
+                    steps = [
+                        PlanStep(
+                            number=s["number"],
+                            goal=s["goal"],
+                            reboot_expected=s.get("reboot_expected", False),
+                            expected_outcome=s.get("expected_outcome", ""),
+                            expected_actions=s.get("expected_actions"),
+                        )
+                        for s in step_info.get("steps", [])
+                    ]
+                    with self._lock:
+                        skill_text_snapshot = self._current_skill_text
+                    new_state = PlanDiscussionState(
+                        task_goal=step_info.get("task_goal", ""),
+                        steps=steps,
+                        screenshot_base64=step_info.get(
+                            "screenshot_base64", "",
+                        ),
+                        skill_text=skill_text_snapshot,
+                        chat_history=[],
+                        previous_steps=None,
+                        pending_rewrite=None,
+                        edited_step_numbers=set(),
+                        plan_version=0,
+                    )
+                    with self._lock:
+                        self._plan_discussion = new_state
+                    logger.debug(
+                        "PlanDiscussion: cached state for %d steps",
+                        len(steps),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to cache plan discussion state: %s — "
+                        "plan chat and modification will be unavailable", e,
+                    )
+                    step_info["discussion_unavailable"] = True
+
+            elif event_type == "task_paused":
+                try:
+                    steps_data = step_info.get("steps", [])
+                    steps = [
+                        PlanStep(
+                            number=s["number"],
+                            goal=s["goal"],
+                            reboot_expected=s.get("reboot_expected", False),
+                            expected_outcome=s.get("expected_outcome", ""),
+                            expected_actions=s.get("expected_actions"),
+                        )
+                        for s in steps_data
+                    ]
+                    completed_count = step_info.get("steps_completed", 0)
+                    screenshot = step_info.get("screenshot_base64", "")
+
+                    # Build the completed_step_numbers set from step status data
+                    # This is the stable identity for completed steps (review HIGH-2)
+                    completed_numbers = {
+                        s["number"]
+                        for s in steps_data
+                        if s.get("status") == "done"
+                    }
+
+                    with self._lock:
+                        skill_text_snapshot = self._current_skill_text
+                        existing_state = self._plan_discussion
+
+                    # Preserve chat history from pre-execution plan review
+                    # (task-scoped, Phase 5 D-14 precedent)
+                    chat_history = (
+                        list(existing_state.chat_history)
+                        if existing_state else []
+                    )
+
+                    new_state = PlanDiscussionState(
+                        task_goal=(
+                            existing_state.task_goal
+                            if existing_state else ""
+                        ),
+                        steps=steps,
+                        screenshot_base64=screenshot,
+                        skill_text=skill_text_snapshot,
+                        chat_history=chat_history,
+                        previous_steps=None,
+                        pending_rewrite=None,
+                        edited_step_numbers=set(),
+                        plan_version=(
+                            existing_state.plan_version
+                            if existing_state else 0
+                        ),
+                        completed_step_count=completed_count,
+                        completed_step_numbers=completed_numbers,
+                    )
+                    with self._lock:
+                        self._plan_discussion = new_state
+                    logger.debug(
+                        "PlanDiscussion: paused state cached -- %d steps, "
+                        "%d completed (numbers: %s)",
+                        len(steps), completed_count, completed_numbers,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to cache paused plan discussion state: %s — "
+                        "plan chat and modification will be unavailable", e,
+                    )
+                    step_info["discussion_unavailable"] = True
+
             self._emit(AppEvent(
                 type=AppEventType.WORKFLOW_EVENT,
                 data=step_info,

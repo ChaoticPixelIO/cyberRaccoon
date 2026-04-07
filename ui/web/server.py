@@ -81,6 +81,29 @@ class SkillContentRequest(BaseModel):
     content: str
 
 
+class ChatRequest(BaseModel):
+    question: str
+
+
+class RewriteRequest(BaseModel):
+    """Body for POST /api/task/request-plan-rewrite (Phase 5, DISCUSS-03)."""
+
+    request: str
+
+
+class EditStepRequest(BaseModel):
+    """Body for POST /api/task/edit-plan-step (Phase 5, DISCUSS-04)."""
+
+    step_number: int
+    new_goal: str
+
+
+class DeleteStepRequest(BaseModel):
+    """Body for POST /api/task/delete-plan-step (Phase 5, DISCUSS-04)."""
+
+    step_number: int
+
+
 # ---------------------------------------------------------------------------
 # WebSocket connection manager
 # ---------------------------------------------------------------------------
@@ -328,6 +351,181 @@ def create_app(controller: AppController) -> FastAPI:
     @app.post("/api/task/resolve-escalation")
     async def resolve_escalation() -> JSONResponse:
         controller.resolve_escalation()
+        return JSONResponse({"status": "ok"})
+
+    # Phase 7 — Pause / Resume / Cancel (CRUISE-03, CRUISE-05)
+    # State validation returns 409 for invalid transitions (review MEDIUM-3).
+
+    @app.post("/api/task/pause")
+    async def pause_task() -> JSONResponse:
+        accepted = controller.pause_task()
+        if not accepted:
+            return JSONResponse(
+                {"status": "error", "message": "No task is currently executing."},
+                status_code=409,
+            )
+        return JSONResponse({"status": "ok"})
+
+    @app.post("/api/task/resume")
+    async def resume_task() -> JSONResponse:
+        accepted = controller.resume_task()
+        if not accepted:
+            return JSONResponse(
+                {"status": "error", "message": "No task is currently paused."},
+                status_code=409,
+            )
+        return JSONResponse({"status": "ok"})
+
+    @app.post("/api/task/cancel")
+    async def cancel_paused_task() -> JSONResponse:
+        controller.cancel_paused_task()
+        return JSONResponse({"status": "ok"})
+
+    @app.post("/api/task/chat-about-plan")
+    async def chat_about_plan_endpoint(req: ChatRequest) -> JSONResponse:
+        """Answer a user question about the pending plan.
+
+        Delegates to AppController.chat_about_plan which uses the cached
+        plan discussion state to ground the answer. Runs the LLM call in
+        a worker thread (asyncio.to_thread) so the FastAPI event loop is
+        never blocked — same pattern as /api/capture/connect.
+        """
+        if not (req.question or "").strip():
+            return JSONResponse(
+                {"status": "error", "message": "Question cannot be blank"},
+                status_code=422,
+            )
+        # The controller call is sync and may block for 1-5s during the LLM call
+        answer = await asyncio.to_thread(
+            controller.chat_about_plan, req.question,
+        )
+        if answer is None:
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "message": "No plan pending or chat call failed",
+                },
+                status_code=503,
+            )
+        return JSONResponse({"status": "ok", "answer": answer})
+
+    # ---- Plan modification API (Phase 5, DISCUSS-03/04) ----
+
+    @app.post("/api/task/request-plan-rewrite")
+    async def request_plan_rewrite_endpoint(
+        req: RewriteRequest,
+    ) -> JSONResponse:
+        """Ask the LLM to rewrite the cached plan (DISCUSS-03).
+
+        The LLM response is a typed RewriteResult. On success the
+        controller broadcasts ``plan_modification_proposed`` (for an
+        actual rewrite) or ``plan_rewrite_no_change`` (for the escape
+        hatch) via WebSocket -- this REST call only acknowledges receipt
+        with the discriminator value so the frontend can distinguish
+        fast failures from the WebSocket branch.
+        """
+        # [REVIEWS MEDIUM] Validate non-blank request at API boundary
+        if not (req.request or "").strip():
+            return JSONResponse(
+                {"status": "error", "message": "Modification request cannot be blank"},
+                status_code=422,
+            )
+        result = await asyncio.to_thread(
+            controller.request_plan_rewrite, req.request,
+        )
+        if result is None:
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "message": "No plan pending or rewrite call failed",
+                },
+                status_code=503,
+            )
+        return JSONResponse(
+            {"status": "ok", "action": result.action},
+        )
+
+    @app.post("/api/task/accept-plan-rewrite")
+    async def accept_plan_rewrite_endpoint() -> JSONResponse:
+        """Commit the pending LLM rewrite to the live plan (DISCUSS-03)."""
+        ok = await asyncio.to_thread(controller.accept_plan_rewrite)
+        if not ok:
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "message": "No pending rewrite to accept",
+                },
+                status_code=409,
+            )
+        return JSONResponse({"status": "ok"})
+
+    @app.post("/api/task/discard-plan-rewrite")
+    async def discard_plan_rewrite_endpoint() -> JSONResponse:
+        """Drop the pending LLM rewrite without mutating the plan.
+
+        Idempotent -- discarding a non-existent preview returns 200 with
+        status=noop rather than 409. This matches the D-13 semantics:
+        Discard is a safe "never mind" action, not an error path.
+        """
+        ok = await asyncio.to_thread(controller.discard_plan_rewrite)
+        return JSONResponse(
+            {"status": "ok" if ok else "noop"},
+        )
+
+    @app.post("/api/task/edit-plan-step")
+    async def edit_plan_step_endpoint(
+        req: EditStepRequest,
+    ) -> JSONResponse:
+        """Save a manual inline edit to a step's goal text (DISCUSS-04)."""
+        # [REVIEWS MEDIUM] Validate at API boundary before controller dispatch
+        if not (req.new_goal or "").strip():
+            return JSONResponse(
+                {"status": "error", "message": "Step goal cannot be blank"},
+                status_code=422,
+            )
+        ok = await asyncio.to_thread(
+            controller.edit_plan_step, req.step_number, req.new_goal,
+        )
+        if not ok:
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "message": "No plan pending or step not found",
+                },
+                status_code=404,
+            )
+        return JSONResponse({"status": "ok"})
+
+    @app.post("/api/task/add-plan-step")
+    async def add_plan_step_endpoint() -> JSONResponse:
+        """Append a blank step to the plan (DISCUSS-04)."""
+        ok = await asyncio.to_thread(controller.add_plan_step)
+        if not ok:
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "message": "No plan pending or preview active",
+                },
+                status_code=409,
+            )
+        return JSONResponse({"status": "ok"})
+
+    @app.post("/api/task/delete-plan-step")
+    async def delete_plan_step_endpoint(
+        req: DeleteStepRequest,
+    ) -> JSONResponse:
+        """Delete a step from the plan and renumber the remainder (DISCUSS-04)."""
+        ok = await asyncio.to_thread(
+            controller.delete_plan_step, req.step_number,
+        )
+        if not ok:
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "message": "No plan pending or step not found",
+                },
+                status_code=404,
+            )
         return JSONResponse({"status": "ok"})
 
     # ---- Status API ----

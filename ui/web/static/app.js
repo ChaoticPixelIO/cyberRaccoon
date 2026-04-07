@@ -53,10 +53,29 @@ function cyberRaccoon() {
         workflowActive: false,
         planPending: false,       // true when plan is ready but not yet approved
         planExecuting: false,     // true when plan is being executed
+        planPaused: false,        // true when task is paused during execution
+        pauseRequested: false,    // true after Pause clicked, before task_paused received (optimistic UI only)
         escalationPending: false, // true when escalation needs user action
         escalationReason: '',     // why the agent escalated
         currentWorkflowStep: 0,  // which workflow step is currently executing
         selectedWorkflowStep: null, // which step the user clicked to filter actions (null = show all)
+
+        // --- Plan Discussion Chat (Phase 4) ---
+        chatHistory: [],          // [{role: 'user'|'assistant', text: string}, ...]
+        chatInput: '',
+        chatInFlight: false,
+        chatError: '',
+
+        // --- Plan Modification (Phase 5 — DISCUSS-03/04/06) ---
+        planMode: 'ask',               // 'ask' | 'modify'
+        planPreview: null,             // null | { steps: [...], summary: string }
+        previousSteps: null,           // null | snapshot of steps at preview entry
+        editingStep: null,             // null | step.number being inline-edited
+        editingDraft: '',              // text buffer during inline edit
+        deleteConfirmStep: null,       // null | step.number awaiting delete confirmation
+        editedStepNumbers: [],         // array of step.number manually edited or added
+        planVersion: 0,                // server plan_version counter [REVIEWS HIGH-1]
+        _pendingAddFocus: false,       // internal: flag to auto-enter edit mode after add
 
         // --- Skills ---
         skills: [],
@@ -211,10 +230,26 @@ function cyberRaccoon() {
                     this.workflowActive = false;
                     this.planPending = false;
                     this.planExecuting = false;
+                    this.planPaused = false;
+                    this.pauseRequested = false;
                     this.escalationPending = false;
                     this.escalationReason = '';
                     this.currentWorkflowStep = 0;
                     this.selectedWorkflowStep = null;
+                    this.chatHistory = [];
+                    this.chatInput = '';
+                    this.chatInFlight = false;
+                    this.chatError = '';
+                    // Phase 5: reset all plan-modification state on new task
+                    this.planMode = 'ask';
+                    this.planPreview = null;
+                    this.previousSteps = null;
+                    this.editingStep = null;
+                    this.editingDraft = '';
+                    this.deleteConfirmStep = null;
+                    this.editedStepNumbers = [];
+                    this.planVersion = 0;
+                    this._pendingAddFocus = false;
                     break;
 
                 case 'workflow_event':
@@ -245,6 +280,8 @@ function cyberRaccoon() {
 
                 case 'task_finished':
                     this.taskRunning = false;
+                    this.planPaused = false;
+                    this.pauseRequested = false;
                     this.taskResult = data;
                     // Ensure final screenshot is shown (guard against missed task_step)
                     if (this.selectedStep === null && this.steps.length > 0) {
@@ -331,9 +368,24 @@ function cyberRaccoon() {
                             number: s.number,
                             goal: s.goal,
                             reboot_expected: s.reboot_expected,
+                            expected_actions: s.expected_actions,
+                            expected_outcome: s.expected_outcome || '',
                             status: 'pending',
                         })),
                     };
+                    // Reset chat state on every new plan (D-03)
+                    this.chatHistory = [];
+                    this.chatInput = '';
+                    this.chatInFlight = false;
+                    this.chatError = '';
+                    // Phase 5: initialize plan modification state
+                    this.planPreview = null;
+                    this.previousSteps = null;
+                    this.editedStepNumbers = [];
+                    this.planVersion = 0;  // [REVIEWS HIGH-1]
+                    this.editingStep = null;
+                    this.editingDraft = '';
+                    this.deleteConfirmStep = null;
                     break;
 
                 case 'step_start':
@@ -355,7 +407,13 @@ function cyberRaccoon() {
                         const step = this.workflowPlan.steps.find(
                             s => s.number === data.step_number
                         );
-                        if (step) step.status = 'done';
+                        if (step) {
+                            step.status = 'done';
+                            step.actions_used = data.actions_used;
+                            if (data.expected_actions !== undefined) {
+                                step.expected_actions = data.expected_actions;
+                            }
+                        }
                     }
                     break;
 
@@ -375,7 +433,9 @@ function cyberRaccoon() {
                         const newSteps = data.new_steps.map(s => ({
                             number: s.number,
                             goal: s.goal,
-                            reboot_expected: false,
+                            reboot_expected: s.reboot_expected || false,
+                            expected_actions: s.expected_actions,
+                            expected_outcome: s.expected_outcome || '',
                             status: 'pending',
                         }));
                         this.workflowPlan.steps = [...kept, ...newSteps];
@@ -384,6 +444,8 @@ function cyberRaccoon() {
 
                 case 'escalate':
                     this.escalationPending = true;
+                    this.planExecuting = false;
+                    this.pauseRequested = false;
                     this.escalationReason = data.reason || 'Human intervention required';
                     if (this.workflowPlan) {
                         const step = this.workflowPlan.steps.find(
@@ -396,6 +458,128 @@ function cyberRaccoon() {
                 case 'escalation_resolved':
                     this.escalationPending = false;
                     this.escalationReason = '';
+                    this.planExecuting = true;
+                    break;
+
+                case 'plan_modification_proposed':
+                    // Phase 5 DISCUSS-03: LLM rewrite proposed, enter preview state
+                    this.planPreview = {
+                        steps: Array.isArray(data.proposed_steps) ? data.proposed_steps : [],
+                        summary: data.summary || '',
+                    };
+                    // Snapshot current live steps for diff rendering
+                    this.previousSteps = this.workflowPlan
+                        ? JSON.parse(JSON.stringify(this.workflowPlan.steps))
+                        : [];
+                    this.chatInFlight = false;
+                    // Scroll preview banner into view
+                    this.$nextTick(() => {
+                        const banner = document.querySelector('.plan-preview-banner');
+                        if (banner && banner.scrollIntoView) {
+                            banner.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+                    });
+                    break;
+
+                case 'plan_modified':
+                    // Phase 5 DISCUSS-03/04: plan state committed (accept_rewrite/manual_edit/add/delete)
+                    // [REVIEWS HIGH-1] Stale-event guard: drop events with a version
+                    // older than what we already have (can happen if events arrive
+                    // out of order after rapid edits).
+                    if (typeof data.plan_version === 'number' && data.plan_version < this.planVersion) {
+                        console.warn('Dropping stale plan_modified event (version', data.plan_version, '< current', this.planVersion, ')');
+                        break;
+                    }
+                    if (typeof data.plan_version === 'number') {
+                        this.planVersion = data.plan_version;
+                    }
+                    if (this.workflowPlan && Array.isArray(data.steps)) {
+                        this.workflowPlan.steps = data.steps.map(s => ({
+                            number: s.number,
+                            goal: s.goal,
+                            status: 'pending',
+                            reboot_expected: s.reboot_expected,
+                            expected_actions: s.expected_actions,
+                            expected_outcome: s.expected_outcome,
+                        }));
+                    }
+                    this.editedStepNumbers = Array.isArray(data.edited_step_numbers)
+                        ? data.edited_step_numbers
+                        : [];
+                    // Exiting preview on accept_rewrite
+                    if (data.reason === 'accept_rewrite') {
+                        this.planPreview = null;
+                    }
+                    // Clear editing state if the edited step was deleted or renumbered away
+                    if (this.editingStep !== null && this.workflowPlan) {
+                        const stillExists = this.workflowPlan.steps.some(
+                            s => s.number === this.editingStep,
+                        );
+                        if (!stillExists) {
+                            this.editingStep = null;
+                            this.editingDraft = '';
+                        }
+                    }
+                    // Auto-enter edit mode on the newly-added step
+                    if (data.reason === 'add' && this._pendingAddFocus && this.workflowPlan) {
+                        const lastStep = this.workflowPlan.steps[this.workflowPlan.steps.length - 1];
+                        if (lastStep) {
+                            this.beginEditStep(lastStep);
+                        }
+                        this._pendingAddFocus = false;
+                    }
+                    break;
+
+                case 'plan_rewrite_no_change':
+                    // Phase 5 DISCUSS-03: LLM declined to rewrite, surface message in chat
+                    this.chatHistory.push({
+                        role: 'assistant',
+                        text: (data.message || '') + '\n\nSwitch to Ask mode to discuss the plan.',
+                    });
+                    this.chatInFlight = false;
+                    this.$nextTick(() => {
+                        const el = this.$refs.chatMessages;
+                        if (el) el.scrollTop = el.scrollHeight;
+                    });
+                    break;
+
+                case 'plan_rewrite_discarded':
+                    // Phase 5 DISCUSS-03: user discarded the preview
+                    this.planPreview = null;
+                    break;
+
+                case 'plan_rewrite_error':
+                    // Phase 5 DISCUSS-03: backend signaled an error during rewrite
+                    this.chatError = data.message || 'The model returned an unexpected response. Try rephrasing your request.';
+                    this.chatInFlight = false;
+                    break;
+
+                case 'task_paused':
+                    this.planPaused = true;
+                    this.planExecuting = false;
+                    this.pauseRequested = false;
+                    // Repopulate plan panel with step statuses from server
+                    // Server payload is the single source of truth (review MEDIUM-5)
+                    if (this.workflowPlan && data.steps) {
+                        this.workflowPlan.steps = data.steps.map(s => ({
+                            number: s.number,
+                            goal: s.goal,
+                            status: s.status,  // 'done', 'partial', 'pending'
+                            reboot_expected: s.reboot_expected,
+                            expected_actions: s.expected_actions,
+                            expected_outcome: s.expected_outcome || '',
+                            actions_used: s.actions_used,
+                        }));
+                        this.workflowPlan.steps_completed = data.steps_completed || 0;
+                    }
+                    if (data.screenshot_base64) {
+                        this.screenshot = data.screenshot_base64;
+                    }
+                    break;
+
+                case 'task_resumed':
+                    this.planPaused = false;
+                    this.planExecuting = true;
                     break;
 
                 case 'workflow_done':
@@ -552,6 +736,42 @@ function cyberRaccoon() {
             }
         },
 
+        async pauseTask() {
+            this.pauseRequested = true;
+            try {
+                const resp = await fetch('/api/task/pause', { method: 'POST' });
+                if (!resp.ok) {
+                    this.pauseRequested = false;
+                    this.showError('Failed to pause task. The step may have already completed.');
+                }
+            } catch (err) {
+                this.pauseRequested = false;
+                this.showError('Failed to pause task. The step may have already completed.');
+            }
+        },
+
+        async resumeTask() {
+            try {
+                const resp = await fetch('/api/task/resume', { method: 'POST' });
+                if (!resp.ok) {
+                    this.showError('Failed to resume task. Try again or abort.');
+                }
+            } catch (err) {
+                this.showError('Failed to resume task. Try again or abort.');
+            }
+        },
+
+        async cancelPausedTask() {
+            try {
+                const resp = await fetch('/api/task/cancel', { method: 'POST' });
+                if (!resp.ok) {
+                    this.showError('Failed to abort task. Refresh the page or close the browser tab to force-end the session.');
+                }
+            } catch (err) {
+                this.showError('Failed to abort task. Refresh the page or close the browser tab to force-end the session.');
+            }
+        },
+
         async approvePlan() {
             try {
                 await fetch('/api/task/approve-plan', { method: 'POST' });
@@ -575,6 +795,385 @@ function cyberRaccoon() {
             } catch (e) {
                 console.error('Reject plan error:', e);
             }
+        },
+
+        async sendChatMessage() {
+            const question = (this.chatInput || '').trim();
+            if (!question || this.chatInFlight) return;
+
+            // Phase 5: route to rewrite path when in Modify mode
+            if (this.planMode === 'modify') {
+                return this.sendRewriteRequest(question);
+            }
+
+            // --- Ask mode (existing Phase 4 flow) ---
+            // Push user message, clear input, flip in-flight, clear any prior error
+            this.chatHistory.push({ role: 'user', text: question });
+            this.chatInput = '';
+            this.chatError = '';
+            this.chatInFlight = true;
+
+            // Autoscroll after the user message lands
+            this.$nextTick(() => {
+                const el = this.$refs.chatMessages;
+                if (el) el.scrollTop = el.scrollHeight;
+            });
+
+            try {
+                const resp = await fetch('/api/task/chat-about-plan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question }),
+                });
+                if (!resp.ok) {
+                    // Includes 503 when no plan is cached server-side
+                    this.chatError = 'Could not reach the model. Check your connection and try again.';
+                    return;
+                }
+                const body = await resp.json();
+                if (body.status !== 'ok' || !body.answer) {
+                    this.chatError = 'Could not reach the model. Check your connection and try again.';
+                    return;
+                }
+                this.chatHistory.push({
+                    role: 'assistant',
+                    text: String(body.answer).trim(),
+                });
+                // Autoscroll after the answer lands and re-focus input for follow-ups
+                this.$nextTick(() => {
+                    const el = this.$refs.chatMessages;
+                    if (el) el.scrollTop = el.scrollHeight;
+                    const inp = this.$refs.chatInput;
+                    if (inp) inp.focus();
+                });
+            } catch (e) {
+                console.error('Chat error:', e);
+                this.chatError = 'Could not reach the model. Check your connection and try again.';
+            } finally {
+                this.chatInFlight = false;
+            }
+        },
+
+        // ================================================================
+        // Phase 5: Plan Modification (DISCUSS-03, DISCUSS-04, DISCUSS-06)
+        // ================================================================
+
+        async sendRewriteRequest(request) {
+            // Push user message to chat history so the user sees what they sent
+            this.chatHistory.push({ role: 'user', text: request });
+            this.chatInput = '';
+            this.chatError = '';
+            this.chatInFlight = true;
+
+            this.$nextTick(() => {
+                const el = this.$refs.chatMessages;
+                if (el) el.scrollTop = el.scrollHeight;
+            });
+
+            try {
+                const resp = await fetch('/api/task/request-plan-rewrite', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ request }),
+                });
+                if (!resp.ok) {
+                    this.chatError = 'Could not reach the model. Check your connection and try again.';
+                    this.chatInFlight = false;
+                    return;
+                }
+                // Success path: chatInFlight clears in the WebSocket handler
+                // (plan_modification_proposed or plan_rewrite_no_change or plan_rewrite_error).
+                // We don't touch state here because the server is authoritative.
+            } catch (e) {
+                console.error('Rewrite request error:', e);
+                this.chatError = 'Could not reach the model. Check your connection and try again.';
+                this.chatInFlight = false;
+            }
+        },
+
+        async acceptPlanRewrite() {
+            try {
+                const resp = await fetch('/api/task/accept-plan-rewrite', { method: 'POST' });
+                if (!resp.ok) {
+                    this.chatError = 'Could not update the plan. Check your connection and try again.';
+                }
+                // Success: plan_modified (reason=accept_rewrite) broadcast drives state update
+            } catch (e) {
+                console.error('Accept plan rewrite error:', e);
+                this.chatError = 'Could not update the plan. Check your connection and try again.';
+            }
+        },
+
+        async discardPlanRewrite() {
+            try {
+                const resp = await fetch('/api/task/discard-plan-rewrite', { method: 'POST' });
+                if (!resp.ok) {
+                    this.chatError = 'Could not update the plan. Check your connection and try again.';
+                }
+                // Success: plan_rewrite_discarded broadcast drives state update
+            } catch (e) {
+                console.error('Discard plan rewrite error:', e);
+                this.chatError = 'Could not update the plan. Check your connection and try again.';
+            }
+        },
+
+        beginEditStep(step) {
+            if (this.planExecuting || this.planPreview || this.editingStep !== null) return;
+            this.editingStep = step.number;
+            this.editingDraft = step.goal || '';
+            this.$nextTick(() => {
+                const ta = this.$refs.editingTextarea;
+                if (ta) {
+                    ta.focus();
+                    if (typeof ta.select === 'function') ta.select();
+                }
+            });
+        },
+
+        async saveEditStep() {
+            // Idempotent no-op (Pitfall 7: blur-after-Esc race)
+            if (this.editingStep === null) return;
+            const stepNumber = this.editingStep;
+            const newGoal = (this.editingDraft || '').trim();
+            const orig = this.workflowPlan && this.workflowPlan.steps
+                ? this.workflowPlan.steps.find(s => s.number === stepNumber)
+                : null;
+            // Empty or unchanged → treat as cancel
+            if (!newGoal || !orig || newGoal === orig.goal) {
+                this.cancelEditStep();
+                return;
+            }
+            // Clear editing state FIRST so blur race doesn't re-fire
+            this.editingStep = null;
+            const draftBackup = this.editingDraft;
+            this.editingDraft = '';
+            try {
+                const resp = await fetch('/api/task/edit-plan-step', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        step_number: stepNumber,
+                        new_goal: newGoal,
+                    }),
+                });
+                if (!resp.ok) {
+                    this.chatError = 'Could not save your edit. Check your connection and try again.';
+                    // Restore on failure so the user doesn't lose their typing
+                    this.editingStep = stepNumber;
+                    this.editingDraft = draftBackup;
+                }
+                // Success: plan_modified (reason=manual_edit) broadcast updates workflowPlan.steps
+            } catch (e) {
+                console.error('Save edit step error:', e);
+                this.chatError = 'Could not save your edit. Check your connection and try again.';
+                this.editingStep = stepNumber;
+                this.editingDraft = draftBackup;
+            }
+        },
+
+        cancelEditStep() {
+            // [REVIEWS MEDIUM] Set editingStep to null BEFORE clearing draft.
+            // The saveEditStep idempotent guard (editingStep === null) ensures
+            // the subsequent blur event from the textarea is a no-op, preventing
+            // the Esc-then-blur race where cancel accidentally saves.
+            this.editingStep = null;
+            this.editingDraft = '';
+        },
+
+        async addPlanStep() {
+            if (this.planPreview || this.editingStep !== null) return;
+            this._pendingAddFocus = true;
+            try {
+                const resp = await fetch('/api/task/add-plan-step', { method: 'POST' });
+                if (!resp.ok) {
+                    this.chatError = 'Could not add a step. Check your connection and try again.';
+                    this._pendingAddFocus = false;
+                }
+                // Success: plan_modified (reason=add) broadcast auto-focuses the new step
+            } catch (e) {
+                console.error('Add plan step error:', e);
+                this.chatError = 'Could not add a step. Check your connection and try again.';
+                this._pendingAddFocus = false;
+            }
+        },
+
+        async deletePlanStep(stepNumber) {
+            if (this.planPreview || this.editingStep !== null) return;
+            const currentCount = this.workflowPlan && this.workflowPlan.steps
+                ? this.workflowPlan.steps.length
+                : 0;
+            // Guard: if deleting would leave fewer than 2 steps, ask for confirmation
+            if (currentCount <= 2) {
+                this.deleteConfirmStep = stepNumber;
+                return;
+            }
+            await this._doDeletePlanStep(stepNumber);
+        },
+
+        async _doDeletePlanStep(stepNumber) {
+            try {
+                const resp = await fetch('/api/task/delete-plan-step', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ step_number: stepNumber }),
+                });
+                if (!resp.ok) {
+                    this.chatError = 'Could not delete the step. Check your connection and try again.';
+                }
+                // Success: plan_modified (reason=delete) broadcast updates workflowPlan.steps
+            } catch (e) {
+                console.error('Delete plan step error:', e);
+                this.chatError = 'Could not delete the step. Check your connection and try again.';
+            }
+        },
+
+        async confirmDeleteStep() {
+            const num = this.deleteConfirmStep;
+            this.deleteConfirmStep = null;
+            if (num !== null && num !== undefined) {
+                await this._doDeletePlanStep(num);
+            }
+        },
+
+        get deleteConfirmCopy() {
+            if (this.deleteConfirmStep === null || !this.workflowPlan) return '';
+            const remaining = this.workflowPlan.steps.length - 1;
+            const plural = remaining === 1 ? '' : 's';
+            return `This will leave only ${remaining} step${plural} in the plan. Delete anyway?`;
+        },
+
+        // --- Diff algorithm (hand-rolled, zero dependencies) ---
+
+        _lcsTextDiff(oldText, newText) {
+            // Tokenize on whitespace (preserve spaces as separate tokens so
+            // joining segments faithfully reproduces the original text).
+            const oldTokens = (oldText || '').split(/(\s+)/).filter(t => t.length > 0);
+            const newTokens = (newText || '').split(/(\s+)/).filter(t => t.length > 0);
+            const n = oldTokens.length;
+            const m = newTokens.length;
+
+            // LCS DP matrix
+            const dp = Array(n + 1).fill(null).map(() => Array(m + 1).fill(0));
+            for (let i = 1; i <= n; i++) {
+                for (let j = 1; j <= m; j++) {
+                    if (oldTokens[i - 1] === newTokens[j - 1]) {
+                        dp[i][j] = dp[i - 1][j - 1] + 1;
+                    } else {
+                        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+                    }
+                }
+            }
+
+            // Backtrack to build segment arrays
+            const oldSegments = [];
+            const newSegments = [];
+            let i = n;
+            let j = m;
+            while (i > 0 || j > 0) {
+                if (i > 0 && j > 0 && oldTokens[i - 1] === newTokens[j - 1]) {
+                    oldSegments.unshift({ type: 'unchanged', text: oldTokens[i - 1] });
+                    newSegments.unshift({ type: 'unchanged', text: newTokens[j - 1] });
+                    i--;
+                    j--;
+                } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+                    newSegments.unshift({ type: 'added', text: newTokens[j - 1] });
+                    j--;
+                } else {
+                    oldSegments.unshift({ type: 'removed', text: oldTokens[i - 1] });
+                    i--;
+                }
+            }
+            return { oldSegments, newSegments };
+        },
+
+        computeDiff(previousSteps, currentSteps) {
+            // [REVIEWS HIGH / D-11] Position-match with common prefix/suffix.
+            // Intentionally simple: no stable IDs, no move detection.
+            // LCS is only used INSIDE already-classified "modified" steps
+            // for inline text diff — it does NOT drive step matching.
+            const prev = previousSteps || [];
+            const curr = currentSteps || [];
+
+            // Common prefix
+            let prefix = 0;
+            while (
+                prefix < prev.length &&
+                prefix < curr.length &&
+                prev[prefix].goal === curr[prefix].goal
+            ) {
+                prefix++;
+            }
+
+            // Common suffix (limited to what prefix didn't consume)
+            let suffix = 0;
+            while (
+                suffix < prev.length - prefix &&
+                suffix < curr.length - prefix &&
+                prev[prev.length - 1 - suffix].goal === curr[curr.length - 1 - suffix].goal
+            ) {
+                suffix++;
+            }
+
+            const entries = [];
+
+            // Unchanged prefix
+            for (let k = 0; k < prefix; k++) {
+                entries.push({ ...curr[k], diffState: 'unchanged', key: 'u-' + k });
+            }
+
+            // Middle: zipped diff by position
+            const prevMiddle = prev.slice(prefix, prev.length - suffix);
+            const currMiddle = curr.slice(prefix, curr.length - suffix);
+            const midLen = Math.max(prevMiddle.length, currMiddle.length);
+            for (let k = 0; k < midLen; k++) {
+                const p = prevMiddle[k];
+                const c = currMiddle[k];
+                if (p && c) {
+                    if (p.goal === c.goal) {
+                        entries.push({ ...c, diffState: 'unchanged', key: 'mu-' + k });
+                    } else {
+                        const { oldSegments, newSegments } = this._lcsTextDiff(p.goal, c.goal);
+                        entries.push({
+                            ...c,
+                            diffState: 'modified',
+                            oldGoal: p.goal,
+                            oldSegments,
+                            newSegments,
+                            key: 'mm-' + k,
+                        });
+                    }
+                } else if (c) {
+                    entries.push({ ...c, diffState: 'added', key: 'ma-' + k });
+                } else if (p) {
+                    entries.push({ ...p, diffState: 'removed', key: 'mr-' + k });
+                }
+            }
+
+            // Unchanged suffix
+            for (let k = 0; k < suffix; k++) {
+                const idx = curr.length - suffix + k;
+                entries.push({ ...curr[idx], diffState: 'unchanged', key: 's-' + k });
+            }
+
+            return entries;
+        },
+
+        get computedDiff() {
+            if (!this.planPreview) {
+                // Normal render — wrap each step with edited flag
+                const steps = (this.workflowPlan && this.workflowPlan.steps) || [];
+                return steps.map(s => ({
+                    ...s,
+                    diffState: null,
+                    edited: this.editedStepNumbers.includes(s.number),
+                    key: 'step-' + s.number,
+                }));
+            }
+            // Preview state — diff current live steps vs proposed rewrite
+            return this.computeDiff(
+                (this.workflowPlan && this.workflowPlan.steps) || [],
+                this.planPreview.steps || [],
+            );
         },
 
         async resolveEscalation() {
@@ -942,6 +1541,14 @@ function cyberRaccoon() {
             if (typeof content === 'string') return content;
             if (typeof content === 'object') return JSON.stringify(content, null, 2);
             return String(content);
+        },
+
+        showError(msg) {
+            // Display error to user via captureError (reuses existing error banner)
+            this.captureError = msg;
+            setTimeout(() => {
+                if (this.captureError === msg) this.captureError = '';
+            }, 5000);
         },
 
         _flash(msg) {

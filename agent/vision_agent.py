@@ -40,6 +40,7 @@ class TaskStatus(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     ABORTED = "aborted"
+    PAUSED = "paused"
 
 
 @dataclass
@@ -93,6 +94,7 @@ class VisionAgent:
         self._stability_interval_s = stability_interval_s
         self._stability_max_wait_s = stability_max_wait_s
         self._abort_event = threading.Event()
+        self._pause_event = threading.Event()
         self._step_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="M2-step")
 
         # BIOS reboot transition state
@@ -259,6 +261,14 @@ class VisionAgent:
                         total_cache_read_tokens, total_cache_creation_tokens,
                     )
 
+                if self._pause_event.is_set():
+                    return self._build_result(
+                        TaskStatus.PAUSED, "User paused execution",
+                        step_count, total_input_tokens, total_output_tokens,
+                        start_time, step_log,
+                        total_cache_read_tokens, total_cache_creation_tokens,
+                    )
+
                 if step_count >= self._max_steps:
                     return self._build_result(
                         TaskStatus.FAILED,
@@ -304,6 +314,16 @@ class VisionAgent:
                             )
                         return self._build_result(
                             TaskStatus.ABORTED, "User aborted",
+                            step_count, total_input_tokens, total_output_tokens,
+                            start_time, step_log,
+                            total_cache_read_tokens, total_cache_creation_tokens,
+                        )
+                    if self._pause_event.is_set():
+                        # Wait for the LLM call to finish (don't waste it),
+                        # then return PAUSED without executing the action.
+                        future.result()  # blocks until LLM finishes
+                        return self._build_result(
+                            TaskStatus.PAUSED, "User paused execution",
                             step_count, total_input_tokens, total_output_tokens,
                             start_time, step_log,
                             total_cache_read_tokens, total_cache_creation_tokens,
@@ -638,6 +658,18 @@ class VisionAgent:
         """Request the running task to stop immediately."""
         self._abort_event.set()
         logger.info("Abort requested")
+
+    def pause(self) -> None:
+        """Request the running task to pause at the next opportunity.
+
+        This is the public API for pausing. External callers (AppController)
+        MUST use this method instead of setting _pause_event directly.
+        Pause takes effect at the next cycle boundary -- between
+        capture/decide/act phases or after a pending LLM call completes.
+        No HID action fires after pause is set.
+        """
+        self._pause_event.set()
+        logger.info("Pause requested")
 
     # ------------------------------------------------------------------
     # BIOS reboot transition handling

@@ -239,3 +239,311 @@ class TestWebSocket:
             assert mgr.connection_count == 0
 
         asyncio.get_event_loop().run_until_complete(_test())
+
+
+# ---------------------------------------------------------------------------
+# TestChatEndpoint (Phase 4 — DISCUSS-02)
+# ---------------------------------------------------------------------------
+
+try:
+    from ui.app_controller import PlanDiscussionState  # added in plan 04
+    _CHAT_ENDPOINT_AVAILABLE = True
+except ImportError:
+    _CHAT_ENDPOINT_AVAILABLE = False
+
+
+@pytest.mark.skipif(
+    not _CHAT_ENDPOINT_AVAILABLE,
+    reason="Chat endpoint not yet implemented (plan 05)",
+)
+class TestChatEndpoint:
+    """Tests for POST /api/task/chat-about-plan."""
+
+    def test_chat_returns_answer(
+        self,
+        client: TestClient,
+        ctrl: AppController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Pre-populate the plan discussion cache
+        ctrl._on_step_bridge({
+            "type": "plan_ready",
+            "task_goal": "Open Chrome",
+            "screenshot_base64": "fake_b64",
+            "steps": [{
+                "number": 1,
+                "goal": "Open Chrome",
+                "reboot_expected": False,
+                "expected_actions": 2,
+                "expected_outcome": "Chrome visible",
+            }],
+        })
+        # Stub the controller's chat method to avoid real LLM call
+        monkeypatch.setattr(
+            ctrl, "chat_about_plan",
+            lambda question: f"Echo: {question}",
+        )
+        resp = client.post(
+            "/api/task/chat-about-plan",
+            json={"question": "Why Chrome?"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert "answer" in body
+        assert "Why Chrome?" in body["answer"]
+
+    def test_chat_no_pending_plan(
+        self,
+        client: TestClient,
+        ctrl: AppController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # No plan cached
+        assert ctrl._plan_discussion is None
+        # Stub controller to return None as if no cache
+        monkeypatch.setattr(
+            ctrl, "chat_about_plan", lambda question: None,
+        )
+        resp = client.post(
+            "/api/task/chat-about-plan",
+            json={"question": "Hi?"},
+        )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 availability probe — plan 05-05 lands these routes.
+# ---------------------------------------------------------------------------
+
+try:
+    from ui.app_controller import AppController as _AC
+    _REWRITE_ENDPOINTS_AVAILABLE = all(
+        hasattr(_AC, name)
+        for name in (
+            "request_plan_rewrite",
+            "accept_plan_rewrite",
+            "discard_plan_rewrite",
+            "edit_plan_step",
+            "add_plan_step",
+            "delete_plan_step",
+        )
+    )
+except ImportError:
+    _REWRITE_ENDPOINTS_AVAILABLE = False
+
+
+# ===========================================================================
+# Phase 5: plan modification endpoints (DISCUSS-03, DISCUSS-04)
+# ===========================================================================
+
+
+@pytest.mark.skipif(
+    not _REWRITE_ENDPOINTS_AVAILABLE,
+    reason="Plan modification endpoints not yet implemented (plan 05-05)",
+)
+class TestRewriteEndpoints:
+    """Tests for six new POST endpoints from Phase 5."""
+
+    def test_request_plan_rewrite_happy_path(
+        self,
+        client: TestClient,
+        ctrl: AppController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Create a minimal stand-in for the RewriteResult return
+        class _FakeResult:
+            action = "rewrite"
+        monkeypatch.setattr(
+            ctrl, "request_plan_rewrite",
+            lambda req: _FakeResult(),
+        )
+        resp = client.post(
+            "/api/task/request-plan-rewrite",
+            json={"request": "use Win+R"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["action"] == "rewrite"
+
+    def test_request_plan_rewrite_no_plan_returns_503(
+        self,
+        client: TestClient,
+        ctrl: AppController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            ctrl, "request_plan_rewrite", lambda req: None,
+        )
+        resp = client.post(
+            "/api/task/request-plan-rewrite",
+            json={"request": "x"},
+        )
+        assert resp.status_code == 503
+        assert resp.json()["status"] == "error"
+
+    def test_accept_plan_rewrite_happy_path(
+        self,
+        client: TestClient,
+        ctrl: AppController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(ctrl, "accept_plan_rewrite", lambda: True)
+        resp = client.post("/api/task/accept-plan-rewrite")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    def test_accept_plan_rewrite_no_preview_returns_409(
+        self,
+        client: TestClient,
+        ctrl: AppController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(ctrl, "accept_plan_rewrite", lambda: False)
+        resp = client.post("/api/task/accept-plan-rewrite")
+        assert resp.status_code == 409
+        assert resp.json()["status"] == "error"
+
+    def test_discard_plan_rewrite_ok(
+        self,
+        client: TestClient,
+        ctrl: AppController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(ctrl, "discard_plan_rewrite", lambda: True)
+        resp = client.post("/api/task/discard-plan-rewrite")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    def test_discard_plan_rewrite_noop(
+        self,
+        client: TestClient,
+        ctrl: AppController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(ctrl, "discard_plan_rewrite", lambda: False)
+        resp = client.post("/api/task/discard-plan-rewrite")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "noop"
+
+    def test_edit_plan_step_happy_path(
+        self,
+        client: TestClient,
+        ctrl: AppController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            ctrl, "edit_plan_step",
+            lambda step_number, new_goal: True,
+        )
+        resp = client.post(
+            "/api/task/edit-plan-step",
+            json={"step_number": 1, "new_goal": "Press Win+R"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    def test_edit_plan_step_not_found_returns_404(
+        self,
+        client: TestClient,
+        ctrl: AppController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            ctrl, "edit_plan_step",
+            lambda step_number, new_goal: False,
+        )
+        resp = client.post(
+            "/api/task/edit-plan-step",
+            json={"step_number": 99, "new_goal": "x"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["status"] == "error"
+
+    def test_add_plan_step_happy_path(
+        self,
+        client: TestClient,
+        ctrl: AppController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(ctrl, "add_plan_step", lambda: True)
+        resp = client.post("/api/task/add-plan-step")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    def test_delete_plan_step_happy_path(
+        self,
+        client: TestClient,
+        ctrl: AppController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            ctrl, "delete_plan_step", lambda step_number: True,
+        )
+        resp = client.post(
+            "/api/task/delete-plan-step",
+            json={"step_number": 2},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Pause / Resume / Cancel API (Phase 7 — CRUISE-03, CRUISE-05)
+# ---------------------------------------------------------------------------
+
+class TestPauseResumeAPI:
+    """Tests for /api/task/pause, /api/task/resume, /api/task/cancel endpoints."""
+
+    def test_pause_endpoint_returns_200_when_running(
+        self, client: TestClient, ctrl: "AppController",
+    ) -> None:
+        """POST /api/task/pause returns 200 when a task is running."""
+        # Wire a mock agent so pause_task() returns True
+        agent = MagicMock()
+        agent.pause = MagicMock()
+        with ctrl._lock:
+            ctrl._agent = agent
+        resp = client.post("/api/task/pause")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    def test_resume_endpoint_returns_200_when_paused(
+        self, client: TestClient, ctrl: "AppController",
+    ) -> None:
+        """POST /api/task/resume returns 200 when a task is paused."""
+        # Wire a mock agent + runner so resume_task() returns True
+        agent = MagicMock()
+        runner = MagicMock()
+        runner.resume = MagicMock()
+        runner.set_current_plan = MagicMock()
+        agent._workflow_runner = runner
+        with ctrl._lock:
+            ctrl._agent = agent
+        resp = client.post("/api/task/resume")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    def test_cancel_endpoint_returns_200(self, client: TestClient) -> None:
+        """POST /api/task/cancel returns 200 (safe no-op when idle)."""
+        resp = client.post("/api/task/cancel")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    def test_pause_when_idle_returns_409(self, client: TestClient) -> None:
+        """POST /api/task/pause when no task is running returns 409.
+        Addresses review concern: MEDIUM-3 fire-and-forget hides
+        invalid transitions."""
+        resp = client.post("/api/task/pause")
+        assert resp.status_code == 409
+        assert resp.json()["status"] == "error"
+
+    def test_resume_when_not_paused_returns_409(self, client: TestClient) -> None:
+        """POST /api/task/resume when not paused returns 409.
+        Addresses review concern: MEDIUM-3."""
+        resp = client.post("/api/task/resume")
+        assert resp.status_code == 409
+        assert resp.json()["status"] == "error"

@@ -5,6 +5,7 @@ All tests use mock M1/M3/M4 (no hardware or API needed).
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 from unittest.mock import patch
 
@@ -1209,3 +1210,88 @@ class TestCompletionStatusPropagation:
         result = agent.run("test task")
         assert result.status == TaskStatus.COMPLETED
         assert result.completion_status == "gave_up"
+
+
+# ===========================================================================
+# Pause (CRUISE-02)
+# ===========================================================================
+
+class TestPause:
+    """Tests for VisionAgent._pause_event (CRUISE-02)."""
+
+    def test_pause_event_exists(self) -> None:
+        """VisionAgent has a _pause_event attribute (threading.Event)."""
+        agent = VisionAgent(
+            capture=MockCapture(),
+            protocol=MockProtocol([{"action": "click", "x": 100, "y": 100}]),
+            executor=MockExecutor(),
+            max_steps=5,
+            post_action_delay_s=0,
+            stability_check=False,
+        )
+        assert hasattr(agent, "_pause_event"), "VisionAgent must have _pause_event"
+        assert isinstance(agent._pause_event, threading.Event)
+
+    def test_pause_returns_paused_status(self) -> None:
+        """When _pause_event is set before run(), result status is PAUSED."""
+        agent = VisionAgent(
+            capture=MockCapture(),
+            protocol=MockProtocol([{"action": "click", "x": 100, "y": 100}]),
+            executor=MockExecutor(),
+            max_steps=5,
+            post_action_delay_s=0,
+            stability_check=False,
+        )
+        agent._pause_event.set()
+        result = agent.run("test task")
+        assert result.status == TaskStatus.PAUSED
+        assert "pause" in result.reason.lower()
+
+    def test_pause_during_llm_call_does_not_execute_action(self) -> None:
+        """When pause is set while LLM call is in flight, the returned
+        action is NOT executed (no HID output). Executor should have
+        zero or fewer commands than a non-paused run."""
+        capture = MockCapture()
+        executor = MockExecutor()
+        protocol = MockProtocol([
+            {"action": "click", "x": 100, "y": 100},
+            {"action": "click", "x": 200, "y": 200},
+        ])
+        agent = VisionAgent(
+            capture=capture,
+            protocol=protocol,
+            executor=executor,
+            max_steps=5,
+            post_action_delay_s=0,
+            stability_check=False,
+        )
+
+        # Set pause after a tiny delay so the first LLM call starts
+        def set_pause_after_first_step() -> None:
+            import time
+            time.sleep(0.1)
+            agent._pause_event.set()
+
+        t = threading.Thread(target=set_pause_after_first_step)
+        t.start()
+        result = agent.run("test task")
+        t.join()
+        # Should be PAUSED, not COMPLETED
+        assert result.status == TaskStatus.PAUSED
+        # Executor should have at most 1 command (from the first cycle before pause)
+        assert len(executor.executed) <= 1
+
+    def test_pause_method_sets_event(self) -> None:
+        """VisionAgent.pause() sets _pause_event (public API, avoids layer leakage).
+        Addresses review concern: HIGH-3 control ownership."""
+        agent = VisionAgent(
+            capture=MockCapture(),
+            protocol=MockProtocol([{"action": "click", "x": 100, "y": 100}]),
+            executor=MockExecutor(),
+            max_steps=5,
+            post_action_delay_s=0,
+            stability_check=False,
+        )
+        assert hasattr(agent, "pause"), "VisionAgent must have public pause() method"
+        agent.pause()
+        assert agent._pause_event.is_set()

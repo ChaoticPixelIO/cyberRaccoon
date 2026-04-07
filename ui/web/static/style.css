@@ -403,6 +403,162 @@ body {
     text-decoration: underline;
 }
 
+/* Phase 4: enriched step rendering (DISCUSS-01) */
+
+.ws-budget {
+    font-size: 0.7rem;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 3px;
+    padding: 0 0.35rem;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+/* Phase 6: budget feedback badge colors */
+.ws-budget.ws-budget-ok {
+    color: #4ade80;
+    background: rgba(74, 222, 128, 0.1);
+}
+
+.ws-budget.ws-budget-over {
+    color: #fbbf24;
+    background: rgba(251, 191, 36, 0.1);
+}
+
+.ws-outcome {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+    padding: 0 0 0.3rem 2.6rem;
+}
+
+/* Phase 4: plan discussion chat panel (DISCUSS-02) */
+
+.plan-chat {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+}
+
+.plan-chat-header {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 0.4rem;
+}
+
+.plan-chat-messages {
+    max-height: 240px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    padding: 0.25rem 0;
+    background: transparent;
+}
+
+.plan-chat-empty {
+    padding: 0.75rem 0.5rem;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.plan-chat-empty-hint {
+    margin-top: 0.2rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    opacity: 0.8;
+}
+
+.plan-chat-msg {
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
+    padding: 0.35rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.plan-chat-msg-user {
+    background: transparent;
+}
+
+.plan-chat-msg-agent {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.chat-role {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    min-width: 2.8rem;
+}
+
+.chat-body {
+    flex: 1;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.plan-chat-loading .chat-dots {
+    display: inline-block;
+    width: 1.2em;
+}
+
+.plan-chat-loading .chat-dots::after {
+    content: '';
+    animation: chat-dots 1.2s linear infinite;
+}
+
+@keyframes chat-dots {
+    0%, 20%   { content: ''; }
+    40%       { content: '.'; }
+    60%       { content: '..'; }
+    80%, 100% { content: '...'; }
+}
+
+.plan-chat-error {
+    padding: 0.4rem 0.6rem;
+    margin: 0.25rem 0;
+    font-size: 0.8rem;
+    color: var(--error);
+    background: rgba(231, 76, 60, 0.1);
+    border-left: 3px solid var(--error);
+    border-radius: var(--radius);
+}
+
+.plan-chat-input-row {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+}
+
+.plan-chat-input {
+    flex: 1;
+    padding: 0.4rem 0.6rem;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 0.85rem;
+    outline: none;
+}
+
+.plan-chat-input:focus {
+    border-color: var(--accent);
+}
+
 .step-log {
     max-height: 300px;
     overflow-y: auto;
@@ -1020,6 +1176,133 @@ fieldset select:focus {
     border-color: var(--ok);
 }
 
+/* ---- Pause/Resume (Phase 7) ---- */
+
+.btn-pause {
+    border: 1px solid #fbbf24;
+    color: #fbbf24;
+    background: transparent;
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 400;
+    transition: background 0.15s;
+}
+.btn-pause:hover {
+    background: rgba(251, 191, 36, 0.15);
+}
+.btn-pause:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-resume {
+    background: var(--ok);
+    border: 1px solid var(--ok);
+    color: #000;
+    font-weight: 600;
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: background 0.15s;
+}
+.btn-resume:hover {
+    background: #27ae60;
+}
+.btn-resume:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-abort {
+    border: 1px solid var(--error);
+    color: var(--error);
+    background: transparent;
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 400;
+    transition: background 0.15s;
+}
+.btn-abort:hover {
+    background: rgba(231, 76, 60, 0.15);
+}
+
+.paused-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 0.25rem 0.5rem;
+    border-radius: 999px;
+    background: rgba(251, 191, 36, 0.2);
+    color: #fbbf24;
+    display: inline-block;
+    vertical-align: middle;
+    margin-left: 0.5rem;
+}
+
+.workflow-step.ws-partial {
+    color: #fbbf24;
+}
+
+.ws-pill {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    margin-left: 0.4rem;
+    flex-shrink: 0;
+}
+
+.ws-pill-partial {
+    color: #fbbf24;
+}
+
+.ws-step-completed-lock {
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+.workflow-plan.plan-paused {
+    border-left-color: #fbbf24;
+}
+
+.plan-header-paused {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid var(--border);
+}
+.plan-header-paused .plan-header-title {
+    font-size: 1.0rem;
+    font-weight: 600;
+    color: var(--text);
+}
+.plan-header-paused .plan-header-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 0.5rem;
+}
+
+.spinner-sm {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(251, 191, 36, 0.3);
+    border-top-color: #fbbf24;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    vertical-align: middle;
+    margin-right: 0.25rem;
+}
+
 /* ---- Utility ---- */
 
 .muted {
@@ -1059,4 +1342,217 @@ fieldset select:focus {
 
 ::-webkit-scrollbar-thumb:hover {
     background: var(--text-muted);
+}
+
+/* ================================================================
+   Phase 5: plan modification (DISCUSS-03/04/06)
+   ================================================================ */
+
+/* Mode toggle (Ask | Modify pills) */
+.plan-mode-toggle {
+    display: flex;
+    gap: 0.25rem;
+    margin-bottom: 0.5rem;
+}
+.plan-mode-pill {
+    padding: 0.4rem 0.6rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.plan-mode-pill:hover:not(.plan-mode-pill-active) {
+    color: var(--text);
+    border-color: var(--text-muted);
+}
+.plan-mode-pill-active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
+/* Preview state banner (Accept/Discard) */
+.plan-preview-banner {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--warn);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.75rem 0.3rem 0.75rem;
+    margin-bottom: 0.75rem;
+}
+.plan-preview-header {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 0.3rem;
+}
+.plan-preview-summary {
+    font-size: 0.85rem;
+    color: var(--text);
+    line-height: 1.5;
+    margin-bottom: 0.25rem;
+}
+.plan-preview-instruction {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+    margin-bottom: 0.4rem;
+}
+.plan-preview-actions {
+    display: flex;
+    gap: 0.4rem;
+}
+.btn-discard {
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    background: transparent;
+}
+.btn-discard:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(233, 69, 96, 0.08);
+}
+
+/* Diff-decorated step rows */
+.ws-diff-added {
+    border-left: 3px solid var(--ok);
+    background: rgba(46, 204, 113, 0.08);
+    padding-left: 0.3rem;
+}
+.ws-diff-removed {
+    border-left: 3px solid var(--error);
+    background: rgba(231, 76, 60, 0.10);
+    padding-left: 0.3rem;
+    opacity: 0.6;
+}
+.ws-diff-modified {
+    border-left: 3px solid var(--warn);
+    background: rgba(243, 156, 18, 0.10);
+    padding-left: 0.3rem;
+}
+
+/* Diff pills + edited marker */
+.ws-pill {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 0.2rem 0.35rem;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.06);
+    flex-shrink: 0;
+    margin-left: 0.4rem;
+}
+.ws-pill-added { color: var(--ok); }
+.ws-pill-removed { color: var(--error); }
+.ws-pill-modified { color: var(--warn); }
+.ws-pill-edited {
+    color: var(--warn);
+    text-transform: none;
+    font-size: 0.7rem;
+}
+
+/* Inline edit */
+.ws-goal-editable {
+    cursor: text;
+}
+.ws-goal-editable:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 3px;
+}
+.ws-goal-strike {
+    text-decoration: line-through;
+}
+.ws-goal-editor {
+    flex: 1;
+    min-height: 1.5rem;
+    padding: 0.25rem 0.35rem;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text);
+    font: inherit;
+    resize: vertical;
+    outline: none;
+}
+.ws-goal-editor:focus {
+    border-color: var(--accent);
+}
+.ws-edit-hint {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    padding: 0.2rem 0 0.3rem 2.6rem;
+}
+
+/* Old-goal stacked line (modified step diff) */
+.ws-goal-old {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-decoration: line-through;
+    line-height: 1.5;
+    padding: 0 0 0.3rem 2.6rem;
+}
+.ws-seg-unchanged { color: var(--text-muted); }
+.ws-seg-removed { color: var(--error); text-decoration: line-through; }
+.ws-seg-added { color: var(--ok); }
+
+/* Structural edit controls */
+.ws-delete-btn {
+    margin-left: 0.4rem;
+    padding: 0 0.35rem;
+    min-width: 20px;
+    min-height: 20px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.85rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.ws-delete-btn:hover {
+    color: var(--error);
+    border-color: var(--error);
+    background: rgba(231, 76, 60, 0.10);
+}
+.ws-add-step-btn {
+    margin: 0.5rem 0 0.25rem 2.6rem;
+    padding: 0.2rem 0.6rem;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+}
+.ws-add-step-btn:hover {
+    color: var(--text);
+    border-color: var(--text-muted);
+}
+
+/* Delete confirmation banner */
+.ws-delete-confirm {
+    margin: 0.5rem 0;
+    padding: 0.5rem 0.75rem;
+    background: rgba(231, 76, 60, 0.15);
+    border-left: 3px solid var(--error);
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+    color: var(--text);
+}
+.ws-delete-confirm-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
 }
