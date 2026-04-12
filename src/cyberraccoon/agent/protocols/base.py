@@ -49,6 +49,7 @@ class StepResult:
     cache_creation_tokens: int = 0
     commands: list[dict[str, Any]] = field(default_factory=list)
     completion_status: str = "success"  # "success", "gave_up", or "stuck"
+    response_id: str | None = None  # Correlates queued-action steps from one LLM response (UAT gap 5)
 
     def get_commands(self) -> list[dict[str, Any]]:
         """Return the list of commands to execute.

@@ -15,9 +15,14 @@ function cyberRaccoon() {
         taskRunning: false,
         steps: [],
         screenshot: null,
+        refreshingScreenshot: false,
         taskResult: null,
         selectedStep: null,  // unique key string (e.g. "3-2"), null = follow latest
-        stepDetailTab: 'detail',
+        stepDetailTab: 'prompt',    // 'prompt' | 'response' (D-01)
+        viewMode: 'formatted',      // 'formatted' | 'raw' (D-04, D-05)
+        autoFollow: true,           // explicit auto-follow toggle (UAT gap 2)
+        promptScrollTop: 0,         // per-tab scroll preservation (UAT gap 3)
+        responseScrollTop: 0,
         totalInputTokens: 0,
         totalOutputTokens: 0,
         totalCacheReadTokens: 0,
@@ -113,6 +118,50 @@ function cyberRaccoon() {
             return this.steps.filter(s => s._workflowStep === this.selectedWorkflowStep);
         },
 
+        // UAT gap 5: returns an array of {step, isGroupHead, groupSize, groupKey}
+        // so the step log template can render consecutive OpenAI CU queued-
+        // action steps as a grouped cluster. Only the group head shows a
+        // step number; members show an indent marker. All rows in a group
+        // share the same click target (groupKey) so selecting any member
+        // selects the head step.
+        get groupedSteps() {
+            const input = this.filteredSteps;
+            const result = [];
+            let i = 0;
+            while (i < input.length) {
+                const current = input[i];
+                const rid = current.response_id;
+                if (!rid) {
+                    result.push({
+                        step: current,
+                        isGroupHead: true,
+                        groupSize: 1,
+                        groupKey: this._stepKey(current),
+                    });
+                    i++;
+                    continue;
+                }
+                // Walk forward collecting consecutive steps with the same response_id
+                let j = i;
+                const members = [];
+                while (j < input.length && input[j].response_id === rid) {
+                    members.push(input[j]);
+                    j++;
+                }
+                const headKey = this._stepKey(members[0]);
+                members.forEach((m, idx) => {
+                    result.push({
+                        step: m,
+                        isGroupHead: idx === 0,
+                        groupSize: members.length,
+                        groupKey: headKey,
+                    });
+                });
+                i = j;
+            }
+            return result;
+        },
+
         get activeStep() {
             if (this.selectedStep !== null) {
                 const found = this.steps.find(s => this._stepKey(s) === this.selectedStep);
@@ -133,6 +182,48 @@ function cyberRaccoon() {
             await this.refreshStatus();
             await this.loadLogs();
             this.connectWebSocket();
+            // Init split resize immediately (split is always visible)
+            this.$nextTick(() => this.initSplitResize());
+        },
+
+        initSplitResize() {
+            const container = this.$refs.splitContainer;
+            const divider = this.$refs.splitDivider;
+            if (!container || !divider) return;
+
+            let dragging = false;
+
+            const onPointerDown = (e) => {
+                dragging = true;
+                divider.classList.add('dragging');
+                divider.setPointerCapture(e.pointerId);
+                e.preventDefault();
+            };
+            const onPointerMove = (e) => {
+                if (!dragging) return;
+                const rect = container.getBoundingClientRect();
+                const offset = e.clientX - rect.left;
+                const pct = Math.min(Math.max(offset / rect.width * 100, 20), 80);
+                container.style.gridTemplateColumns = pct + '% 8px ' + (100 - pct) + '%';
+            };
+            const onPointerUp = () => {
+                dragging = false;
+                divider.classList.remove('dragging');
+            };
+
+            divider.addEventListener('pointerdown', onPointerDown);
+            divider.addEventListener('pointermove', onPointerMove);
+            divider.addEventListener('pointerup', onPointerUp);
+            divider.addEventListener('lostpointercapture', onPointerUp);
+
+            // Clear inline grid-template-columns when viewport drops below breakpoint (Pitfall 6)
+            const mq = window.matchMedia('(max-width: 900px)');
+            const handleBreakpoint = (e) => {
+                if (e.matches) {
+                    container.style.gridTemplateColumns = '';
+                }
+            };
+            mq.addEventListener('change', handleBreakpoint);
         },
 
         // ================================================================
@@ -220,8 +311,13 @@ function cyberRaccoon() {
                     this.taskRunning = true;
                     this.taskResult = null;
                     this.steps = [];
-                    this.screenshot = null;
+                    // Keep existing screenshot until first task_step delivers a new one
                     this.selectedStep = null;
+                    this.stepDetailTab = 'prompt';
+                    this.viewMode = 'formatted';
+                    this.autoFollow = true;         // fresh task: resume following (gap 2)
+                    this.promptScrollTop = 0;       // reset per-tab scroll (gap 3)
+                    this.responseScrollTop = 0;
                     this.totalInputTokens = 0;
                     this.totalOutputTokens = 0;
                     this.totalCacheReadTokens = 0;
@@ -268,14 +364,24 @@ function cyberRaccoon() {
                         this.totalCacheReadTokens = data.total_cache_read_tokens ?? 0;
                         this.totalCacheCreationTokens = data.total_cache_creation_tokens ?? 0;
                     }
-                    // Only update screenshot if no step is explicitly selected (follow-latest)
-                    if (this.selectedStep === null && data.screenshot_base64) {
-                        this.screenshot = data.screenshot_base64;
+                    // Auto-follow state machine (UAT gap 2): only resume when toggle is ON.
+                    // MANUAL -> FOLLOWING on new step (D-18) only if autoFollow is enabled.
+                    if (this.autoFollow) {
+                        if (this.selectedStep !== null) {
+                            this.selectedStep = null;
+                        }
+                        // Update screenshot only while actively following
+                        if (data.screenshot_base64) {
+                            this.screenshot = data.screenshot_base64;
+                        }
+                        // Reset per-tab scroll so new content starts at the top (gap 3)
+                        this.promptScrollTop = 0;
+                        this.responseScrollTop = 0;
+                        this.$nextTick(() => {
+                            const el = this.$refs.stepLog;
+                            if (el) el.scrollTop = el.scrollHeight;
+                        });
                     }
-                    this.$nextTick(() => {
-                        const el = this.$refs.stepLog;
-                        if (el) el.scrollTop = el.scrollHeight;
-                    });
                     break;
 
                 case 'task_finished':
@@ -283,11 +389,18 @@ function cyberRaccoon() {
                     this.planPaused = false;
                     this.pauseRequested = false;
                     this.taskResult = data;
-                    // Ensure final screenshot is shown (guard against missed task_step)
-                    if (this.selectedStep === null && this.steps.length > 0) {
-                        const lastStep = this.steps[this.steps.length - 1];
-                        if (lastStep.screenshot_base64) {
-                            this.screenshot = lastStep.screenshot_base64;
+                    // Auto-follow state machine (UAT gap 2): only resume when toggle is ON.
+                    // MANUAL -> FOLLOWING on task completion (D-18) only if autoFollow is enabled.
+                    if (this.autoFollow) {
+                        if (this.selectedStep !== null) {
+                            this.selectedStep = null;
+                        }
+                        // Ensure final screenshot is shown
+                        if (this.steps.length > 0) {
+                            const lastStep = this.steps[this.steps.length - 1];
+                            if (lastStep.screenshot_base64) {
+                                this.screenshot = lastStep.screenshot_base64;
+                            }
                         }
                     }
                     break;
@@ -648,6 +761,23 @@ function cyberRaccoon() {
             }
         },
 
+        async refreshScreenshot() {
+            this.refreshingScreenshot = true;
+            try {
+                const resp = await fetch('/api/capture/preview');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.image) {
+                        this.screenshot = data.image;
+                    }
+                }
+            } catch (e) {
+                console.error('Refresh screenshot error:', e);
+            } finally {
+                this.refreshingScreenshot = false;
+            }
+        },
+
         async connectExecutor() {
             this.connectingExecutor = true;
             this.executorError = '';
@@ -733,6 +863,29 @@ function cyberRaccoon() {
                 await fetch('/api/task', { method: 'DELETE' });
             } catch (e) {
                 console.error('Abort error:', e);
+            }
+        },
+
+        async resetTask() {
+            try {
+                const resp = await fetch('/api/task/reset', { method: 'POST' });
+                const result = await resp.json();
+                if (result.status === 'reset') {
+                    this.taskRunning = false;
+                    this.steps = [];
+                    this.taskResult = null;
+                    this.workflowPlan = null;
+                    this.selectedStep = null;
+                    this.captureError = '';
+                    this.totalInputTokens = 0;
+                    this.totalOutputTokens = 0;
+                    this.totalCacheReadTokens = 0;
+                    this.totalCacheCreationTokens = 0;
+                } else if (result.status === 'aborted') {
+                    this.showError('Task is still running — abort requested. Please wait for it to finish.');
+                }
+            } catch (e) {
+                this.showError('Failed to reset task state: ' + e.message);
             }
         },
 
@@ -1314,6 +1467,28 @@ function cyberRaccoon() {
             }
         },
 
+        // UAT gap 5: select a grouped cluster. Clicking any row in a
+        // grouped cluster sets selectedStep to the group head's key so
+        // every member highlights together and the Response tab renders
+        // the whole batch via renderResponseFormatted's group-aware path.
+        selectStepGroup(groupKey, step) {
+            if (this.selectedStep === groupKey) {
+                this.deselectStep();
+                return;
+            }
+            this.selectedStep = groupKey;
+            // WR-02 fix: use the HEAD step's screenshot to stay consistent
+            // with activeStep (which also resolves to the head). Previously
+            // we used the clicked member's screenshot, causing a mismatch
+            // between the preview pane (post-member-N state) and the detail
+            // pane (head-labelled state).
+            const head = this.steps.find(s => this._stepKey(s) === groupKey);
+            const target = head || step;
+            if (target && target.screenshot_base64) {
+                this.screenshot = target.screenshot_base64;
+            }
+        },
+
         deselectStep() {
             this.selectedStep = null;
             // Restore to latest screenshot
@@ -1321,6 +1496,37 @@ function cyberRaccoon() {
             if (last && last.screenshot_base64) {
                 this.screenshot = last.screenshot_base64;
             }
+        },
+
+        // Switch the Prompt/Response tab while preserving each tab's scroll
+        // position (UAT gap 3). We read the outgoing tab's scrollTop BEFORE
+        // mutating stepDetailTab, then restore the incoming tab's scrollTop
+        // after Alpine's x-show reflow via $nextTick.
+        switchStepDetailTab(newTab) {
+            if (this.stepDetailTab === newTab) return;
+            // Capture outgoing scroll position synchronously
+            const outgoingRef = this.stepDetailTab === 'prompt'
+                ? this.$refs.promptContent
+                : this.$refs.responseContent;
+            if (outgoingRef) {
+                if (this.stepDetailTab === 'prompt') {
+                    this.promptScrollTop = outgoingRef.scrollTop;
+                } else {
+                    this.responseScrollTop = outgoingRef.scrollTop;
+                }
+            }
+            this.stepDetailTab = newTab;
+            // Restore incoming tab's scroll after Alpine flips x-show
+            this.$nextTick(() => {
+                const incomingRef = newTab === 'prompt'
+                    ? this.$refs.promptContent
+                    : this.$refs.responseContent;
+                if (incomingRef) {
+                    incomingRef.scrollTop = newTab === 'prompt'
+                        ? this.promptScrollTop
+                        : this.responseScrollTop;
+                }
+            });
         },
 
         // ================================================================
@@ -1530,6 +1736,338 @@ function cyberRaccoon() {
                 document.body.removeChild(ta);
                 ok ? done() : fail();
             }
+        },
+
+        // ================================================================
+        // Content Renderers (Plan 02-02)
+        // Sanitization contract: escapeHtml() is the boundary.
+        // Every renderer calls escapeHtml() on ALL external text BEFORE
+        // wrapping in HTML tags. x-html never receives raw LLM text.
+        // ================================================================
+
+        escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        },
+
+        highlightJson(jsonStr) {
+            if (!jsonStr) return '';
+            // Sanitize first -- escapeHtml is the boundary
+            const escaped = String(jsonStr).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return escaped.replace(
+                /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
+                function(match) {
+                    let cls = 'json-number';
+                    if (/^"/.test(match)) {
+                        cls = /:$/.test(match) ? 'json-key' : 'json-string';
+                    } else if (/true|false/.test(match)) {
+                        cls = 'json-boolean';
+                    } else if (/null/.test(match)) {
+                        cls = 'json-null';
+                    }
+                    return '<span class="' + cls + '">' + match + '</span>';
+                }
+            );
+        },
+
+        renderMarkdown(text) {
+            if (!text) return '';
+            // Sanitize first -- escapeHtml is the boundary
+            let html = this.escapeHtml(text);
+            // Code blocks (triple backtick) -- before inline code
+            html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre class="md-code-block"><code>$2</code></pre>');
+            // Headings
+            html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+            html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+            html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+            // Bold
+            html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            // Inline code
+            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+            // Line breaks
+            html = html.replace(/\n/g, '<br>');
+            return '<div class="md-rendered">' + html + '</div>';
+        },
+
+        renderImagePlaceholder(block) {
+            let sizeInfo = '';
+            if (block.type === 'image' && block.source && block.source.data) {
+                sizeInfo = ' (' + Math.round(block.source.data.length / 1024) + 'KB)';
+            } else if (block.type === 'image_url' && block.image_url && block.image_url.url) {
+                const match = block.image_url.url.match(/base64,(.+)/);
+                if (match) sizeInfo = ' (' + Math.round(match[1].length / 1024) + 'KB)';
+            }
+            return '<div class="image-placeholder">Screenshot' + sizeInfo + '</div>';
+        },
+
+        renderActionCard(command) {
+            if (!command) return '<div class="action-card muted">(no command)</div>';
+            const action = command.action || 'unknown';
+            const icons = {
+                click: '\u{1F5B1}', double_click: '\u{1F5B1}', left_click: '\u{1F5B1}',
+                type: '\u2328', key: '\u2318', scroll: '\u2195', drag: '\u2922',
+                done: '\u2713', screenshot: '\u{1F4F7}'
+            };
+            const icon = icons[action] || '\u2022';
+            const safeAction = this.escapeHtml(action);
+            let detail = '';
+            switch (action) {
+                case 'click': case 'double_click': case 'left_click':
+                    detail = 'at (' + this.escapeHtml(String(command.x)) + ', ' + this.escapeHtml(String(command.y)) + ')'; break;
+                case 'type':
+                    detail = this.escapeHtml('"' + (command.text || '').substring(0, 80) + '"'); break;
+                case 'key':
+                    detail = this.escapeHtml((command.keys || []).join(' + ')); break;
+                case 'scroll':
+                    detail = this.escapeHtml(command.direction || ''); break;
+                case 'drag':
+                    detail = 'from (' + this.escapeHtml(String(command.startX)) + ',' + this.escapeHtml(String(command.startY)) + ') to (' + this.escapeHtml(String(command.endX)) + ',' + this.escapeHtml(String(command.endY)) + ')'; break;
+                case 'done':
+                    detail = this.escapeHtml(command.reason || ''); break;
+                default:
+                    detail = this.escapeHtml(JSON.stringify(command));
+            }
+            return '<div class="action-card action-' + safeAction + '">' +
+                   '<span class="action-icon">' + icon + '</span>' +
+                   '<span class="action-label">' + safeAction + '</span>' +
+                   '<span class="action-detail">' + detail + '</span>' +
+                   '</div>';
+        },
+
+        renderBlockArray(blocks) {
+            if (!Array.isArray(blocks)) return this.escapeHtml(JSON.stringify(blocks));
+            return blocks.map(block => {
+                if (!block || !block.type) return '<div class="muted">' + this.escapeHtml(JSON.stringify(block)) + '</div>';
+                switch (block.type) {
+                    case 'text':
+                        return '<div class="chat-text">' + this.escapeHtml(block.text || '') + '</div>';
+                    case 'image':
+                        return this.renderImagePlaceholder(block);
+                    case 'image_url':
+                        return this.renderImagePlaceholder(block);
+                    case 'tool_use':
+                        return this.renderActionCard(block.input || {action: block.name});
+                    case 'tool_result':
+                        return '<div class="tool-result">' +
+                               '<span class="tool-result-label">Tool Result</span>' +
+                               (Array.isArray(block.content)
+                                   ? this.renderBlockArray(block.content)
+                                   : '<div>' + this.escapeHtml(String(block.content || '')) + '</div>') +
+                               '</div>';
+                    default:
+                        // Unknown block type -- safe fallback to escaped JSON
+                        return '<div class="muted">' + this.escapeHtml(JSON.stringify(block, null, 2)) + '</div>';
+                }
+            }).join('');
+        },
+
+        renderMessageContent(content, role) {
+            if (content == null) return '<span class="muted">(empty)</span>';
+            if (typeof content === 'string') {
+                return '<div class="chat-text">' + this.escapeHtml(content) + '</div>';
+            }
+            if (Array.isArray(content)) {
+                return this.renderBlockArray(content);
+            }
+            // Fallback for unexpected types -- escaped JSON
+            return '<div class="chat-text">' + this.escapeHtml(JSON.stringify(content, null, 2)) + '</div>';
+        },
+
+        // Estimate line count for a message content (UAT gap 4).
+        // Heuristic: count newline chars in the stringified text.
+        // For Array-of-blocks (Anthropic CU), concatenate block.text fields.
+        // For string content, use directly. Unknown types → default to 0
+        // (prefer showing in full rather than over-collapsing).
+        _messageLineCount(content) {
+            let text = '';
+            if (typeof content === 'string') {
+                text = content;
+            } else if (Array.isArray(content)) {
+                text = content
+                    .filter(b => b && b.type === 'text' && typeof b.text === 'string')
+                    .map(b => b.text)
+                    .join('\n');
+            } else {
+                return 0;
+            }
+            const newlines = (text.match(/\n/g) || []).length;
+            return newlines + 1;
+        },
+
+        renderPromptFormatted(step) {
+            if (!step) return '';
+            let html = '';
+            // System prompt section (collapsible, D-17)
+            if (step.system_prompt) {
+                html += '<div class="prompt-section">';
+                html += '<h4 class="section-label">System Prompt</h4>';
+                html += '<div class="collapsible" id="sys-prompt-collapse">';
+                html += '<div class="collapsible-content">';
+                html += this.renderMarkdown(step.system_prompt);
+                html += '</div>';
+                html += '<button class="collapsible-toggle" onclick="this.textContent = this.parentElement.classList.toggle(\'expanded\') ? \'Show less\' : \'Show more\'">Show more</button>';
+                html += '</div>';
+                html += '</div>';
+            }
+            // Conversation messages as chat bubbles (D-15, D-17)
+            if (step.prompt_messages && step.prompt_messages.length > 0) {
+                html += '<div class="prompt-section">';
+                html += '<h4 class="section-label">Conversation</h4>';
+                html += '<div class="chat-timeline">';
+                step.prompt_messages.forEach((msg, i) => {
+                    const role = msg.role || 'unknown';
+                    const total = step.prompt_messages.length;
+                    const isRecent = i >= total - 2;
+                    // Short bubbles (<=4 lines) also skip collapse, per UAT gap 4.
+                    // Heuristic lives in _messageLineCount; unknown content → 0 → short.
+                    const lineCount = this._messageLineCount(msg.content);
+                    const isShort = lineCount <= 4;
+                    const shouldCollapse = !isRecent && !isShort;
+                    html += '<div class="chat-bubble chat-bubble-' + role + (shouldCollapse ? ' collapsible' : '') + '">';
+                    html += '<span class="chat-bubble-role">' + this.escapeHtml(role.toUpperCase()) + '</span>';
+                    // Always apply chat-bubble-content for typography (UAT gap 6 /
+                    // RENDER-02: font-size: 0.75rem). Add collapsible-content as an
+                    // additional class when the bubble should clamp, so both the
+                    // max-height clamp AND the font-size rule take effect.
+                    html += '<div class="chat-bubble-content' + (shouldCollapse ? ' collapsible-content' : '') + '">';
+                    html += this.renderMessageContent(msg.content, role);
+                    html += '</div>';
+                    if (shouldCollapse) {
+                        html += '<button class="collapsible-toggle" onclick="this.textContent = this.parentElement.classList.toggle(\'expanded\') ? \'Show less\' : \'Show more\'">Show more</button>';
+                    }
+                    html += '</div>';
+                });
+                html += '</div>';
+                html += '</div>';
+            }
+            return html || '<p class="muted">(no prompt data)</p>';
+        },
+
+        renderPromptRaw(step) {
+            if (!step) return '';
+            let html = '';
+            if (step.system_prompt) {
+                html += '<div class="prompt-section">';
+                html += '<h4 class="section-label">System Prompt</h4>';
+                html += '<pre class="step-detail-pre raw-prompt-pre">' + this.escapeHtml(step.system_prompt) + '</pre>';
+                html += '</div>';
+            }
+            if (step.prompt_messages) {
+                html += '<div class="prompt-section">';
+                html += '<h4 class="section-label">Prompt Messages</h4>';
+                const jsonStr = JSON.stringify(step.prompt_messages, null, 2);
+                html += '<pre class="json-highlighted">' + this.highlightJson(jsonStr) + '</pre>';
+                html += '</div>';
+            }
+            return html || '<p class="muted">(no prompt data)</p>';
+        },
+
+        renderResponseFormatted(step) {
+            if (!step || !step.llm_response_text) return '<p class="muted">(no response data)</p>';
+
+            // UAT gap 5: if this step belongs to a response group (OpenAI CU
+            // queued batch), render all group members so the user sees the
+            // full batch when they click any member.
+            const groupSteps = step.response_id
+                ? this.steps.filter(s => s.response_id === step.response_id)
+                : [step];
+
+            if (groupSteps.length <= 1) {
+                return this._renderSingleResponseFormatted(step);
+            }
+
+            let html = '';
+            html += '<div class="response-group-badge">Batched response — ' + groupSteps.length + ' actions</div>';
+            groupSteps.forEach((s, idx) => {
+                html += '<div class="response-group-member">';
+                html += '<div class="response-group-member-label">Action ' + (idx + 1) + ' of ' + groupSteps.length + '</div>';
+                html += this._renderSingleResponseFormatted(s);
+                html += '</div>';
+            });
+            return html;
+        },
+
+        // Renders a single step's LLM response using the 5-level fallback
+        // chain. Extracted from renderResponseFormatted for UAT gap 5 so the
+        // public entry point can loop over grouped steps.
+        _renderSingleResponseFormatted(step) {
+            if (!step || !step.llm_response_text) return '<p class="muted">(no response data)</p>';
+            let html = '';
+            const text = step.llm_response_text;
+
+            // Level 1: Direct JSON parse (prompt-based protocol)
+            try {
+                const parsed = JSON.parse(text);
+                if (Array.isArray(parsed)) {
+                    parsed.forEach(cmd => { html += this.renderActionCard(cmd); });
+                } else if (parsed && parsed.action) {
+                    html += this.renderActionCard(parsed);
+                } else {
+                    html += '<pre class="step-detail-pre">' + this.escapeHtml(text) + '</pre>';
+                }
+                const summary = (Array.isArray(parsed) ? parsed : [parsed]).find(c => c && c.screen_summary);
+                if (summary && summary.screen_summary) {
+                    html += '<div class="screen-summary"><span class="section-label">Screen Summary:</span> ' + this.escapeHtml(summary.screen_summary) + '</div>';
+                }
+                return html;
+            } catch(e) { /* not valid JSON, continue */ }
+
+            // Level 2: [tool_use] prefix (Anthropic CU)
+            const toolUseMatch = text.match(/\[tool_use\]\s*(\{[\s\S]+\})/);
+            if (toolUseMatch) {
+                try {
+                    const cmd = JSON.parse(toolUseMatch[1]);
+                    html += this.renderActionCard(cmd.input || cmd);
+                    if (cmd.screen_summary || (cmd.input && cmd.input.screen_summary)) {
+                        const s = cmd.screen_summary || cmd.input.screen_summary;
+                        html += '<div class="screen-summary"><span class="section-label">Screen Summary:</span> ' + this.escapeHtml(s) + '</div>';
+                    }
+                    return html;
+                } catch(e) { /* fall through */ }
+            }
+
+            // Level 3: [computer_call] prefix (OpenAI CU)
+            const computerCallMatch = text.match(/\[computer_call\][\s\S]*?(\{[\s\S]+\})/);
+            if (computerCallMatch) {
+                try {
+                    const cmd = JSON.parse(computerCallMatch[1]);
+                    html += this.renderActionCard(cmd);
+                    return html;
+                } catch(e) { /* fall through */ }
+            }
+
+            // Level 4: step.commands array (always present from vision_agent.py)
+            if (step.commands && step.commands.length > 0) {
+                step.commands.forEach(cmd => { html += this.renderActionCard(cmd); });
+                return html;
+            }
+
+            // Level 5: Plain text fallback (escaped)
+            return '<pre class="step-detail-pre">' + this.escapeHtml(text) + '</pre>';
+        },
+
+        renderResponseRaw(step) {
+            if (!step || !step.llm_response_text) return '<p class="muted">(no response data)</p>';
+            const text = step.llm_response_text;
+            // Try JSON highlighting if parseable, otherwise plain escaped text
+            try {
+                const parsed = JSON.parse(text);
+                const formatted = JSON.stringify(parsed, null, 2);
+                return '<pre class="json-highlighted">' + this.highlightJson(formatted) + '</pre>';
+            } catch(e) {
+                return '<pre class="step-detail-pre raw-prompt-pre">' + this.escapeHtml(text) + '</pre>';
+            }
+        },
+
+        renderStepContent(step, tab, mode) {
+            if (!step) return '';
+            if (tab === 'prompt') {
+                return mode === 'formatted' ? this.renderPromptFormatted(step) : this.renderPromptRaw(step);
+            }
+            if (tab === 'response') {
+                return mode === 'formatted' ? this.renderResponseFormatted(step) : this.renderResponseRaw(step);
+            }
+            return '';
         },
 
         formatRawPrompt(step) {

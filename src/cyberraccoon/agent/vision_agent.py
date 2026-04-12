@@ -538,6 +538,7 @@ class VisionAgent:
                     "cache_creation_tokens": step_result.cache_creation_tokens,
                     "total_cache_read_tokens": total_cache_read_tokens,
                     "total_cache_creation_tokens": total_cache_creation_tokens,
+                    "response_id": step_result.response_id,
                 }
                 step_log.append(step_info)
 

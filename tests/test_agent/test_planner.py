@@ -201,11 +201,12 @@ class TestExpectedOutcomeParsing:
         assert steps[0].expected_outcome == "Chrome window visible with address bar"
         assert steps[1].expected_outcome == "example.com homepage loaded"
 
-    def test_missing_expected_outcome(self) -> None:
+    def test_missing_expected_outcome_auto_generated(self) -> None:
         text = "1. Open terminal\n2. Type hello"
         steps = parse_steps(text)
-        assert steps[0].expected_outcome == ""
-        assert steps[1].expected_outcome == ""
+        assert steps[0].expected_outcome != ""
+        assert "terminal" in steps[0].expected_outcome.lower()
+        assert steps[1].expected_outcome != ""
 
     def test_mixed_expected_outcomes(self) -> None:
         text = (
@@ -217,7 +218,7 @@ class TestExpectedOutcomeParsing:
         )
         steps = parse_steps(text)
         assert steps[0].expected_outcome == "Chrome is open"
-        assert steps[1].expected_outcome == ""
+        assert steps[1].expected_outcome != ""  # auto-generated fallback
         assert steps[2].expected_outcome == "Login form filled"
 
 

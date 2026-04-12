@@ -32,7 +32,7 @@ body {
 }
 
 #app {
-    max-width: 960px;
+    max-width: 1400px;
     margin: 0 auto;
     padding: 0 1rem;
 }
@@ -303,6 +303,31 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    position: relative;
+}
+
+.btn-refresh-screenshot {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    z-index: 10;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 1.1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.btn-refresh-screenshot:hover {
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.4);
 }
 
 .preview-img {
@@ -628,6 +653,132 @@ body {
     color: var(--text-muted);
     min-width: 4rem;
     text-align: right;
+}
+
+/* ---- Split layout (D-09) ---- */
+.step-split {
+    display: grid;
+    /* Default 45/55 per UAT gap 1; initSplitResize clamps to [20,80] */
+    grid-template-columns: 45% 8px 55%;
+    gap: 0;
+    min-height: 400px;
+    max-height: calc(100vh - 200px);
+    margin-top: 0.5rem;
+}
+.step-split-left {
+    overflow-y: auto;
+    min-width: 0;
+}
+.step-split-divider {
+    background: var(--border);
+    cursor: col-resize;
+    transition: background 0.15s;
+}
+.step-split-divider:hover,
+.step-split-divider.dragging {
+    background: var(--accent);
+}
+.step-split-right {
+    overflow-y: auto;
+    min-width: 0;
+}
+.step-split-right .step-log {
+    max-height: none;
+}
+.step-split-right .workflow-plan {
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0;
+}
+
+@media (max-width: 900px) {
+    .step-split {
+        grid-template-columns: 1fr !important;
+    }
+    .step-split-divider {
+        display: none;
+    }
+    .step-split-right {
+        border-top: 1px solid var(--border);
+        margin-top: 0.5rem;
+        padding-top: 0.5rem;
+    }
+}
+
+/* ---- Collapsible sections (D-17) ---- */
+.collapsible:not(.expanded) .collapsible-content {
+    max-height: 4.5em;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 60%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 60%, transparent 100%);
+}
+.collapsible.expanded .collapsible-content {
+    max-height: none;
+}
+.collapsible-toggle {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    cursor: pointer;
+    padding: 0.15rem 0;
+    margin-top: 0.15rem;
+}
+.collapsible-toggle:hover {
+    color: var(--text);
+}
+
+/* Tab bar wrapper (2 tabs + formatted/raw toggle) */
+.step-detail-tab-bar {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-top: 0.5rem;
+}
+.step-detail-tab-bar .step-detail-tabs {
+    display: flex;
+    gap: 0;
+    flex: 1;
+    border-bottom: none;
+    margin: 0;
+}
+.view-mode-toggle {
+    display: flex;
+    gap: 2px;
+    padding: 0 0.5rem;
+    flex-shrink: 0;
+}
+
+/* Follow indicator */
+.follow-indicator {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+.follow-indicator.following::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ok);
+    display: inline-block;
+}
+/* Auto-follow toggle pill inside follow-indicator (UAT gap 2) */
+.follow-indicator .plan-mode-pill {
+    padding: 0.2rem 0.5rem;       /* tighter than default pill for this compact row */
+    font-size: 0.65rem;           /* Small tier — matches surrounding indicator text */
+    margin-right: 0.5rem;
+}
+
+/* Step detail content (scrollable container) */
+.step-detail-content {
+    overflow-y: auto;
+    max-height: 500px;
+    padding: 0.5rem;
 }
 
 /* Step detail panel */
@@ -1266,7 +1417,6 @@ fieldset select:focus {
 
 .ws-step-completed-lock {
     pointer-events: none;
-    opacity: 0.6;
 }
 
 .workflow-plan.plan-paused {
@@ -1567,4 +1717,207 @@ fieldset select:focus {
     display: flex;
     gap: 0.4rem;
     margin-top: 0.4rem;
+}
+
+/* ================================================================
+   Content Renderers (Plan 02-02)
+   JSON syntax highlighting, chat bubbles, action cards,
+   image placeholders, markdown rendering
+   ================================================================ */
+
+/* JSON syntax highlighting (D-06, D-08) */
+.json-highlighted {
+    background: #0d0d1a;
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre;
+}
+.json-key { color: #e06c75; }
+.json-string { color: #98c379; }
+.json-number { color: #d19a66; }
+.json-boolean { color: #56b6c2; }
+.json-null { color: #888; font-style: italic; }
+
+/* Chat bubble styles (D-15) */
+.chat-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.chat-bubble {
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    border-left: 3px solid var(--border);
+}
+.chat-bubble-user {
+    background: rgba(52, 152, 219, 0.15);
+    border-left-color: #3498db;
+}
+.chat-bubble-assistant {
+    background: rgba(46, 204, 113, 0.15);
+    border-left-color: var(--ok);
+}
+.chat-bubble-system {
+    background: rgba(136, 136, 136, 0.1);
+    border-left-color: var(--text-muted);
+}
+.chat-bubble-role {
+    display: inline-block;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 0.25rem;
+}
+.chat-bubble-content {
+    font-size: 0.75rem;  /* UI-SPEC Label tier, per UAT gap 6 */
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.chat-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Action card styles (D-07) */
+.action-card {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-card);
+    border-radius: 4px;
+    margin-bottom: 0.25rem;
+    border-left: 3px solid var(--border);
+}
+.action-icon { font-size: 1rem; flex-shrink: 0; }
+.action-label { font-size: 0.75rem; font-weight: 600; text-transform: lowercase; min-width: 5rem; }
+.action-detail { font-size: 0.85rem; color: var(--text); word-break: break-word; }
+.action-click, .action-double_click, .action-left_click { border-left-color: var(--accent); }
+.action-type { border-left-color: #3498db; }
+.action-key { border-left-color: #9b59b6; }
+.action-scroll { border-left-color: #f39c12; }
+.action-drag { border-left-color: #d19a66; }
+.action-done { border-left-color: var(--ok); }
+.action-screenshot { border-left-color: var(--text-muted); }
+
+/* Grouped response cluster for OpenAI CU queued actions (UAT gap 5) */
+.step-entry.step-in-group {
+    position: relative;
+}
+.step-entry.step-group-head {
+    border-left: 2px solid var(--accent);
+    padding-left: 0.4rem;
+}
+.step-entry.step-group-member {
+    border-left: 2px solid var(--accent);
+    padding-left: 0.4rem;
+    margin-left: 0;
+}
+.step-entry .step-group-indent {
+    color: var(--text-muted);
+    font-family: var(--mono);
+    min-width: 1.2rem;
+    text-align: center;
+}
+.response-group-badge {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 0.25rem 0.5rem;
+    margin-bottom: 0.5rem;
+    border-left: 2px solid var(--accent);
+    background: rgba(233, 69, 96, 0.08);
+}
+.response-group-member {
+    margin-bottom: 0.5rem;
+    padding-left: 0.25rem;
+}
+.response-group-member-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 0.15rem;
+}
+
+/* Image placeholder (D-16) */
+.image-placeholder {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.5rem;
+    background: rgba(136, 136, 136, 0.1);
+    border: 1px dashed var(--border);
+    border-radius: 4px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+.image-placeholder::before {
+    content: '\1F4F7';
+}
+
+/* Markdown rendered styles (D-07) */
+.md-rendered {
+    font-size: 0.85rem;
+    line-height: 1.5;
+    word-break: break-word;
+}
+.md-rendered h1 { font-size: 1.1rem; font-weight: 600; margin: 0.75rem 0 0.25rem; }
+.md-rendered h2 { font-size: 1rem; font-weight: 600; margin: 0.5rem 0 0.25rem; }
+.md-rendered h3 { font-size: 0.9rem; font-weight: 600; margin: 0.5rem 0 0.25rem; }
+.md-rendered code {
+    background: #0d0d1a;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+}
+.md-code-block {
+    background: #0d0d1a;
+    padding: 0.5rem;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    margin: 0.5rem 0;
+}
+
+/* Supporting styles (tool result, screen summary, section labels, prompt section) */
+.tool-result {
+    padding: 0.25rem 0.5rem;
+    margin: 0.25rem 0;
+    border-left: 2px solid var(--text-muted);
+}
+.tool-result-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+.screen-summary {
+    padding: 0.5rem;
+    margin-top: 0.25rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+.section-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+.prompt-section {
+    margin-bottom: 0.75rem;
+}
+.prompt-section h4 {
+    margin: 0 0 0.25rem;
 }

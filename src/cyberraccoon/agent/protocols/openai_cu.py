@@ -204,6 +204,9 @@ class OpenAICUProtocol(ComputerUseProtocol):
         actions = self._extract_actions(computer_call)
         if not actions:
             self._step_count += 1
+            # WR-03: stamp response_id — _last_response_id was updated
+            # at line 193 so this failure row belongs to the same
+            # response as the success path.
             return StepResult(
                 command=None, is_done=False, done_reason="",
                 screen_summary="", raw_text="No actions in computer_call",
@@ -211,6 +214,7 @@ class OpenAICUProtocol(ComputerUseProtocol):
                 latency_ms=latency_ms, success=False,
                 error="computer_call contained no actions",
                 cache_read_tokens=cache_read,
+                response_id=self._last_response_id,
             )
 
         # Include full action details in raw_text
@@ -223,7 +227,10 @@ class OpenAICUProtocol(ComputerUseProtocol):
         # Track assistant response for get_messages_snapshot()
         self._messages.append({
             "role": "assistant",
-            "content": raw_text[:500] if raw_text else "(no text)",
+            "content": (
+                f"[response_id={response.id}] "
+                + (raw_text[:500] if raw_text else "(no text)")
+            ),
         })
 
         # Queue remaining actions, process first
@@ -257,12 +264,15 @@ class OpenAICUProtocol(ComputerUseProtocol):
                     f"(raw: {first_action!r})"
                 )
             logger.warning("Step %d: %s", self._step_count, error_msg)
+            # WR-03: stamp response_id so this failure row is grouped
+            # with any sibling actions from the same LLM response.
             return StepResult(
                 command=None, is_done=False, done_reason="",
                 screen_summary=screen_summary, raw_text=raw_text,
                 input_tokens=in_tok, output_tokens=out_tok,
                 latency_ms=latency_ms, success=False, error=error_msg,
                 cache_read_tokens=cache_read,
+                response_id=self._last_response_id,
             )
 
         if command is not None:
@@ -270,12 +280,16 @@ class OpenAICUProtocol(ComputerUseProtocol):
             if oob_error:
                 self._action_queue.clear()
                 logger.warning("Step %d: %s", self._step_count, oob_error)
+                # WR-03: stamp response_id so the OOB failure row is
+                # grouped with any sibling actions from the same LLM
+                # response (consistent with the queued-pop OOB path).
                 return StepResult(
                     command=None, is_done=False, done_reason="",
                     screen_summary=screen_summary, raw_text=raw_text,
                     input_tokens=in_tok, output_tokens=out_tok,
                     latency_ms=latency_ms, success=False, error=oob_error,
                     cache_read_tokens=cache_read,
+                    response_id=self._last_response_id,
                 )
 
         logger.info(
@@ -291,6 +305,7 @@ class OpenAICUProtocol(ComputerUseProtocol):
             latency_ms=latency_ms, success=True,
             needs_screenshot=needs_screenshot,
             cache_read_tokens=cache_read,
+            response_id=self._last_response_id,
         )
 
     def report_result(self, success: bool, error: str | None = None) -> None:
@@ -395,6 +410,7 @@ class OpenAICUProtocol(ComputerUseProtocol):
                 screen_summary="", raw_text=raw_text,
                 input_tokens=0, output_tokens=0,
                 latency_ms=0, success=False, error=error_msg,
+                response_id=self._last_response_id,
             )
 
         if command is not None:
@@ -406,6 +422,7 @@ class OpenAICUProtocol(ComputerUseProtocol):
                     screen_summary="", raw_text=raw_text,
                     input_tokens=0, output_tokens=0,
                     latency_ms=0, success=False, error=oob_error,
+                    response_id=self._last_response_id,
                 )
 
         return StepResult(
@@ -414,6 +431,7 @@ class OpenAICUProtocol(ComputerUseProtocol):
             input_tokens=0, output_tokens=0,
             latency_ms=0, success=True,
             needs_screenshot=needs_screenshot,
+            response_id=self._last_response_id,
         )
 
     def _call_api_initial(
@@ -424,6 +442,10 @@ class OpenAICUProtocol(ComputerUseProtocol):
         self._messages.append({
             "role": "user",
             "content": f"[screenshot] Task: {task_goal}",
+        })
+        self._messages.append({
+            "role": "system",
+            "content": f"[API] model={self._model}, previous_response_id=None (initial)",
         })
         return self._client.responses.create(
             model=self._model,
@@ -452,6 +474,13 @@ class OpenAICUProtocol(ComputerUseProtocol):
         self._messages.append({
             "role": "user",
             "content": "[screenshot after action]",
+        })
+        self._messages.append({
+            "role": "system",
+            "content": (
+                f"[API] model={self._model}, "
+                f"previous_response_id={self._last_response_id}"
+            ),
         })
         call_output: dict[str, Any] = {
             "type": "computer_call_output",

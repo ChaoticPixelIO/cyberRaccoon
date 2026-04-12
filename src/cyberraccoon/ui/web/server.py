@@ -338,6 +338,12 @@ def create_app(controller: AppController) -> FastAPI:
         controller.abort_task()
         return JSONResponse({"status": "ok"})
 
+    @app.post("/api/task/reset")
+    async def reset_task() -> JSONResponse:
+        """Force-clear stale task state when no task is actually running."""
+        result = controller.force_reset_task()
+        return JSONResponse({"status": result})
+
     @app.post("/api/task/approve-plan")
     async def approve_plan() -> JSONResponse:
         controller.approve_plan()

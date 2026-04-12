@@ -69,8 +69,10 @@ clicks/keystrokes the step should take.
 6. Number steps sequentially: 1, 2, 3, etc.
 7. The final step should verify the task is complete.
 8. If the task is simple enough to complete in one step, return just one step.
-9. After each step, add "Expected: " followed by a brief description of what \
-the screen should look like after this step completes.
+9. After each step, add "Expected: " followed by a brief description of the \
+visible END STATE on screen — what the user would see if the step fully succeeded. \
+Describe the result, not the action. For example, "search results page is visible" \
+rather than "search query was typed".
 
 Output ONLY the numbered step list. No explanation before or after.
 
@@ -78,7 +80,7 @@ Example format:
 1. Open Chrome browser [ACTIONS: 2]
 Expected: Chrome browser window is visible with address bar
 2. Navigate to example.com [ACTIONS: 2-3]
-Expected: example.com homepage is loaded in Chrome
+Expected: The example.com homepage is fully loaded in Chrome
 """
 
 VALIDATE_PLAN_SYSTEM_PROMPT = """\
@@ -86,16 +88,28 @@ You are a plan validator for CyberRaccoon, an AI that controls a computer \
 via screenshots and keyboard/mouse input.
 
 A task is being executed step by step. Look at the screenshot showing the \
-current screen state and evaluate whether the plan is still valid.
+current screen state and evaluate whether the step ACTUALLY ACHIEVED its \
+expected outcome.
 
-Compare the screenshot to the expected outcome. Reply with exactly ONE of:
+IMPORTANT: Verify the RESULT on screen, not the actions. For example:
+- "Type text and press Enter to search" → the search RESULTS page must be \
+visible. If text is still in the address bar or search box without results \
+loading, the step FAILED (e.g. an input method intercepted Enter).
+- "Open an application" → the application window must be visible and active.
+- "Click a button" → the expected state change must have occurred.
+
+Do NOT assume success just because the actions appear to have been performed. \
+The screen must show the expected END STATE described in "Expected outcome".
+
+Reply with exactly ONE of:
 
 CONTINUE
-(The screen matches expectations. Proceed with the remaining steps.)
+(The screen shows the expected end state. Proceed with the remaining steps.)
 
 REPLAN
-(The screen does NOT match expectations. Explain what went wrong in one \
-sentence, then produce a revised numbered step list from the current state. \
+(The screen does NOT show the expected end state. Explain what went wrong in \
+one sentence, then produce a revised numbered step list from the current state. \
+Each step MUST include an "Expected:" line describing the visible end state. \
 Follow the Application Skill if provided.)
 
 ESCALATE
@@ -129,13 +143,15 @@ Rules:
 2. Do NOT repeat steps that already completed successfully.
 3. Adjust step granularity to match task complexity. Add an action estimate \
 tag [ACTIONS: N] or [ACTIONS: N-M] after each step's goal text.
-4. If a step will cause a reboot, mark it: [REBOOT EXPECTED]
-5. If a "Calibration Data" section is provided below, use the estimated-vs-actual \
+4. After each step, add "Expected: " followed by the visible end state on \
+screen — what the user would see if the step fully succeeded.
+5. If a step will cause a reboot, mark it: [REBOOT EXPECTED]
+6. If a "Calibration Data" section is provided below, use the estimated-vs-actual \
 action counts to adjust your [ACTIONS: N] estimates. If prior steps consistently \
 underestimated, increase estimates for similar remaining steps. If prior steps \
 overestimated, you may decrease estimates. The goal is for your new estimates to \
 be more accurate than the originals.
-6. Output ONLY the numbered step list. No explanation.
+7. Output ONLY the numbered step list. No explanation.
 """
 
 
@@ -288,6 +304,10 @@ def parse_steps(text: str) -> list[PlanStep]:
         expected_match = _EXPECTED_RE.search(between)
         expected = expected_match.group(1).strip() if expected_match else ""
 
+        # Auto-generate expected outcome from goal if LLM omitted it
+        if not expected:
+            expected = _infer_expected_outcome(clean_goal)
+
         steps.append(PlanStep(
             number=number,
             goal=clean_goal,
@@ -296,6 +316,27 @@ def parse_steps(text: str) -> list[PlanStep]:
             expected_actions=expected_actions,
         ))
     return steps
+
+
+def _infer_expected_outcome(goal: str) -> str:
+    """Generate a reasonable expected outcome from the step goal text.
+
+    Used as fallback when the LLM omits the 'Expected:' line.
+    """
+    g = goal.rstrip(".").strip()
+    lower = g.lower()
+    if lower.startswith("wait for"):
+        return g[len("wait for"):].strip().capitalize() + " is visible"
+    if lower.startswith("open "):
+        target = g[len("open "):].strip()
+        return f"{target} is open and visible on screen"
+    if lower.startswith("click "):
+        return f"The expected state change from '{g}' is visible on screen"
+    if lower.startswith("type ") or lower.startswith("enter "):
+        return f"The text has been entered and the expected result is visible"
+    if lower.startswith("navigate to ") or lower.startswith("go to "):
+        return f"The target page or screen is loaded and visible"
+    return f"The result of '{g}' is visible on screen"
 
 
 def _parse_rewrite_json(raw: str) -> dict[str, Any] | None:
@@ -469,7 +510,9 @@ class TaskPlanner:
         user_parts = [
             f"The step that just completed was:",
             f"  Step {completed_step.number}: {completed_step.goal}",
-            f"  Expected outcome: {completed_step.expected_outcome or '(not specified)'}",
+            f"",
+            f"EXPECTED END STATE (verify this is visible on screen):",
+            f"  {completed_step.expected_outcome or '(not specified)'}",
             f"",
             f"The user's ultimate goal is: {task_goal}",
             f"",

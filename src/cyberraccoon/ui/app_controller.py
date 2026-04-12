@@ -891,6 +891,28 @@ class AppController:
             agent.abort()
             logger.info("Task abort requested")
 
+    def force_reset_task(self) -> str:
+        """Force-clear stale task state (e.g. after a crashed/stuck task).
+
+        Clears the task thread reference so a new task can start.
+        Only use when the task thread is dead but wasn't cleaned up.
+
+        Returns:
+            "reset" if state was fully cleared, "aborted" if task was
+            still alive and only an abort was requested.
+        """
+        with self._lock:
+            if self._task_thread and self._task_thread.is_alive():
+                logger.warning("Task thread still alive — aborting first")
+                if self._agent:
+                    self._agent.abort()
+                return "aborted"
+            self._task_thread = None
+            self._task_result = None
+            self._task_goal = None
+            logger.info("Task state force-reset")
+            return "reset"
+
     def pause_task(self) -> bool:
         """Request the running task to pause at the next opportunity (D-02).
 
