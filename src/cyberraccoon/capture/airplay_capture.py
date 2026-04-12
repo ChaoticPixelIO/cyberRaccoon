@@ -113,7 +113,7 @@ class AirPlayCapture:
             raise CaptureError(
                 "uxplay is not installed. "
                 "Install via: sudo apt install uxplay  "
-                "or run: sudo scripts/setup_airplay.sh"
+                "or run: sudo scripts/setup.sh --airplay"
             )
 
         version = self._detect_uxplay_version()

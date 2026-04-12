@@ -608,17 +608,17 @@ class AppController:
                 return
 
     def _setup_usb_gadget(self) -> None:
-        """Run ``setup_gadget.sh`` to create ``/dev/hidg0``.
+        """Run ``scripts/setup/gadget.sh`` to create ``/dev/hidg0``.
 
         Called automatically when the USB HID device file does not exist.
 
         Raises:
             TaskError: If the setup script fails.
         """
-        script = PROJECT_ROOT / "scripts" / "setup_gadget.sh"
+        script = PROJECT_ROOT / "scripts" / "setup" / "gadget.sh"
         if not script.exists():
             raise TaskError(f"USB Gadget setup script not found: {script}")
-        logger.info("USB Gadget device not found, running setup_gadget.sh ...")
+        logger.info("USB Gadget device not found, running setup/gadget.sh ...")
         try:
             result = subprocess.run(
                 [str(script)],

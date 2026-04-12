@@ -32,8 +32,21 @@ from .base import (
     frame_to_capture_result,
 )
 from .camera_capture import CameraCapture
-from .csi_capture import CsiHdmiCapture
-from .screen_capture import ScreenCapture, find_capture_device
+
+# ScreenCapture and CsiHdmiCapture require cv2 (OpenCV). On systems where
+# opencv is not installed (e.g. fresh venv without --system-site-packages),
+# we defer these imports so the package remains importable and only fails
+# when the user actually tries to *use* these backends.
+try:
+    from .screen_capture import ScreenCapture, find_capture_device
+except ImportError:
+    ScreenCapture = None  # type: ignore[assignment,misc]
+    find_capture_device = None  # type: ignore[assignment]
+
+try:
+    from .csi_capture import CsiHdmiCapture
+except ImportError:
+    CsiHdmiCapture = None  # type: ignore[assignment,misc]
 
 # ---------------------------------------------------------------------------
 # Source registry + factory
@@ -83,8 +96,10 @@ def create_capture(source: str, **kwargs: object) -> CaptureSource:
 # Built-in source registration
 # ---------------------------------------------------------------------------
 
-register_source("hdmi", ScreenCapture)
-register_source("csi", CsiHdmiCapture)
+if ScreenCapture is not None:
+    register_source("hdmi", ScreenCapture)
+if CsiHdmiCapture is not None:
+    register_source("csi", CsiHdmiCapture)
 register_source("picamera", CameraCapture)
 
 # AirPlay is registered lazily to avoid import errors on systems without

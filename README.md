@@ -19,9 +19,9 @@ The loop repeats until the task is complete. The target computer sees CyberRacco
 
 ## Features
 
-- **3 capture sources** — HDMI capture card, Raspberry Pi CSI camera, or AirPlay screen mirroring
-- **2 HID transports** — USB HID Gadget (wired) or Bluetooth HID (wireless)
-- **Multiple LLM providers** — Anthropic (Claude), OpenAI (GPT-4o), or any OpenAI-compatible API
+- **3 capture sources** — HDMI-CSI bridge (TC358743), AirPlay screen mirroring, or USB HDMI capture card
+- **2 HID transports** — Bluetooth HID (wireless) or USB HID Gadget (wired, requires USB power/data splitter on Pi 5)
+- **Multiple LLM providers** — OpenAI (GPT), Anthropic (Claude), or any OpenAI-compatible API
 - **Input humanization** — Bezier curve mouse movements, variable typing rhythm, jitter, and overshoot to avoid bot detection
 - **Web UI + CLI** — Remote task management via browser or interactive terminal REPL
 - **Configurable** — CLI flags, environment variables, or YAML config file (3-tier precedence)
@@ -30,12 +30,12 @@ The loop repeats until the task is complete. The target computer sees CyberRacco
 
 | Component | Purpose | Notes |
 |-----------|---------|-------|
-| Raspberry Pi 5 (or Pi 4B) | Main controller | Pi 4B works for USB mode; Pi 5 recommended |
-| USB HDMI capture card | Screen capture | Optional (~$10–20); or use CSI camera / AirPlay instead |
-| HDMI-to-CSI module | Screen capture | Optional; alternative to USB capture card, uses Pi CSI port |
-| USB OTG cable | USB HID output | Optional, Pi 4B only — Pi 5 USB-C is power-only |
+| Raspberry Pi 5 | Main controller | Only tested on Pi 5 |
+| HDMI-to-CSI module (TC358743) | Screen capture | Optional; uses Pi CSI port, no USB needed |
+| USB HDMI capture card | Screen capture | Optional (~$10–20); not fully tested yet |
+| USB power/data splitter cable | USB HID output | Optional; needed for USB Gadget mode on Pi 5 |
 
-> **Pi 5 note:** The USB-C port on Pi 5 is power-only and cannot be used for USB HID Gadget. Use Bluetooth HID (`--transport bt`) instead, or use a Pi 4B for USB mode.
+> **Minimal setup:** Raspberry Pi 5 with Bluetooth + AirPlay — no extra hardware needed. The Pi pairs as a wireless keyboard/mouse via Bluetooth, and captures the screen via AirPlay mirroring. Other capture and input methods require the optional hardware above.
 
 ## Quick Start
 
@@ -50,33 +50,34 @@ pip install -e ".[dev]"
 ### 2. Set your API key
 
 ```bash
-# Anthropic (default)
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# OpenAI (if using --provider openai)
+# OpenAI (default)
 export OPENAI_API_KEY="sk-..."
+
+# Anthropic (if using --provider anthropic)
+export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
 ### 3. Set up hardware (run once on the Pi)
 
 ```bash
-# USB HID Gadget (Pi 4B)
-sudo scripts/setup_gadget.sh
+# Interactive — asks what to configure
+sudo scripts/setup.sh
 
-# Bluetooth HID (Pi 4B/5)
-sudo scripts/setup_bluetooth.sh
-
-# AirPlay capture (optional)
-sudo scripts/setup_airplay.sh
+# Or specify components directly
+sudo scripts/setup.sh --bt              # Bluetooth HID
+sudo scripts/setup.sh --gadget          # USB HID Gadget (needs splitter on Pi 5)
+sudo scripts/setup.sh --airplay         # AirPlay capture (optional)
+sudo scripts/setup.sh --csi             # CSI HDMI capture (optional)
 ```
 
 ### 4. Run a task
 
 ```bash
-# USB mode (Pi 4B)
-python -m cyberraccoon --task "Open Notepad and type Hello World"
+# Start the Web UI (recommended)
+python -m cyberraccoon --web
+# Open http://<pi-ip>:8000 in your browser
 
-# Bluetooth mode (Pi 5)
+# Or run a one-shot task from the command line
 python -m cyberraccoon --task "Open Notepad and type Hello World" --transport bt
 
 # AirPlay + Bluetooth
@@ -85,15 +86,33 @@ python -m cyberraccoon --task "Open Safari" --source airplay --transport bt
 
 ## Usage
 
-### Three modes
+### Web UI (recommended)
+
+```bash
+python -m cyberraccoon --web
+python -m cyberraccoon --web --host 0.0.0.0 --port 8080
+# Open http://<pi-ip>:8000 in your browser
+```
+
+The Web UI is the primary way to use CyberRaccoon — it provides live task progress, configuration, and log streaming all in one place.
+
+<p align="center">
+  <img src="docs/images/web-ui-task.png" alt="CyberRaccoon Web UI — Task tab with live step progress" width="800">
+</p>
+
+**Tabs:**
+
+- **Task** — Submit tasks, view live progress with step-by-step screenshots
+- **Config** — Edit capture source, LLM provider, transport settings
+- **Skills** — Browse, enable, edit, and create application skills
+- **Status** — System overview: module readiness, capture, transport, LLM
+- **Debug** — Real-time log streaming via WebSocket with level/module filtering
+
+### Command line
 
 ```bash
 # One-shot task
 python -m cyberraccoon --task "Click the Start menu"
-
-# Web UI (FastAPI + Alpine.js)
-python -m cyberraccoon --web
-python -m cyberraccoon --web --host 0.0.0.0 --port 8080
 
 # Interactive CLI REPL
 python -m cyberraccoon --cli
@@ -116,9 +135,9 @@ python -m cyberraccoon --web --cli
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--provider` | `anthropic` | LLM provider: `anthropic` or `openai` |
-| `--model` | `claude-opus-4-6` | Model name |
-| `--api-key` | env var | API key (or set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`) |
+| `--provider` | `openai` | LLM provider: `openai` or `anthropic` |
+| `--model` | — | Model name (provider default if omitted) |
+| `--api-key` | env var | API key (or set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) |
 | `--base-url` | — | Custom API base URL (OpenAI-compatible) |
 
 **Agent:**
@@ -134,8 +153,7 @@ python -m cyberraccoon --web --cli
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--transport` | `usb` | Transport: `usb` or `bt` (Bluetooth) |
-| `--keyboard` | `/dev/hidg0` | Keyboard HID device path (USB mode) |
-| `--mouse` | `/dev/hidg1` | Mouse HID device path (USB mode) |
+| `--hid-device` | `/dev/hidg0` | HID device path for USB mode (combined keyboard+mouse) |
 
 **Humanization:**
 
@@ -157,31 +175,15 @@ python -m cyberraccoon --web --cli
 |------|-------------|
 | `--verbose` / `-v` | Enable debug logging |
 
-## Web UI
-
-The web UI provides remote task management from any browser on the same network.
-
-```bash
-python -m cyberraccoon --web
-# Open http://<pi-ip>:8000 in your browser
-```
-
-**Tabs:**
-
-- **Task** — Submit tasks, view live progress with step-by-step screenshots
-- **Config** — Edit capture source, LLM provider, transport settings
-- **Logs** — Real-time log streaming via WebSocket
-- **Wi-Fi** — Network configuration (for headless Pi setup)
-
-<!-- TODO: Add screenshot -->
-
 ## Capture Sources
 
-| Source | Best for | Hardware | Software |
-|--------|----------|----------|----------|
-| HDMI | Desktop/laptop with HDMI out | USB HDMI capture card | — |
-| CSI | HDMI input via CSI port (no USB needed) | HDMI-to-CSI module | picamera2 |
-| AirPlay | macOS/iOS wireless mirroring | — | uxplay + GStreamer (`setup_airplay.sh`) |
+| Source | Status | Best for | Hardware |
+|--------|--------|----------|----------|
+| CSI (TC358743) | Tested | HDMI input via CSI port (no USB needed) | HDMI-to-CSI bridge module |
+| AirPlay | Tested | macOS/iOS wireless mirroring | — (software only: uxplay + GStreamer) |
+| HDMI-UVC | Not fully tested | Desktop/laptop with HDMI out | USB HDMI capture card |
+
+> **Note:** The HDMI-UVC (USB capture card) source has not been fully validated on the current Pi 5 setup. CSI and AirPlay are the recommended capture methods.
 
 ## Input Humanization
 
@@ -240,10 +242,10 @@ HDMI Input → [M1 Capture] → [M2 Vision Agent] ←→ [M3 LLM Client]
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | — | **Required** for Anthropic provider |
 | `OPENAI_API_KEY` | — | **Required** for OpenAI provider |
-| `CYBERRACCOON_PROVIDER` | `anthropic` | LLM provider (`anthropic` or `openai`) |
-| `CYBERRACCOON_MODEL` | `claude-opus-4-6` | Model name |
+| `ANTHROPIC_API_KEY` | — | **Required** for Anthropic provider |
+| `CYBERRACCOON_PROVIDER` | `openai` | LLM provider (`openai` or `anthropic`) |
+| `CYBERRACCOON_MODEL` | — | Model name (provider default if omitted) |
 | `CYBERRACCOON_BASE_URL` | — | Custom API base URL |
 | `CYBERRACCOON_SOURCE` | `hdmi` | Capture source (`hdmi`, `csi`, `airplay`) |
 | `CYBERRACCOON_DEVICE` | `0` | Device index for HDMI/CSI |

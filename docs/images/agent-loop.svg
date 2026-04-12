@@ -72,7 +72,7 @@
   <path d="M730 92 l2 5.5 5.5 2 -5.5 2 -2 5.5 -2-5.5 -5.5-2 5.5-2z" fill="#c4b5fd"/>
   <!-- Labels -->
   <text x="750" y="145" text-anchor="middle" font-size="14" font-weight="600" fill="#1e293b">Vision LLM</text>
-  <text x="750" y="163" text-anchor="middle" font-size="11" fill="#64748b">Claude / GPT-4o</text>
+  <text x="750" y="163" text-anchor="middle" font-size="11" fill="#64748b">Claude / GPT</text>
   <text x="750" y="185" text-anchor="middle" font-size="10" fill="#94a3b8">Sees the screen</text>
   <text x="750" y="201" text-anchor="middle" font-size="10" fill="#94a3b8">Decides what to do next</text>
 

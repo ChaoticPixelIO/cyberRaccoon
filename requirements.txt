@@ -1,5 +1,7 @@
 # Core dependencies
-opencv-python>=4.8.0
+# NOTE: opencv-python intentionally excluded — Pi venv inherits system
+# python3-opencv (with GStreamer). pip-installing opencv-python shadows
+# it and breaks AirPlay capture. Install via: sudo apt install python3-opencv
 Pillow>=10.0.0
 numpy>=1.24.0
 

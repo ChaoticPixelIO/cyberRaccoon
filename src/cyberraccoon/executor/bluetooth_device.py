@@ -209,7 +209,7 @@ class BluetoothHIDConnection:
             if "Operation not permitted" in stderr or "not permitted" in stderr.lower():
                 logger.warning(
                     "Adapter config skipped (no CAP_NET_ADMIN): %s. "
-                    "Run 'sudo scripts/setup_bluetooth.sh' once to pre-configure.",
+                    "Run 'sudo scripts/setup.sh --bt' once to pre-configure.",
                     stderr.strip(),
                 )
             else:
@@ -382,7 +382,7 @@ class BluetoothHIDConnection:
                 raise HIDDeviceError(
                     f"Failed to create L2CAP sockets: {e}. "
                     "Python needs CAP_NET_BIND_SERVICE to bind PSM 17/19. "
-                    "Fix: sudo scripts/setup_bluetooth.sh"
+                    "Fix: sudo scripts/setup.sh --bt"
                 )
             if e.errno == 98:  # EADDRINUSE
                 self._kill_stale_l2cap_holder()

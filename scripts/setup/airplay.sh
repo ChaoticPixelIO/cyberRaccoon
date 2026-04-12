@@ -8,7 +8,7 @@
 # After running this script, the Mac user can AirPlay mirror to the Pi.
 # The AirPlayCapture class receives decoded frames via RTP + GStreamer.
 #
-# Run once with: sudo scripts/setup_airplay.sh
+# Run via: sudo scripts/setup.sh --airplay
 # ===========================================================================
 
 set -euo pipefail
@@ -58,7 +58,7 @@ echo "  GStreamer plugins installed"
 # ---------------------------------------------------------------------------
 echo ""
 echo "[3/4] Checking OpenCV + GStreamer..."
-if python3 -c "import cv2; info = cv2.getBuildInformation(); assert 'GStreamer:                   YES' in info" 2>/dev/null; then
+if python3 -c "import cv2; info = cv2.getBuildInformation(); assert 'GStreamer:' in info and 'YES' in info.split('GStreamer:')[1].split('\n')[0]" 2>/dev/null; then
     echo "  OpenCV with GStreamer support: OK"
 else
     echo "  Installing system python3-opencv (includes GStreamer support)..."
@@ -118,7 +118,7 @@ else
 fi
 
 # Check OpenCV GStreamer
-if python3 -c "import cv2; assert 'GStreamer:                   YES' in cv2.getBuildInformation()" 2>/dev/null; then
+if python3 -c "import cv2; info = cv2.getBuildInformation(); assert 'GStreamer:' in info and 'YES' in info.split('GStreamer:')[1].split('\n')[0]" 2>/dev/null; then
     echo "  [OK] OpenCV GStreamer support"
 else
     echo "  [FAIL] OpenCV lacks GStreamer support"
@@ -140,7 +140,7 @@ if $PASS; then
     echo ""
     echo "  Usage:"
     echo "    # Test AirPlay capture:"
-    echo "    python -m capture.cli --source airplay --output airplay.jpg"
+    echo "    python -m cyberraccoon.capture.cli --source airplay --output airplay.jpg"
     echo ""
     echo "    # On Mac: System Settings > General > AirDrop & Handoff"
     echo "    # Or: Control Center > Screen Mirroring > CyberRaccoon"

@@ -14,7 +14,7 @@
 #
 # Device file: /dev/hidg0 (shared by keyboard and mouse)
 #
-# Run once at boot with: sudo scripts/setup_gadget.sh
+# Run via: sudo scripts/setup.sh --gadget
 # Idempotent: skips if gadget already configured.
 # ===========================================================================
 
@@ -26,6 +26,18 @@ GADGET_DIR="/sys/kernel/config/usb_gadget/cyber_raccoon"
 if [ -d "$GADGET_DIR" ] && [ -e /dev/hidg0 ]; then
     echo "[INFO] USB Gadget already configured at $GADGET_DIR — skipping."
     exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Pi 5 check: USB-C on Pi 5 is power-only (dwc3 host mode).
+# USB Gadget requires a UDC, which only Pi 4B (and earlier) expose via dwc2.
+# ---------------------------------------------------------------------------
+if [ -f /proc/device-tree/model ] && grep -q "Raspberry Pi 5" /proc/device-tree/model; then
+    echo "[ERROR] Raspberry Pi 5 detected."
+    echo "        The USB-C port on Pi 5 is power-only and cannot act as a USB device."
+    echo "        Use Bluetooth HID instead:  sudo scripts/setup.sh --bt"
+    echo "        Then run with:              python -m cyberraccoon --transport bt"
+    exit 1
 fi
 
 echo "[INFO] Setting up CyberRaccoon USB Gadget..."
@@ -85,24 +97,13 @@ fi
 modprobe libcomposite
 
 # ---------------------------------------------------------------------------
-# Pi 5 USB gadget support: apply dwc2 overlay at runtime if no UDC found.
-# Pi 5 does not expose a UDC by default; the dwc2 overlay must be applied
-# at runtime (not from config.txt, which loads the host-only dwc_otg driver).
+# Verify UDC is available (Pi 4B exposes this via dwc2 in config.txt)
 # ---------------------------------------------------------------------------
 if [ -z "$(ls /sys/class/udc 2>/dev/null)" ]; then
-    echo "[INFO] No UDC found, attempting to enable dwc2 peripheral mode..."
-    if dtoverlay dwc2 dr_mode=peripheral 2>/dev/null; then
-        sleep 1
-        if [ -n "$(ls /sys/class/udc 2>/dev/null)" ]; then
-            echo "[OK] dwc2 overlay applied, UDC available."
-        else
-            echo "[ERROR] dwc2 overlay applied but no UDC appeared."
-            exit 1
-        fi
-    else
-        echo "[ERROR] Failed to apply dwc2 overlay. Ensure USB OTG is available."
-        exit 1
-    fi
+    echo "[ERROR] No UDC found. Ensure dwc2 overlay is enabled in /boot/firmware/config.txt:"
+    echo "        dtoverlay=dwc2"
+    echo "        Then reboot."
+    exit 1
 fi
 
 # Create gadget directory

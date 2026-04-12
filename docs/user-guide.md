@@ -15,13 +15,13 @@ This guide covers installation, configuration, and usage of CyberRaccoon in deta
   - [Environment Variables](#environment-variables)
   - [Config Precedence](#config-precedence)
 - [Running Tasks](#running-tasks)
-  - [One-Shot Mode](#one-shot-mode)
   - [Web UI](#web-ui)
+  - [One-Shot Mode](#one-shot-mode)
   - [Interactive CLI](#interactive-cli)
 - [Capture Sources](#capture-sources)
-  - [HDMI](#hdmi)
-  - [CSI Camera](#csi-camera)
+  - [CSI HDMI (TC358743)](#csi-hdmi-tc358743--recommended)
   - [AirPlay](#airplay)
+  - [HDMI-UVC](#hdmi-uvc-usb-capture-card)
 - [HID Transports](#hid-transports)
   - [USB](#usb)
   - [Bluetooth](#bluetooth)
@@ -41,12 +41,24 @@ git clone https://github.com/ChaoticPixelIO/cyberRaccoon.git
 cd cyberRaccoon
 ```
 
+### System prerequisites (Raspberry Pi)
+
+```bash
+# OpenCV with GStreamer support (required for AirPlay capture)
+sudo apt install python3-opencv
+
+# Bluetooth HID dependencies (installed automatically by scripts/setup.sh --bt)
+sudo apt install bluez libcap2-bin python3-dbus python3-gi
+```
+
+### Python setup
+
 On Raspberry Pi, create a venv with system site-packages (required for OpenCV with GStreamer support):
 
 ```bash
 python3 -m venv --system-site-packages venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 ```
 
 > **Do not** `pip install opencv-python` inside the venv. It shadows the system OpenCV package and loses GStreamer support, which breaks AirPlay capture. If accidentally installed, fix with:
@@ -58,39 +70,51 @@ pip install -r requirements.txt
 
 ## Hardware Setup
 
-Each setup script is idempotent and safe to run multiple times. Run them once after a fresh OS install or first boot.
+All setup is managed through a single entry point. Each component is idempotent and safe to run multiple times.
+
+```bash
+# Interactive — asks what to configure
+sudo scripts/setup.sh
+
+# Or specify components directly
+sudo scripts/setup.sh --bt              # Bluetooth HID
+sudo scripts/setup.sh --gadget          # USB HID Gadget (needs splitter on Pi 5)
+sudo scripts/setup.sh --airplay         # AirPlay capture
+sudo scripts/setup.sh --csi             # CSI HDMI capture (TC358743)
+sudo scripts/setup.sh --all             # everything applicable
+```
 
 ### USB HID Gadget
 
-Creates `/dev/hidg0` (keyboard) and `/dev/hidg1` (mouse) so the Pi appears as a USB keyboard and mouse to the target computer.
+> **Note:** On Pi 5, USB Gadget requires a USB power/data splitter cable (the USB-C port is power-only by default). Bluetooth HID (`--transport bt`) is the simpler option and requires no extra hardware.
+
+Creates `/dev/hidg0` so the Pi appears as a USB keyboard and mouse to the target computer. A single combined HID device is used with Report IDs (ID 1 = keyboard, ID 2 = mouse) for cross-platform compatibility (macOS requires this approach).
 
 ```bash
-sudo scripts/setup_gadget.sh
+sudo scripts/setup.sh --gadget
 ```
 
 What it does:
 
-1. Loads the `libcomposite` kernel module
-2. Creates a USB Gadget at `/sys/kernel/config/usb_gadget/cyber_raccoon`
-3. Configures two HID functions:
-   - `hidg0`: Boot keyboard (8-byte reports, US layout)
-   - `hidg1`: Absolute-coordinate mouse (7-byte reports, 1280x720 coordinate space)
-4. Binds the gadget to the USB Device Controller
+1. Detects Pi model (on Pi 5, requires USB power/data splitter cable)
+2. Loads the `libcomposite` kernel module
+3. Creates a USB Gadget at `/sys/kernel/config/usb_gadget/cyber_raccoon`
+4. Configures a combined HID function with Report ID descriptors:
+   - Report ID 1: Keyboard (modifier + 6 keycodes)
+   - Report ID 2: Absolute-coordinate mouse (1280x720 coordinate space)
+5. Binds the gadget to the USB Device Controller
 
-Verify the devices exist after running:
+Verify the device exists after running:
 
 ```bash
-ls -la /dev/hidg*
-```
-
-> **Pi 5 note:** The USB-C port on Pi 5 is power-only and cannot be used for USB Gadget. Use Bluetooth HID instead (`--transport bt`), or use a Pi 4B for USB mode.
+ls -la /dev/hidg0
 
 ### Bluetooth HID
 
 Configures the Pi as a Bluetooth keyboard+mouse composite device.
 
 ```bash
-sudo scripts/setup_bluetooth.sh
+sudo scripts/setup.sh --bt
 ```
 
 What it does:
@@ -112,7 +136,7 @@ After running, pair from the target computer:
 Installs `uxplay` (an open-source AirPlay receiver) and GStreamer for video decoding.
 
 ```bash
-sudo scripts/setup_airplay.sh
+sudo scripts/setup.sh --airplay
 ```
 
 What it does:
@@ -136,11 +160,11 @@ On the source Mac/iPhone/iPad:
 Set the API key for your LLM provider:
 
 ```bash
-# Anthropic (default provider)
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# OpenAI (if using --provider openai)
+# OpenAI (default provider)
 export OPENAI_API_KEY="sk-..."
+
+# Anthropic (if using --provider anthropic)
+export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
 ### Config File
@@ -161,8 +185,8 @@ capture:
   jpeg_quality: 80
 
 llm:
-  provider: anthropic
-  model: claude-opus-4-6
+  provider: openai
+  model: ""                    # uses provider default if empty
   base_url: null
   max_tokens: 1024
   temperature: 0.0
@@ -178,8 +202,7 @@ agent:
     - blender
 
 executor:
-  keyboard_device: /dev/hidg0
-  mouse_device: /dev/hidg1
+  device: /dev/hidg0              # combined keyboard+mouse HID device
   screen_width: 1280
   screen_height: 720
 
@@ -198,10 +221,10 @@ Security notes:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | — | API key for Anthropic provider |
 | `OPENAI_API_KEY` | — | API key for OpenAI provider |
-| `CYBERRACCOON_PROVIDER` | `anthropic` | LLM provider |
-| `CYBERRACCOON_MODEL` | `claude-opus-4-6` | Model name |
+| `ANTHROPIC_API_KEY` | — | API key for Anthropic provider |
+| `CYBERRACCOON_PROVIDER` | `openai` | LLM provider |
+| `CYBERRACCOON_MODEL` | — | Model name (provider default if omitted) |
 | `CYBERRACCOON_BASE_URL` | — | Custom API base URL |
 | `CYBERRACCOON_SOURCE` | `hdmi` | Capture source (`hdmi`, `csi`, `airplay`) |
 | `CYBERRACCOON_DEVICE` | `0` | Device index for HDMI/CSI |
@@ -224,39 +247,64 @@ Settings are merged in this order (highest priority first):
 
 ## Running Tasks
 
-CyberRaccoon has three operating modes. `--task` runs a single task and exits. `--web` and `--cli` can be used together.
+CyberRaccoon has three operating modes. The Web UI is the recommended way to use CyberRaccoon. `--task` runs a single task and exits. `--web` and `--cli` can be used together.
+
+### Web UI
+
+The Web UI is the primary interface for CyberRaccoon. Start it with:
+
+```bash
+python -m cyberraccoon --web
+# Open http://<pi-ip>:8000 in your browser
+```
+
+![CyberRaccoon Web UI — Task tab with live step progress](images/web-ui-task.png)
+
+The Web UI has five tabs:
+
+**Task** — The main workspace. Connect capture and executor modules, submit tasks, and watch live progress. Each step shows the action, parameters, status, and LLM latency. Click a step to see the full LLM conversation, system prompt, and raw response.
+
+**Config** — Edit LLM, agent, and network settings. Changes are saved to `~/.cyberraccoon/config.yaml`.
+
+**Skills** — Browse, enable, edit, and create application skills. Toggle skills on/off for the current session. Create custom skills that are saved to `~/.cyberraccoon/skills/`.
+
+**Status** — System overview: module readiness, current capture source, transport, LLM provider, task status, and Wi-Fi status.
+
+**Debug** — Real-time log viewer with filtering by level (DEBUG/INFO/WARNING/ERROR) and module (M1-M5). Logs stream via WebSocket.
+
+The Web UI uses REST endpoints for configuration and task control, plus a WebSocket at `/ws` for real-time events (step progress, log messages, status updates).
 
 ### One-Shot Mode
 
 Run a single task, print results, and exit:
 
 ```bash
-python main.py --task "Open Notepad and type Hello World"
+python -m cyberraccoon --task "Open Notepad and type Hello World"
 ```
 
 With options:
 
 ```bash
-# Use OpenAI instead of Anthropic
-python main.py --task "Click Start menu" --provider openai --model gpt-4o
+# Use Anthropic instead of OpenAI
+python -m cyberraccoon --task "Click Start menu" --provider anthropic
 
 # Use CSI camera for capture
-python main.py --task "Open Chrome" --source csi
+python -m cyberraccoon --task "Open Chrome" --source csi
 
 # Use Bluetooth HID
-python main.py --task "Open Safari" --transport bt
+python -m cyberraccoon --task "Open Safari" --transport bt
 
 # AirPlay capture + Bluetooth HID
-python main.py --task "Open Firefox" --source airplay --transport bt
+python -m cyberraccoon --task "Open Firefox" --source airplay --transport bt
 
 # Custom step/timeout limits
-python main.py --task "Fill out form" --max-steps 30 --timeout 600
+python -m cyberraccoon --task "Fill out form" --max-steps 30 --timeout 600
 
 # With humanization
-python main.py --task "Login" --humanize --humanize-preset aggressive
+python -m cyberraccoon --task "Login" --humanize --humanize-preset aggressive
 
 # With application skills
-python main.py --task "Edit the 3D model" --skill blender
+python -m cyberraccoon --task "Edit the 3D model" --skill blender
 ```
 
 Output shows each step as it executes:
@@ -266,9 +314,8 @@ Output shows each step as it executes:
   CyberRaccoon — AI Computer Control
 ============================================================
   Task:     Open Notepad and type Hello World
-  Provider: anthropic / claude-opus-4-6
-  Source:   HDMI /dev/video0
-  Transport: USB HID
+  Source:   CSI TC358743
+  Transport: Bluetooth HID
   Limits:   50 steps, 600s timeout
 ============================================================
 
@@ -289,38 +336,15 @@ Starting task...
 ============================================================
 ```
 
-### Web UI
-
-Start the web interface:
-
-```bash
-python main.py --web
-# Open http://<pi-ip>:8000 in your browser
-```
-
-The Web UI has five tabs:
-
-**Task** — The main workspace. Connect capture and executor modules, submit tasks, and watch live progress. Each step shows the action, parameters, status, and LLM latency. Click a step to see the full LLM conversation, system prompt, and raw response.
-
-**Config** — Edit LLM, agent, and network settings. Changes are saved to `~/.cyberraccoon/config.yaml`.
-
-**Skills** — Browse, enable, edit, and create application skills. Toggle skills on/off for the current session. Create custom skills that are saved to `~/.cyberraccoon/skills/`.
-
-**Status** — System overview: module readiness, current capture source, transport, LLM provider, task status, and Wi-Fi status.
-
-**Debug** — Real-time log viewer with filtering by level (DEBUG/INFO/WARNING/ERROR) and module (M1-M5). Logs stream via WebSocket.
-
-The Web UI uses REST endpoints for configuration and task control, plus a WebSocket at `/ws` for real-time events (step progress, log messages, status updates).
-
 ### Interactive CLI
 
 Start the REPL:
 
 ```bash
-python main.py --cli
+python -m cyberraccoon --cli
 
 # Or run both Web UI and CLI together
-python main.py --web --cli
+python -m cyberraccoon --web --cli
 ```
 
 Available commands:
@@ -331,7 +355,7 @@ Available commands:
 | `task abort` | Abort the running task |
 | `task status` | Show current task status |
 | `config show` | Display all settings (secrets masked) |
-| `config set KEY VALUE` | Update a setting (e.g. `config set llm.model gpt-4o`) |
+| `config set KEY VALUE` | Update a setting (e.g. `config set llm.provider anthropic`) |
 | `config reset` | Delete config file and revert to defaults |
 | `capture test` | Take a test screenshot and show resolution/size |
 | `wifi scan` | Scan for available Wi-Fi networks |
@@ -350,51 +374,38 @@ Tab completion and command history are available when `prompt_toolkit` is instal
 
 ## Capture Sources
 
-### HDMI
+### CSI HDMI (TC358743) — Recommended
 
-Captures the target screen via a USB HDMI capture card using V4L2. This is the most reliable method — it works with any OS and even at BIOS/boot screens.
+Captures the target screen via an HDMI-to-CSI bridge module connected to the Pi's CSI port. Works with any OS and even at BIOS/boot screens. No USB port needed.
 
 ```bash
-python main.py --task "..." --source hdmi --device 0
+python -m cyberraccoon --task "..." --source csi
 ```
 
 Requirements:
 
-- USB HDMI capture card (generic UVC cards work, ~$10-20)
-- HDMI cable from target computer to capture card
-- Capture card plugged into Pi USB port
+- TC358743 HDMI-to-CSI bridge module
+- Connected to CAM0 (2-lane, 720p) or CAM1 (4-lane, 1080p)
+- HDMI cable from target computer to TC358743 input
+- Setup: `sudo scripts/setup.sh --csi` (requires reboot)
 
 Test capture independently:
 
 ```bash
-python -m capture.cli --device 0 --output screenshot.jpg
+python -m cyberraccoon.capture.cli --source csi --output csi.jpg
 ```
-
-### CSI Camera
-
-Uses a Raspberry Pi camera module (CSI connector) pointed at the target screen. Useful when HDCP blocks HDMI capture, or when no capture card is available.
-
-```bash
-python main.py --task "..." --source csi
-```
-
-Requirements:
-
-- Raspberry Pi camera module connected to CSI port
-- `picamera2` library (included in Raspberry Pi OS)
-- Camera enabled in `raspi-config`
 
 ### AirPlay
 
 Receives screen mirroring from macOS/iOS devices over the network. No cables or capture hardware needed.
 
 ```bash
-python main.py --task "..." --source airplay
+python -m cyberraccoon --task "..." --source airplay
 ```
 
 Requirements:
 
-- `uxplay` and GStreamer installed (`sudo scripts/setup_airplay.sh`)
+- `uxplay` and GStreamer installed (`sudo scripts/setup.sh --airplay`)
 - Pi and source device on the same network
 - Source device mirroring to "CyberRaccoon"
 
@@ -403,35 +414,56 @@ Two capture modes are used automatically:
 - **RTP mode** (uxplay >= 1.73): Decodes video frames in real-time via a GStreamer pipeline
 - **File mode** (older uxplay): Reads JPEG files written to disk by uxplay
 
+### HDMI-UVC (USB capture card)
+
+> **Note:** This capture source has not been fully validated on the current Pi 5 setup. It may work but is not guaranteed. Use CSI or AirPlay instead.
+
+Captures the target screen via a USB HDMI capture card using V4L2.
+
+```bash
+python -m cyberraccoon --task "..." --source hdmi --device 0
+```
+
+Requirements:
+
+- USB HDMI capture card (generic UVC cards, ~$10-20)
+- HDMI cable from target computer to capture card
+- Capture card plugged into Pi USB port
+
+Test capture independently:
+
+```bash
+python -m cyberraccoon.capture.cli --device 0 --output screenshot.jpg
+```
+
 ---
 
 ## HID Transports
 
 ### USB
 
-The Pi appears as a USB keyboard and mouse via USB HID Gadget. Requires a physical USB connection (OTG cable on Pi 4B).
+The Pi appears as a USB keyboard and mouse via USB HID Gadget. On Pi 5, this requires a USB power/data splitter cable.
 
 ```bash
-python main.py --task "..." --transport usb
+python -m cyberraccoon --task "..." --transport usb
 ```
 
-- Keyboard: `/dev/hidg0` (8-byte boot keyboard reports)
-- Mouse: `/dev/hidg1` (7-byte absolute-coordinate reports, 1280x720 space)
-- Requires `sudo` or membership in the `hidg_users` group
+- Combined device: `/dev/hidg0` (Report ID 1 = keyboard, Report ID 2 = mouse)
+- Requires `sudo` or appropriate device permissions
 
-> Not available on Pi 5 (USB-C is power-only). Use Bluetooth instead.
+> Bluetooth HID is the simpler option on Pi 5 — no extra cables needed.
 
 ### Bluetooth
 
-The Pi pairs as a wireless Bluetooth keyboard and mouse. Works with Pi 4B and Pi 5.
+The Pi pairs as a wireless Bluetooth keyboard and mouse. This is the recommended transport on Pi 5.
 
 ```bash
-python main.py --task "..." --transport bt
+python -m cyberraccoon --task "..." --transport bt
 ```
 
 Connection flow:
 
-1. Run `sudo scripts/setup_bluetooth.sh` (once)
+1. Run `sudo scripts/setup.sh --bt` (once)
 2. Pair "CyberRaccoon" from the target computer's Bluetooth settings
 3. Start a task with `--transport bt`
 4. The executor waits for the host to connect (60s timeout), then sends HID reports over Bluetooth L2CAP
@@ -450,7 +482,7 @@ CyberRaccoon supports three protocol modes for communicating with the LLM. The d
 
 ```bash
 # Force prompt-based protocol (works with any model)
-python main.py --task "..." --protocol prompt
+python -m cyberraccoon --task "..." --protocol prompt
 ```
 
 Prompt caching (Anthropic) is enabled by default. Disable with `--no-cache`.
@@ -465,7 +497,7 @@ Skills are markdown files that give the LLM app-specific context — UI layouts,
 
 ```bash
 # Single skill
-python main.py --task "Edit the 3D model" --skill blender
+python -m cyberraccoon --task "Edit the 3D model" --skill blender
 ```
 
 Or in the config file:
@@ -521,7 +553,7 @@ You can also create and edit skills from the Web UI's Skills tab.
 
 # Via the Web UI Skills tab
 # Or programmatically:
-python -c "from agent.skills import list_skills; print(list_skills())"
+python -c "from cyberraccoon.agent.skills import list_skills; print(list_skills())"
 ```
 
 ---
@@ -534,14 +566,14 @@ Humanization simulates human-like input patterns to avoid bot detection. When en
 
 ```bash
 # Via CLI flag
-python main.py --task "..." --humanize
+python -m cyberraccoon --task "..." --humanize
 
 # With a preset
-python main.py --task "..." --humanize --humanize-preset aggressive
+python -m cyberraccoon --task "..." --humanize --humanize-preset aggressive
 
 # Via environment variable
 export CYBERRACCOON_HUMANIZE=1
-python main.py --task "..."
+python -m cyberraccoon --task "..."
 ```
 
 ### Presets
@@ -594,7 +626,7 @@ The paste method depends on the target OS:
 Set the target OS explicitly if auto-detection doesn't work:
 
 ```bash
-python main.py --task "..." --target-os windows
+python -m cyberraccoon --task "..." --target-os windows
 ```
 
 Or in the config file:
@@ -610,7 +642,7 @@ target_os: macos
 ### Main program
 
 ```
-python main.py [MODE] [OPTIONS]
+python -m cyberraccoon [MODE] [OPTIONS]
 
 Modes (at least one required):
   --task GOAL        Run a single task and exit
@@ -623,8 +655,8 @@ Capture:
   --rtp-port N                  RTP port for AirPlay (default: 5004)
 
 LLM:
-  --provider NAME               anthropic or openai (default: anthropic)
-  --model NAME                  Model name (default: claude-opus-4-6)
+  --provider NAME               openai or anthropic (default: openai)
+  --model NAME                  Model name (provider default if omitted)
   --api-key KEY                 API key (default: from env var)
   --base-url URL                Custom API base URL
   --protocol {auto,native,prompt}  Protocol mode (default: auto)
@@ -637,8 +669,7 @@ Agent:
 
 Executor:
   --transport {usb,bt}          USB HID or Bluetooth HID (default: usb)
-  --keyboard PATH               Keyboard device (default: /dev/hidg0)
-  --mouse PATH                  Mouse device (default: /dev/hidg1)
+  --hid-device PATH             HID device path for USB mode (default: /dev/hidg0)
   --target-os {auto,windows,macos,linux}  Target OS (default: auto)
 
 Humanization:
@@ -662,22 +693,22 @@ Test individual modules independently:
 
 ```bash
 # Capture a screenshot
-python -m capture.cli --device 0 --output screenshot.jpg
-python -m capture.cli --source csi --output camera.jpg
-python -m capture.cli --source airplay --output airplay.jpg
+python -m cyberraccoon.capture.cli --device 0 --output screenshot.jpg
+python -m cyberraccoon.capture.cli --source csi --output camera.jpg
+python -m cyberraccoon.capture.cli --source airplay --output airplay.jpg
 
 # Test LLM with a screenshot
-python -m agent.cli --image screenshot.jpg --goal "Open Notepad"
-python -m agent.cli --image screenshot.jpg --goal "Click Start" --provider openai
+python -m cyberraccoon.agent.cli --image screenshot.jpg --goal "Open Notepad"
+python -m cyberraccoon.agent.cli --image screenshot.jpg --goal "Click Start" --provider anthropic
 
 # Execute HID commands directly
-python -m executor.cli click 640 360
-python -m executor.cli double_click 640 360
-python -m executor.cli type "hello world"
-python -m executor.cli key ctrl c
-python -m executor.cli key alt f4
-python -m executor.cli scroll down
-python -m executor.cli drag 100 200 400 500
+python -m cyberraccoon.executor.cli click 640 360
+python -m cyberraccoon.executor.cli double_click 640 360
+python -m cyberraccoon.executor.cli type "hello world"
+python -m cyberraccoon.executor.cli key ctrl c
+python -m cyberraccoon.executor.cli key alt f4
+python -m cyberraccoon.executor.cli scroll down
+python -m cyberraccoon.executor.cli drag 100 200 400 500
 ```
 
 ---
@@ -696,7 +727,7 @@ python -m executor.cli drag 100 200 400 500
 - HDCP-protected content may appear black — try a CSI camera instead.
 
 **AirPlay: "GStreamer not available"**
-- Run `sudo scripts/setup_airplay.sh`.
+- Run `sudo scripts/setup.sh --airplay`.
 - Ensure venv was created with `--system-site-packages`.
 - If `opencv-python` was pip-installed, uninstall it: `pip uninstall opencv-python opencv-python-headless`.
 
@@ -710,12 +741,12 @@ python -m executor.cli drag 100 200 400 500
 - Run with `sudo`, or add your user to the `hidg_users` group.
 
 **"Failed to open executor" (Bluetooth)**
-- Run `sudo scripts/setup_bluetooth.sh`.
+- Run `sudo scripts/setup.sh --bt`.
 - Ensure Bluetooth is enabled: `sudo bluetoothctl power on`.
 - Pair "CyberRaccoon" from the target computer first.
 
 **USB HID not working on Pi 5**
-- Pi 5's USB-C port is power-only. Use `--transport bt` instead.
+- On Pi 5, USB Gadget requires a USB power/data splitter cable. Use `--transport bt` for a simpler setup.
 
 ### LLM
 
@@ -724,7 +755,7 @@ python -m executor.cli drag 100 200 400 500
 - On the Pi, API keys are typically in `~/.apikeys` (sourced by `~/.bashrc`). Use `source ~/.apikeys` before running.
 
 **"Model not found" or 404 errors**
-- Check the model name matches your provider. Anthropic models start with `claude-`, OpenAI models with `gpt-`.
+- Check the model name matches your provider. OpenAI models start with `gpt-`, Anthropic models with `claude-`.
 - If using a custom base URL, verify it's correct.
 
 ### General
@@ -734,11 +765,11 @@ python -m executor.cli drag 100 200 400 500
 - Add `--delay 2.0` for slower applications that need time to render.
 
 **Task keeps failing / consecutive failure limit reached**
-- Check that the capture source is producing valid screenshots (`python -m capture.cli ...`).
-- Check that the executor can send input (`python -m executor.cli click 640 360`).
+- Check that the capture source is producing valid screenshots (`python -m cyberraccoon.capture.cli ...`).
+- Check that the executor can send input (`python -m cyberraccoon.executor.cli click 640 360`).
 - Try a different protocol: `--protocol prompt` for broader model compatibility.
 
 **Web UI not accessible from another device**
 - Ensure `--host 0.0.0.0` is set (not `127.0.0.1`).
 - Check the Pi's firewall allows the port (default 8000).
-- Kill any existing server first: `ps aux | grep "python.*main.py"` and kill the PID.
+- Kill any existing server first: `ps aux | grep "python.*cyberraccoon"` and kill the PID.

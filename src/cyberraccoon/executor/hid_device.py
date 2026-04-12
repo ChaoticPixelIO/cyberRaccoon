@@ -47,7 +47,7 @@ class HIDDevice:
         except FileNotFoundError:
             raise HIDDeviceError(
                 f"HID device not found: {self._device_path}. "
-                "Ensure USB Gadget is configured (run scripts/setup_gadget.sh)."
+                "Ensure USB Gadget is configured (run scripts/setup.sh --gadget)."
             )
         except PermissionError:
             raise HIDDeviceError(

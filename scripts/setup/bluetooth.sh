@@ -9,8 +9,7 @@
 #   4. Sets device name to "CyberRaccoon"
 #   5. Enables discoverable and pairable mode
 #
-# Run once before using Bluetooth HID:
-#   sudo scripts/setup_bluetooth.sh
+# Run via: sudo scripts/setup.sh --bt
 #
 # After running this script, pair from the target computer's
 # Bluetooth settings to connect.
@@ -22,6 +21,26 @@ DEVICE_NAME="CyberRaccoon"
 DEVICE_CLASS="0x002540"   # Keyboard + Mouse combo
 
 echo "[INFO] Setting up CyberRaccoon Bluetooth HID..."
+
+# ---------------------------------------------------------------------------
+# Step 0: Install required system packages
+# ---------------------------------------------------------------------------
+echo "[INFO] Checking system dependencies..."
+
+PACKAGES_NEEDED=""
+dpkg -s bluez &>/dev/null          || PACKAGES_NEEDED="$PACKAGES_NEEDED bluez"
+dpkg -s libcap2-bin &>/dev/null    || PACKAGES_NEEDED="$PACKAGES_NEEDED libcap2-bin"
+dpkg -s python3-dbus &>/dev/null   || PACKAGES_NEEDED="$PACKAGES_NEEDED python3-dbus"
+dpkg -s python3-gi &>/dev/null     || PACKAGES_NEEDED="$PACKAGES_NEEDED python3-gi"
+
+if [ -n "$PACKAGES_NEEDED" ]; then
+    echo "[INFO] Installing missing packages:$PACKAGES_NEEDED"
+    apt-get update -qq
+    apt-get install -y $PACKAGES_NEEDED
+    echo "[OK] System packages installed."
+else
+    echo "[OK] All system packages present."
+fi
 
 # ---------------------------------------------------------------------------
 # Step 1: Disable BlueZ input plugin

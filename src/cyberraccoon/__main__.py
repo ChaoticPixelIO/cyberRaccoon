@@ -160,7 +160,7 @@ def _run_task(args: argparse.Namespace, logger: logging.Logger) -> None:
         _source_hints = {
             "hdmi": "Check: HDMI cable, capture card, /dev/video*",
             "csi": "Check: TC358743 on CAM0, dtoverlay in config.txt, HDMI cable, v4l-utils installed",
-            "airplay": "Check: uxplay installed, GStreamer plugins, run setup_airplay.sh",
+            "airplay": "Check: uxplay installed, GStreamer plugins, run scripts/setup.sh --airplay",
         }
         print(f"  {_source_hints.get(args.source, 'Check device')}", file=sys.stderr)
         sys.exit(1)
@@ -218,9 +218,9 @@ def _run_task(args: argparse.Namespace, logger: logging.Logger) -> None:
         capture.close()
         print(f"\nError: Failed to open executor: {e}", file=sys.stderr)
         if args.transport == "bt":
-            print("  Check: Bluetooth enabled, run setup_bluetooth.sh", file=sys.stderr)
+            print("  Check: Bluetooth enabled, run scripts/setup.sh --bt", file=sys.stderr)
         else:
-            print("  Check: USB Gadget configured, run setup_gadget.sh", file=sys.stderr)
+            print("  Check: USB Gadget configured, run scripts/setup.sh --gadget", file=sys.stderr)
         sys.exit(1)
 
     # M2: Vision Agent
