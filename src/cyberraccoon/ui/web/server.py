@@ -50,6 +50,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from cyberraccoon.agent.skills import (
+    SkillFormatError,
+    SkillIncompleteError,
     SkillNotFoundError,
     delete_user_skill,
     get_skill_info,
@@ -627,12 +629,24 @@ def create_app(controller: AppController) -> FastAPI:
         names = list_skills()
         skills = []
         for name in names:
+            entry: dict[str, Any] = {"name": name, "source": "unknown", "description": None}
             try:
-                source = get_skill_source(name)
+                entry["source"] = get_skill_source(name)
             except (SkillNotFoundError, ValueError) as e:
                 logger.warning("Could not determine source for skill %r: %s", name, e)
-                source = "unknown"
-            skills.append({"name": name, "source": source})
+            try:
+                info = get_skill_info(name)
+                entry["description"] = info["description"]
+            except SkillIncompleteError as e:
+                entry["error"] = "missing_skill_md"
+                logger.warning("Skill %r is incomplete: %s", name, e)
+            except SkillFormatError as e:
+                entry["error"] = "invalid_frontmatter"
+                logger.warning("Skill %r has invalid frontmatter: %s", name, e)
+            except (SkillNotFoundError, ValueError) as e:
+                entry["error"] = "load_failed"
+                logger.warning("Could not load skill %r: %s", name, e)
+            skills.append(entry)
         return JSONResponse({"skills": skills})
 
     @app.get("/api/skills/{name}")
@@ -640,6 +654,16 @@ def create_app(controller: AppController) -> FastAPI:
         try:
             info = get_skill_info(name)
             return JSONResponse(info)
+        except SkillIncompleteError as e:
+            return JSONResponse(
+                {"status": "error", "message": str(e)},
+                status_code=422,
+            )
+        except SkillFormatError as e:
+            return JSONResponse(
+                {"status": "error", "message": str(e)},
+                status_code=422,
+            )
         except SkillNotFoundError:
             return JSONResponse(
                 {"status": "error", "message": f"Skill {name!r} not found"},
@@ -656,6 +680,11 @@ def create_app(controller: AppController) -> FastAPI:
         try:
             save_user_skill(name, req.content)
             return JSONResponse({"status": "ok"})
+        except SkillFormatError as e:
+            return JSONResponse(
+                {"status": "error", "message": str(e)},
+                status_code=400,
+            )
         except ValueError as e:
             return JSONResponse(
                 {"status": "error", "message": str(e)},
@@ -686,7 +715,7 @@ def create_app(controller: AppController) -> FastAPI:
         except OSError as e:
             logger.error("Failed to delete skill %r: %s", name, e)
             return JSONResponse(
-                {"status": "error", "message": f"Failed to delete skill file: {e}"},
+                {"status": "error", "message": f"Failed to delete skill directory: {e}"},
                 status_code=500,
             )
 

@@ -510,16 +510,23 @@ agent:
 
 ### Skill lookup order
 
-1. **User skills**: `~/.cyberraccoon/skills/{name}.md` (highest priority)
-2. **Bundled skills**: `<repo>/skills/{name}.md`
+Each skill is a directory containing a required `SKILL.md` plus any optional resource files (cheat sheets, screenshots, helper scripts).
+
+1. **User skills**: `~/.cyberraccoon/skills/{name}/SKILL.md` (highest priority)
+2. **Bundled skills**: `<repo>/skills/{name}/SKILL.md`
 
 User skills override bundled ones with the same name.
 
 ### Creating custom skills
 
-Create a markdown file describing the application:
+Create a directory under `~/.cyberraccoon/skills/` and add a `SKILL.md` file with YAML frontmatter:
 
 ```markdown
+---
+name: myapp
+description: One-line summary shown in the Web UI skill list.
+---
+
 # My Application
 
 ## Window Layout
@@ -541,7 +548,9 @@ Create a markdown file describing the application:
 3. Click "Create"
 ```
 
-Save it to `~/.cyberraccoon/skills/myapp.md`, then use `--skill myapp`.
+Save it to `~/.cyberraccoon/skills/myapp/SKILL.md`, then use `--skill myapp`.
+
+The `name` value in frontmatter must match the directory name. Drop any supplementary files (PNG references, sub-prompts, etc.) alongside `SKILL.md` in the same directory.
 
 You can also create and edit skills from the Web UI's Skills tab.
 

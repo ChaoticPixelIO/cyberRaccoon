@@ -1,3 +1,8 @@
+---
+name: blender
+description: Blender 3D creation suite — window layout, keyboard shortcuts, and common modeling/rendering workflows.
+---
+
 # Blender Skill
 
 You are controlling Blender, a 3D creation suite. Use this knowledge to navigate the UI and perform actions efficiently.

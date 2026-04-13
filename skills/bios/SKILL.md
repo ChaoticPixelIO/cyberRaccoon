@@ -1,3 +1,8 @@
+---
+name: bios
+description: BIOS/UEFI firmware navigation — pre-OS keyboard-only workflow for Windows and Linux UEFI systems.
+---
+
 # BIOS/UEFI Operation Skill
 
 You are controlling a computer at the BIOS/UEFI firmware level. This is a pre-OS environment with completely different rules from normal desktop operation.

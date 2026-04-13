@@ -1,4 +1,4 @@
-"""Tests for agent.skills — skill loader and list_skills."""
+"""Tests for agent.skills — directory-based skill loader."""
 
 from __future__ import annotations
 
@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 
 from cyberraccoon.agent.skills import (
+    SKILL_FILENAME,
+    SkillFormatError,
+    SkillIncompleteError,
     SkillNotFoundError,
     _bundled_skills_dir,
     _user_skills_dir,
@@ -24,10 +27,26 @@ from cyberraccoon.agent.skills import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _write_skill(directory: Path, name: str, content: str) -> Path:
-    """Write a skill file into the given directory."""
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{name}.md"
+def _make_skill_md(name: str, body: str, *, description: str | None = None) -> str:
+    """Return a SKILL.md document string with valid frontmatter."""
+    desc = description if description is not None else f"Test skill {name}."
+    return f"---\nname: {name}\ndescription: {desc}\n---\n\n{body}"
+
+
+def _write_skill(directory: Path, name: str, body: str, *, description: str | None = None) -> Path:
+    """Write a skill directory containing SKILL.md with valid frontmatter."""
+    skill_dir = directory / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    path = skill_dir / SKILL_FILENAME
+    path.write_text(_make_skill_md(name, body, description=description), encoding="utf-8")
+    return path
+
+
+def _write_skill_raw(directory: Path, name: str, content: str) -> Path:
+    """Write a skill directory with arbitrary SKILL.md content (skips helper formatting)."""
+    skill_dir = directory / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    path = skill_dir / SKILL_FILENAME
     path.write_text(content, encoding="utf-8")
     return path
 
@@ -75,6 +94,20 @@ class TestLoadSkill:
         assert "User Blender Override" in result
         assert "Bundled Blender" not in result
 
+    def test_strips_frontmatter_from_body(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        bundled = tmp_path / "bundled"
+        user = tmp_path / "user"
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
+
+        _write_skill(bundled, "blender", "# Body Only")
+
+        result = load_skill("blender")
+        assert "---" not in result.splitlines()[0]
+        assert "name:" not in result
+        assert "description:" not in result
+        assert "# Body Only" in result
+
     def test_not_found(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
@@ -88,27 +121,82 @@ class TestLoadSkill:
         assert exc_info.value.name == "nonexistent"
         assert len(exc_info.value.searched_paths) == 2
 
-    def test_empty_file_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_dir_without_skill_md_raises_incomplete(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
         monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
         monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
-        _write_skill(bundled, "empty", "   \n  \n  ")
+        # Dir exists but no SKILL.md
+        (bundled / "halfbaked").mkdir(parents=True)
+        (bundled / "halfbaked" / "resource.txt").write_text("just a resource")
 
-        with pytest.raises(ValueError, match="empty"):
+        with pytest.raises(SkillIncompleteError) as exc_info:
+            load_skill("halfbaked")
+        # SkillIncompleteError is a subclass of SkillNotFoundError so callers
+        # with broader except clauses still catch it.
+        assert isinstance(exc_info.value, SkillNotFoundError)
+
+    def test_missing_frontmatter_raises_format_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        bundled = tmp_path / "bundled"
+        user = tmp_path / "user"
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
+
+        _write_skill_raw(bundled, "raw", "# Just markdown, no frontmatter")
+
+        with pytest.raises(SkillFormatError, match="frontmatter"):
+            load_skill("raw")
+
+    def test_frontmatter_name_mismatch_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        bundled = tmp_path / "bundled"
+        user = tmp_path / "user"
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
+
+        _write_skill_raw(
+            bundled, "wrongname",
+            "---\nname: someothername\ndescription: x\n---\n\n# Body",
+        )
+
+        with pytest.raises(SkillFormatError, match="does not match"):
+            load_skill("wrongname")
+
+    def test_missing_description_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        bundled = tmp_path / "bundled"
+        user = tmp_path / "user"
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
+
+        _write_skill_raw(
+            bundled, "nodesc",
+            "---\nname: nodesc\n---\n\n# Body",
+        )
+
+        with pytest.raises(SkillFormatError, match="description"):
+            load_skill("nodesc")
+
+    def test_empty_body_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        bundled = tmp_path / "bundled"
+        user = tmp_path / "user"
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
+
+        _write_skill_raw(
+            bundled, "empty",
+            "---\nname: empty\ndescription: x\n---\n\n   \n  \n",
+        )
+
+        with pytest.raises(SkillFormatError, match="body is empty"):
             load_skill("empty")
-
-    def test_whitespace_only_file_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        bundled = tmp_path / "bundled"
-        user = tmp_path / "user"
-        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
-        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
-
-        _write_skill(user, "blank", "")
-
-        with pytest.raises(ValueError, match="empty"):
-            load_skill("blank")
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +317,7 @@ class TestListSkills:
         result = list_skills()
         assert result == []
 
-    def test_ignores_non_md_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_ignores_top_level_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
         monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
@@ -238,9 +326,25 @@ class TestListSkills:
         _write_skill(bundled, "valid", "# Valid")
         bundled.mkdir(parents=True, exist_ok=True)
         (bundled / "readme.txt").write_text("not a skill")
+        (bundled / "stray.md").write_text("# Old single-file skill — should be ignored")
 
         result = list_skills()
         assert result == ["valid"]
+
+    def test_includes_dirs_without_skill_md(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        bundled = tmp_path / "bundled"
+        user = tmp_path / "user"
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
+
+        _write_skill(bundled, "good", "# Good")
+        (bundled / "halfbaked").mkdir()
+        (bundled / "halfbaked" / "resource.png").write_bytes(b"\x89PNG")
+
+        result = list_skills()
+        assert result == ["good", "halfbaked"]
 
 
 # ---------------------------------------------------------------------------
@@ -251,14 +355,24 @@ class TestRealBundledSkills:
     """Verify the actual bundled skills directory works."""
 
     def test_blender_in_bundled(self) -> None:
-        """The bundled blender.md should be discoverable."""
+        """The bundled blender skill should be discoverable."""
         assert "blender" in list_skills()
 
-    def test_load_bundled_blender(self) -> None:
-        """The bundled blender skill should load successfully."""
+    def test_load_bundled_blender_strips_frontmatter(self) -> None:
+        """The bundled blender skill should load without frontmatter."""
         content = load_skill("blender")
         assert "Blender" in content
         assert len(content) > 100
+        # Frontmatter must be stripped
+        assert not content.startswith("---")
+        assert "name: blender" not in content
+
+    def test_get_info_bundled_blender_has_description(self) -> None:
+        info = get_skill_info("blender")
+        assert info["name"] == "blender"
+        assert info["source"] == "bundled"
+        assert info["description"]
+        assert isinstance(info["description"], str)
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +541,18 @@ class TestGetSkillSource:
         _write_skill(user, "blender", "# User Override")
         assert get_skill_source("blender") == "user"
 
+    def test_dir_without_skill_md_still_resolves_source(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """get_skill_source only checks dir existence — incomplete dirs still resolve."""
+        bundled = tmp_path / "bundled"
+        user = tmp_path / "user"
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
+
+        (bundled / "halfbaked").mkdir(parents=True)
+        assert get_skill_source("halfbaked") == "bundled"
+
     def test_not_found_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
@@ -444,17 +570,30 @@ class TestGetSkillSource:
 class TestGetSkillInfo:
     """Tests for get_skill_info()."""
 
-    def test_returns_name_content_source(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_returns_name_content_source_description(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         bundled = tmp_path / "bundled"
         user = tmp_path / "user"
         monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
         monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
-        _write_skill(bundled, "kicad", "# KiCad\nTips.")
+        _write_skill(bundled, "kicad", "# KiCad\nTips.", description="KiCad PCB editor.")
         info = get_skill_info("kicad")
         assert info["name"] == "kicad"
         assert "KiCad" in info["content"]
         assert info["source"] == "bundled"
+        assert info["description"] == "KiCad PCB editor."
+
+    def test_incomplete_dir_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        bundled = tmp_path / "bundled"
+        user = tmp_path / "user"
+        monkeypatch.setattr("cyberraccoon.agent.skills._bundled_skills_dir", lambda: bundled)
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
+
+        (bundled / "halfbaked").mkdir(parents=True)
+        with pytest.raises(SkillIncompleteError):
+            get_skill_info("halfbaked")
 
 
 # ---------------------------------------------------------------------------
@@ -464,20 +603,23 @@ class TestGetSkillInfo:
 class TestSaveUserSkill:
     """Tests for save_user_skill()."""
 
-    def test_creates_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_creates_skill_md_in_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         user = tmp_path / "user_skills"
         monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
-        path = save_user_skill("myapp", "# My App\nContent.")
+        content = _make_skill_md("myapp", "# My App\nContent.")
+        path = save_user_skill("myapp", content)
         assert path.exists()
-        assert path.read_text(encoding="utf-8") == "# My App\nContent."
+        assert path.name == SKILL_FILENAME
+        assert path.parent.name == "myapp"
+        assert path.read_text(encoding="utf-8") == content
 
-    def test_creates_directory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_creates_intermediate_directories(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         user = tmp_path / "deep" / "nested" / "skills"
         monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
-        save_user_skill("test", "# Test")
-        assert (user / "test.md").exists()
+        save_user_skill("test", _make_skill_md("test", "# Test"))
+        assert (user / "test" / SKILL_FILENAME).exists()
 
     def test_empty_content_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         user = tmp_path / "user"
@@ -488,15 +630,35 @@ class TestSaveUserSkill:
 
     def test_invalid_name_raises(self) -> None:
         with pytest.raises(ValueError, match="path separator"):
-            save_user_skill("../evil", "# Evil")
+            save_user_skill("../evil", _make_skill_md("evil", "# Evil"))
+
+    def test_missing_frontmatter_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        user = tmp_path / "user"
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
+
+        with pytest.raises(SkillFormatError, match="frontmatter"):
+            save_user_skill("plain", "# No frontmatter here\nJust markdown.")
+
+    def test_name_mismatch_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        user = tmp_path / "user"
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
+
+        bad = "---\nname: somethingelse\ndescription: x\n---\n\n# Body"
+        with pytest.raises(SkillFormatError, match="does not match"):
+            save_user_skill("expected", bad)
+
+        # Nothing should have been written when validation fails.
+        assert not (user / "expected").exists()
 
     def test_overwrites_existing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         user = tmp_path / "user"
         monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
 
-        save_user_skill("app", "# Version 1")
-        save_user_skill("app", "# Version 2")
-        assert (user / "app.md").read_text(encoding="utf-8") == "# Version 2"
+        save_user_skill("app", _make_skill_md("app", "# Version 1"))
+        save_user_skill("app", _make_skill_md("app", "# Version 2"))
+        body = (user / "app" / SKILL_FILENAME).read_text(encoding="utf-8")
+        assert "# Version 2" in body
+        assert "# Version 1" not in body
 
 
 # ---------------------------------------------------------------------------
@@ -512,7 +674,18 @@ class TestDeleteUserSkill:
 
         _write_skill(user, "temp", "# Temp")
         assert delete_user_skill("temp") is True
-        assert not (user / "temp.md").exists()
+        assert not (user / "temp").exists()
+
+    def test_deletes_resources_too(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        user = tmp_path / "user"
+        monkeypatch.setattr("cyberraccoon.agent.skills._user_skills_dir", lambda: user)
+
+        _write_skill(user, "withres", "# With Resources")
+        (user / "withres" / "screenshot.png").write_bytes(b"\x89PNG")
+        (user / "withres" / "cheatsheet.txt").write_text("notes")
+
+        assert delete_user_skill("withres") is True
+        assert not (user / "withres").exists()
 
     def test_returns_false_if_not_found(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         user = tmp_path / "user"

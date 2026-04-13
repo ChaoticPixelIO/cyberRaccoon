@@ -10,7 +10,7 @@ AI-powered computer control via Raspberry Pi — capture the screen, let a visio
 
 CyberRaccoon runs a synchronous **capture → decide → act** loop:
 
-1. **Capture** the target computer's screen (HDMI capture card, CSI camera, or AirPlay mirroring)
+1. **Capture** the target computer's screen (HDMI-to-CSI bridge, AirPlay, USB capture card, or Pi camera module)
 2. **Analyze** the screenshot with a vision LLM, which understands the screen context
 3. **Decide** the next action (click, type, scroll, key combo) returned as JSON
 4. **Execute** the action as real keyboard/mouse input via USB HID Gadget or Bluetooth HID
@@ -19,23 +19,24 @@ The loop repeats until the task is complete. The target computer sees CyberRacco
 
 ## Features
 
-- **4 capture sources** — HDMI-CSI bridge (TC358743), AirPlay screen mirroring, USB HDMI capture card (UVC), or Pi CSI camera (picamera2)
+- **4 capture sources** — HDMI-to-CSI bridge (TC358743), AirPlay mirroring, USB HDMI capture card (UVC), or Pi camera module (picamera2)
 - **2 HID transports** — Bluetooth HID (wireless) or USB HID Gadget (wired, requires USB power/data splitter on Pi 5)
 - **Multiple LLM providers** — OpenAI (GPT), Anthropic (Claude), or any OpenAI-compatible API
 - **Input humanization** — Bezier curve mouse movements, variable typing rhythm, jitter, and overshoot to avoid bot detection
 - **Web UI + CLI** — Remote task management via browser or interactive terminal REPL
-- **Configurable** — CLI flags, environment variables, or YAML config file (4-tier precedence: CLI > env > YAML > dataclass defaults)
+- **Configurable** — CLI flags, environment variables, or persistent YAML config (see [Configuration Reference](#configuration-reference))
 
 ## Hardware Requirements
 
-| Component | Purpose | Notes |
-|-----------|---------|-------|
-| Raspberry Pi 5 | Main controller | Only tested on Pi 5 |
-| HDMI-to-CSI module (TC358743) | Screen capture | Optional; uses Pi CSI port, no USB needed |
-| USB HDMI capture card (UVC) | Screen capture | Optional (~$10–20); not fully tested yet |
-| USB power/data splitter cable | USB HID output | Optional; needed for USB Gadget mode on Pi 5 |
+| Component | Required? | Purpose | Notes |
+|-----------|-----------|---------|-------|
+| Raspberry Pi 5 | **Required** | Main controller | Only Pi 5 is tested |
+| HDMI-to-CSI bridge (TC358743) | Optional | HDMI capture via Pi CSI port | Recommended capture path; no USB needed |
+| USB HDMI capture card (UVC) | Optional | HDMI capture via USB | ~$10–20; capture path still being validated |
+| Raspberry Pi Camera Module | Optional | Capture a physical screen via picamera2 | Capture path still being validated |
+| USB power/data splitter cable | Optional | USB HID output (Gadget mode) | Needed only if you use USB HID instead of Bluetooth |
 
-> **Minimal setup:** Raspberry Pi 5 with Bluetooth + AirPlay — no extra hardware needed. The Pi pairs as a wireless keyboard/mouse via Bluetooth, and captures the screen via AirPlay mirroring. Other capture and input methods require the optional hardware above.
+> **Minimal setup (no extra hardware):** A Raspberry Pi 5 alone is enough — pair it as a wireless keyboard/mouse over Bluetooth and capture the target screen via AirPlay (macOS/iOS only). All other capture sources and the USB HID transport need the optional hardware above.
 
 ## Quick Start
 
@@ -69,20 +70,24 @@ python -m cyberraccoon --web
 
 ### 4. Configure the LLM
 
-In the **Config** tab, pick a provider and set the API key. The default provider is **OpenAI** (so `OPENAI_API_KEY` works out of the box), but Anthropic is fully supported too — switch providers in the Config tab or set `ANTHROPIC_API_KEY` + `CYBERRACCOON_PROVIDER=anthropic`. Any OpenAI- or Anthropic-compatible model works; the default is `gpt-5.4` but you can override it with `--model` or `CYBERRACCOON_MODEL`.
+Open the **Config** tab and set your API key.
+
+- **Default provider:** OpenAI (`OPENAI_API_KEY`), default model `gpt-5.4`.
+- **Switch to Anthropic:** select it in the Config tab, or set `ANTHROPIC_API_KEY` and `CYBERRACCOON_PROVIDER=anthropic`.
+- **Custom model:** override with `--model` or `CYBERRACCOON_MODEL` — any OpenAI- or Anthropic-compatible ID works.
 
 ### 5. Run a task
 
 In the **Task** tab:
 
-1. Pick your **capture source** (CSI, AirPlay, or UVC) and **HID transport** (Bluetooth or USB Gadget).
+1. Pick your **capture source** (`csi`, `airplay`, `uvc`, or `picamera`) and **HID transport** (Bluetooth or USB Gadget).
 2. Enter a task (e.g., *"Open Notepad and type Hello World"*) and submit — watch the step-by-step progress.
 
 ## Usage
 
 ### Web UI (recommended)
 
-The Web UI is the primary way to use CyberRaccoon — it bundles live task progress, configuration, skills management, and log streaming into one place. Quick Start above shows how to launch it on the default port; to bind elsewhere:
+The Web UI is the primary way to use CyberRaccoon — it bundles live task progress, configuration, skills management, and log streaming into one place. The Quick Start launches it on `0.0.0.0:8000`; to bind a different host or port:
 
 ```bash
 python -m cyberraccoon --web --host 0.0.0.0 --port 8080
@@ -102,7 +107,7 @@ python -m cyberraccoon --web --host 0.0.0.0 --port 8080
 
 ### Command line
 
-CLI usage requires `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in the environment (the Web UI stores these in config for you).
+The CLI needs an API key — either set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` in the environment, or pass it with `--api-key`. (The Web UI stores keys in its config for you.)
 
 ```bash
 # One-shot task
@@ -121,7 +126,7 @@ python -m cyberraccoon --web --cli
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--source` | `uvc` | Capture source: `uvc`, `csi`, `airplay`, or `picamera` |
+| `--source` | `uvc` | Capture source: `csi`, `airplay`, `uvc`, or `picamera` (see [Capture Sources](#capture-sources)) |
 | `--device` | `0` | Device index for UVC/CSI |
 | `--rtp-port` | `5004` | RTP port for AirPlay video stream |
 
@@ -130,11 +135,11 @@ python -m cyberraccoon --web --cli
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--provider` | `openai` | LLM provider: `openai` or `anthropic` |
-| `--model` | `gpt-5.4` | Any OpenAI- or Anthropic-compatible model (not bound to one) |
+| `--model` | `gpt-5.4` | Any OpenAI- or Anthropic-compatible model ID |
 | `--api-key` | env var | API key (or set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) |
 | `--base-url` | — | Custom API base URL (OpenAI-compatible) |
 | `--protocol` | `auto` | Protocol mode: `auto`, `native` (computer-use tool), or `prompt` (prompt-based) |
-| `--no-cache` | off | Disable Anthropic prompt caching |
+| `--no-cache` | (cache on) | Disable Anthropic prompt caching |
 
 **Agent:**
 
@@ -150,7 +155,7 @@ python -m cyberraccoon --web --cli
 |------|---------|-------------|
 | `--transport` | `usb` | Transport: `usb` or `bt` (Bluetooth) |
 | `--hid-device` | `/dev/hidg0` | HID device path for USB mode (combined keyboard+mouse via Report IDs) |
-| `--target-os` | `auto` | Target OS for non-ASCII text input via clipboard bridge: `auto`, `windows`, `macos`, `linux` |
+| `--target-os` | `auto` | Target OS for the clipboard bridge (used for non-ASCII text): `auto`, `windows`, `macos`, `linux` |
 
 **Humanization:**
 
@@ -166,22 +171,18 @@ python -m cyberraccoon --web --cli
 | `--host` | `0.0.0.0` | Web server bind address |
 | `--port` | `8000` | Web server port |
 
-**Misc:**
-
-| Flag | Description |
-|------|-------------|
-| `--verbose` / `-v` | Enable debug logging |
+**Misc:** `--verbose` / `-v` enables debug logging.
 
 ## Capture Sources
 
 | Source (`--source`) | Status | Best for | Hardware |
 |---------------------|--------|----------|----------|
-| `csi` (TC358743) | Tested | HDMI input via Pi CSI port (no USB needed) | HDMI-to-CSI bridge module |
-| `airplay` | Tested | macOS/iOS wireless mirroring | — (software only: uxplay + GStreamer) |
-| `uvc` | **WIP** | Desktop/laptop with HDMI out via USB capture | USB HDMI capture card (UVC) |
-| `picamera` | **WIP** | Pi CSI camera aimed at a physical screen | Raspberry Pi Camera Module (picamera2) |
+| `csi` | Tested | HDMI input via Pi CSI port (no USB needed) | HDMI-to-CSI bridge (TC358743) |
+| `airplay` | Tested | macOS/iOS wireless mirroring | None (software only: uxplay + GStreamer) |
+| `uvc` | **WIP** | Desktop/laptop HDMI out via USB capture | USB HDMI capture card (UVC) |
+| `picamera` | **WIP** | Pi camera module aimed at a physical screen | Raspberry Pi Camera Module |
 
-> **Note:** `uvc` and `picamera` are still being validated on the current Pi 5 setup. `csi` and `airplay` are the recommended capture methods today.
+> **Note:** `csi` and `airplay` are the recommended capture methods today. `uvc` and `picamera` are still being validated on the current Pi 5 setup. The CLI default is `--source uvc`, so pass `--source csi` or `--source airplay` explicitly until UVC validation completes.
 
 ## Input Humanization
 
@@ -199,11 +200,15 @@ CyberRaccoon can simulate human-like input patterns to avoid bot detection on we
 | `aggressive` | Slow movements, high jitter, 25% overshoot | Slow typing, high variance | Sites with aggressive bot detection |
 
 ```bash
+# Default preset
 python -m cyberraccoon --task "Fill out the form" --humanize
-python -m cyberraccoon --task "Fill out the form" --humanize --humanize-preset aggressive
-```
 
-Or via environment variable: `CYBERRACCOON_HUMANIZE=1`
+# Aggressive preset
+python -m cyberraccoon --task "Fill out the form" --humanize --humanize-preset aggressive
+
+# Or enable globally via environment variable
+export CYBERRACCOON_HUMANIZE=1
+```
 
 ## For Developers
 
@@ -214,29 +219,31 @@ pytest tests/
 # Run a specific test file
 pytest tests/test_capture/test_screen_capture.py
 
-# Module CLI tools (test hardware/APIs independently)
-python -m cyberraccoon.capture.cli --device 0 --output screenshot.jpg
-python -m cyberraccoon.agent.cli --image screenshot.jpg --goal "Open Notepad" --provider anthropic
-python -m cyberraccoon.executor.cli click 640 360
-python -m cyberraccoon.executor.cli type "hello world"
-python -m cyberraccoon.executor.cli key ctrl c
+# Module CLI tools (test hardware/APIs independently — capture/executor commands run on the Pi)
+python -m cyberraccoon.capture.cli --source csi --output screenshot.jpg
+python -m cyberraccoon.agent.cli --image screenshot.jpg --goal "Open Notepad"
+sudo -E python -m cyberraccoon.executor.cli click 640 360
+sudo -E python -m cyberraccoon.executor.cli type "hello world"
+sudo -E python -m cyberraccoon.executor.cli key ctrl c
 ```
+
+> Executor commands need root to write to `/dev/hidg0`; use `sudo -E` to preserve the venv environment.
 
 ### Architecture
 
 Five modules in a hub-and-spoke pattern — M2 (Vision Agent) orchestrates everything:
 
 ```
-HDMI Input → [M1 Capture] → [M2 Vision Agent] ←→ [M3 LLM Client]
-                                    ↓
-                             [M4 Executor] → USB/BT HID → Target
-                                    ↑
-                             [M5 Web UI]
+Target screen → [M1 Capture] → [M2 Vision Agent] ←→ [M3 LLM Client]
+                                       ↓
+                                [M4 Executor] → USB/BT HID → Target
 ```
+
+`[M5 Web UI]` connects to `[M2 Vision Agent]` over WebSocket + REST for status streaming and remote task control.
 
 ## Configuration Reference
 
-Every CLI flag above has a matching `CYBERRACCOON_*` env var — set either. Persistent UI config lives at `~/.cyberraccoon/config.yaml` (override the path with `CYBERRACCOON_CONFIG_PATH`).
+The most-used CLI flags also accept `CYBERRACCOON_*` environment variables (full list below). Persistent UI config lives at `~/.cyberraccoon/config.yaml` (override the path with `CYBERRACCOON_CONFIG_PATH`).
 
 ### Environment Variables
 
@@ -247,7 +254,7 @@ Every CLI flag above has a matching `CYBERRACCOON_*` env var — set either. Per
 | `CYBERRACCOON_PROVIDER` | `openai` | LLM provider (`openai` or `anthropic`) |
 | `CYBERRACCOON_MODEL` | `gpt-5.4` | Any OpenAI/Anthropic-compatible model ID |
 | `CYBERRACCOON_BASE_URL` | — | Custom API base URL |
-| `CYBERRACCOON_SOURCE` | `uvc` | Capture source (`uvc`, `csi`, `airplay`, `picamera`) |
+| `CYBERRACCOON_SOURCE` | `uvc` | Capture source — `csi`, `airplay`, `uvc`, or `picamera` (`csi`/`airplay` recommended; see [Capture Sources](#capture-sources)) |
 | `CYBERRACCOON_DEVICE` | `0` | Device index for UVC/CSI |
 | `CYBERRACCOON_TRANSPORT` | `usb` | HID transport (`usb` or `bt`) |
 | `CYBERRACCOON_TARGET_OS` | `auto` | Target OS for clipboard bridge (`auto`, `windows`, `macos`, `linux`) |
@@ -258,6 +265,10 @@ Every CLI flag above has a matching `CYBERRACCOON_*` env var — set either. Per
 
 Config precedence: **CLI flags > environment variables > YAML file > dataclass defaults**
 
+## Further Reading
+
+- [`docs/user-guide.md`](docs/user-guide.md) — Full English user guide
+
 ## License
 
-Apache 2.0
+[Apache 2.0](LICENSE)

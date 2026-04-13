@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from cyberraccoon.agent.skills import SKILL_FILENAME
 from cyberraccoon.ui.app_controller import AppController
 from cyberraccoon.ui.web.server import create_app
 
@@ -36,10 +37,17 @@ def client(ctrl: AppController, skill_dirs: tuple[Path, Path]) -> TestClient:
     return TestClient(app)
 
 
-def _write_skill(directory: Path, name: str, content: str) -> Path:
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{name}.md"
-    path.write_text(content, encoding="utf-8")
+def _make_skill_md(name: str, body: str, *, description: str | None = None) -> str:
+    desc = description if description is not None else f"Test skill {name}."
+    return f"---\nname: {name}\ndescription: {desc}\n---\n\n{body}"
+
+
+def _write_skill(directory: Path, name: str, body: str, *, description: str | None = None) -> Path:
+    """Write a directory-based skill with valid frontmatter under *directory*."""
+    skill_dir = directory / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    path = skill_dir / SKILL_FILENAME
+    path.write_text(_make_skill_md(name, body, description=description), encoding="utf-8")
     return path
 
 
@@ -57,8 +65,8 @@ class TestListSkills:
         self, client: TestClient, skill_dirs: tuple[Path, Path],
     ) -> None:
         bundled, user = skill_dirs
-        _write_skill(bundled, "blender", "# Blender")
-        _write_skill(user, "my-erp", "# My ERP")
+        _write_skill(bundled, "blender", "# Blender", description="Blender 3D")
+        _write_skill(user, "my-erp", "# My ERP", description="ERP system")
 
         resp = client.get("/api/skills")
         assert resp.status_code == 200
@@ -66,10 +74,12 @@ class TestListSkills:
         names = [s["name"] for s in skills]
         assert "blender" in names
         assert "my-erp" in names
-        # Check source info
+        # Check source + description
         by_name = {s["name"]: s for s in skills}
         assert by_name["blender"]["source"] == "bundled"
+        assert by_name["blender"]["description"] == "Blender 3D"
         assert by_name["my-erp"]["source"] == "user"
+        assert by_name["my-erp"]["description"] == "ERP system"
 
     def test_user_override_shows_user_source(
         self, client: TestClient, skill_dirs: tuple[Path, Path],
@@ -83,6 +93,22 @@ class TestListSkills:
         by_name = {s["name"]: s for s in skills}
         assert by_name["blender"]["source"] == "user"
 
+    def test_incomplete_skill_listed_with_error(
+        self, client: TestClient, skill_dirs: tuple[Path, Path],
+    ) -> None:
+        bundled, _ = skill_dirs
+        # Directory without SKILL.md
+        (bundled / "halfbaked").mkdir()
+        (bundled / "halfbaked" / "resource.png").write_bytes(b"\x89PNG")
+
+        resp = client.get("/api/skills")
+        assert resp.status_code == 200
+        skills = resp.json()["skills"]
+        by_name = {s["name"]: s for s in skills}
+        assert "halfbaked" in by_name
+        assert by_name["halfbaked"]["description"] is None
+        assert by_name["halfbaked"]["error"] == "missing_skill_md"
+
 
 # ---------------------------------------------------------------------------
 # GET /api/skills/{name}
@@ -93,7 +119,7 @@ class TestGetSkill:
         self, client: TestClient, skill_dirs: tuple[Path, Path],
     ) -> None:
         bundled, _ = skill_dirs
-        _write_skill(bundled, "kicad", "# KiCad\nPCB tips.")
+        _write_skill(bundled, "kicad", "# KiCad\nPCB tips.", description="KiCad PCB editor")
 
         resp = client.get("/api/skills/kicad")
         assert resp.status_code == 200
@@ -101,6 +127,7 @@ class TestGetSkill:
         assert data["name"] == "kicad"
         assert "KiCad" in data["content"]
         assert data["source"] == "bundled"
+        assert data["description"] == "KiCad PCB editor"
 
     def test_user(
         self, client: TestClient, skill_dirs: tuple[Path, Path],
@@ -118,8 +145,28 @@ class TestGetSkill:
         assert resp.status_code == 404
         assert "not found" in resp.json()["message"]
 
+    def test_incomplete_returns_422(
+        self, client: TestClient, skill_dirs: tuple[Path, Path],
+    ) -> None:
+        bundled, _ = skill_dirs
+        (bundled / "halfbaked").mkdir()
+
+        resp = client.get("/api/skills/halfbaked")
+        assert resp.status_code == 422
+        assert SKILL_FILENAME in resp.json()["message"]
+
+    def test_invalid_frontmatter_returns_422(
+        self, client: TestClient, skill_dirs: tuple[Path, Path],
+    ) -> None:
+        bundled, _ = skill_dirs
+        skill_dir = bundled / "bad"
+        skill_dir.mkdir()
+        (skill_dir / SKILL_FILENAME).write_text("# No frontmatter at all", encoding="utf-8")
+
+        resp = client.get("/api/skills/bad")
+        assert resp.status_code == 422
+
     def test_path_traversal_rejected(self, client: TestClient) -> None:
-        # ".." in name triggers validation even without slashes
         resp = client.get("/api/skills/..secret")
         assert resp.status_code == 400
 
@@ -133,15 +180,16 @@ class TestPutSkill:
         self, client: TestClient, skill_dirs: tuple[Path, Path],
     ) -> None:
         _, user = skill_dirs
+        content = _make_skill_md("my-app", "# My App\nInstructions.")
         resp = client.put(
             "/api/skills/my-app",
-            json={"content": "# My App\nInstructions."},
+            json={"content": content},
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
 
-        # Verify file written
-        assert (user / "my-app.md").read_text() == "# My App\nInstructions."
+        # Verify SKILL.md inside the skill directory
+        assert (user / "my-app" / SKILL_FILENAME).read_text() == content
 
         # Can load back via GET
         resp2 = client.get("/api/skills/my-app")
@@ -152,17 +200,20 @@ class TestPutSkill:
         self, client: TestClient, skill_dirs: tuple[Path, Path],
     ) -> None:
         bundled, user = skill_dirs
+        bundled_content = _make_skill_md("blender", "# Bundled Blender")
         _write_skill(bundled, "blender", "# Bundled Blender")
 
+        user_content = _make_skill_md("blender", "# Custom Blender")
         resp = client.put(
             "/api/skills/blender",
-            json={"content": "# Custom Blender"},
+            json={"content": user_content},
         )
         assert resp.status_code == 200
 
-        # User file created, bundled untouched
-        assert (user / "blender.md").read_text() == "# Custom Blender"
-        assert (bundled / "blender.md").read_text() == "# Bundled Blender"
+        # User dir created, bundled untouched
+        assert (user / "blender" / SKILL_FILENAME).read_text() == user_content
+        # Bundled SKILL.md is what _write_skill wrote (full frontmatter form)
+        assert (bundled / "blender" / SKILL_FILENAME).read_text() == bundled_content
 
         # GET returns the user version
         resp2 = client.get("/api/skills/blender")
@@ -177,10 +228,34 @@ class TestPutSkill:
         assert resp.status_code == 400
         assert "empty" in resp.json()["message"].lower()
 
+    def test_missing_frontmatter_rejected(
+        self, client: TestClient, skill_dirs: tuple[Path, Path],
+    ) -> None:
+        _, user = skill_dirs
+        resp = client.put(
+            "/api/skills/test",
+            json={"content": "# No frontmatter\nJust markdown."},
+        )
+        assert resp.status_code == 400
+        # Nothing written to disk
+        assert not (user / "test").exists()
+
+    def test_name_mismatch_rejected(
+        self, client: TestClient, skill_dirs: tuple[Path, Path],
+    ) -> None:
+        _, user = skill_dirs
+        bad = "---\nname: differentname\ndescription: x\n---\n\n# Body"
+        resp = client.put(
+            "/api/skills/expected",
+            json={"content": bad},
+        )
+        assert resp.status_code == 400
+        assert not (user / "expected").exists()
+
     def test_path_traversal_name_rejected(self, client: TestClient) -> None:
         resp = client.put(
             "/api/skills/..evil",
-            json={"content": "# Evil"},
+            json={"content": _make_skill_md("evil", "# Evil")},
         )
         assert resp.status_code == 400
 
@@ -199,7 +274,18 @@ class TestDeleteSkill:
         resp = client.delete("/api/skills/temp")
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
-        assert not (user / "temp.md").exists()
+        assert not (user / "temp").exists()
+
+    def test_delete_user_skill_with_resources(
+        self, client: TestClient, skill_dirs: tuple[Path, Path],
+    ) -> None:
+        _, user = skill_dirs
+        _write_skill(user, "withres", "# With Res")
+        (user / "withres" / "image.png").write_bytes(b"\x89PNG")
+
+        resp = client.delete("/api/skills/withres")
+        assert resp.status_code == 200
+        assert not (user / "withres").exists()
 
     def test_delete_bundled_only_fails(
         self, client: TestClient, skill_dirs: tuple[Path, Path],
@@ -211,8 +297,8 @@ class TestDeleteSkill:
         assert resp.status_code == 400
         assert "No user skill" in resp.json()["message"]
 
-        # Bundled file untouched
-        assert (bundled / "blender.md").exists()
+        # Bundled directory untouched
+        assert (bundled / "blender" / SKILL_FILENAME).exists()
 
     def test_delete_nonexistent(self, client: TestClient) -> None:
         resp = client.delete("/api/skills/nope")
