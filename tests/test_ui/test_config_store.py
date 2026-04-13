@@ -92,25 +92,56 @@ class TestEnvironmentOverrides:
     def test_env_overrides_default(
         self, tmp_config_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("CYBERRACCOON_MODEL", "claude-opus-4")
+        # Default provider is openai → OPENAI_MODEL flows into flat field
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-4o")
         store = ConfigStore(str(tmp_config_path))
 
         config = store.load()
-        assert config.llm.model == "claude-opus-4"
+        assert config.llm.model == "gpt-4o"
 
     def test_env_overrides_yaml(
         self, tmp_config_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Save a YAML with model = "gpt-4o"
         store = ConfigStore(str(tmp_config_path))
         cfg = AppConfig()
-        cfg.llm.model = "gpt-4o"
+        cfg.llm.provider = "openai"
+        cfg.llm.model = "gpt-5.4"
         store.save(cfg)
 
-        # Env should win
-        monkeypatch.setenv("CYBERRACCOON_MODEL", "claude-opus-4")
+        # Provider-scoped env var wins over YAML
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-4o")
         loaded = store.load()
-        assert loaded.llm.model == "claude-opus-4"
+        assert loaded.llm.model == "gpt-4o"
+
+    def test_provider_scoped_env_fills_nonactive_snapshot(
+        self, tmp_config_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Active = openai; ANTHROPIC_MODEL populates anthropic snapshot too
+        monkeypatch.setenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+        store = ConfigStore(str(tmp_config_path))
+        config = store.load()
+
+        assert config.llm.provider == "openai"
+        snap = config.llm.providers.get("anthropic", {})
+        assert snap.get("model") == "claude-sonnet-4-6"
+        assert snap.get("api_key") == "sk-ant-env"
+
+    def test_custom_provider_env_vars(
+        self, tmp_config_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Unknown provider like 'minimax' still works via {PROVIDER}_*
+        monkeypatch.setenv("CYBERRACCOON_PROVIDER", "minimax")
+        monkeypatch.setenv("MINIMAX_API_KEY", "mm-xxx")
+        monkeypatch.setenv("MINIMAX_MODEL", "abab6.5")
+        monkeypatch.setenv("MINIMAX_BASE_URL", "https://api.minimax.chat/v1")
+        store = ConfigStore(str(tmp_config_path))
+        config = store.load()
+
+        assert config.llm.provider == "minimax"
+        assert config.llm.api_key == "mm-xxx"
+        assert config.llm.model == "abab6.5"
+        assert config.llm.base_url == "https://api.minimax.chat/v1"
 
     def test_env_int_coercion(
         self, tmp_config_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -157,6 +188,78 @@ class TestPartialYAML:
         store = ConfigStore(str(tmp_config_path))
         config = store.load()  # should not raise
         assert config.llm.model == "x"
+
+
+class TestLLMProviderSnapshots:
+    """llm.providers per-provider snapshot persistence and migration."""
+
+    def test_legacy_flat_yaml_seeds_active_provider_snapshot(
+        self, tmp_config_path: Path
+    ) -> None:
+        # Legacy YAML has flat llm fields and no `providers` sub-dict.
+        tmp_config_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_config_path.write_text(
+            yaml.dump({
+                "llm": {
+                    "provider": "anthropic",
+                    "model": "claude-opus-4-6",
+                    "base_url": "https://api.example.com",
+                    "temperature": 0.2,
+                },
+            }),
+            encoding="utf-8",
+        )
+
+        store = ConfigStore(str(tmp_config_path))
+        config = store.load()
+
+        assert "anthropic" in config.llm.providers
+        snap = config.llm.providers["anthropic"]
+        assert snap["model"] == "claude-opus-4-6"
+        assert snap["base_url"] == "https://api.example.com"
+        assert snap["temperature"] == 0.2
+
+    def test_providers_dict_round_trips(self, tmp_config_path: Path) -> None:
+        store = ConfigStore(str(tmp_config_path))
+        cfg = AppConfig()
+        cfg.llm.provider = "anthropic"
+        cfg.llm.model = "claude-opus-4-6"
+        cfg.llm.providers = {
+            "anthropic": {
+                "model": "claude-opus-4-6",
+                "api_key": "sk-ant-xxx",
+                "base_url": None,
+                "max_tokens": 1024,
+                "temperature": 0.0,
+            },
+            "openai": {
+                "model": "gpt-4o",
+                "api_key": "sk-openai-xxx",
+                "base_url": None,
+                "max_tokens": 2048,
+                "temperature": 0.5,
+            },
+        }
+        store.save(cfg)
+
+        loaded = store.load()
+        assert set(loaded.llm.providers) == {"anthropic", "openai"}
+        assert loaded.llm.providers["openai"]["model"] == "gpt-4o"
+        assert loaded.llm.providers["openai"]["temperature"] == 0.5
+
+    def test_api_key_stripped_from_provider_snapshots(
+        self, tmp_config_path: Path
+    ) -> None:
+        store = ConfigStore(str(tmp_config_path))
+        cfg = AppConfig()
+        cfg.llm.providers = {
+            "anthropic": {"model": "claude-opus-4-6", "api_key": "sk-secret"},
+        }
+        store.save(cfg)
+
+        raw = yaml.safe_load(tmp_config_path.read_text())
+        providers = raw["llm"]["providers"]
+        assert "api_key" not in providers["anthropic"]
 
 
 class TestInvalidYAML:

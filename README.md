@@ -74,7 +74,7 @@ Open the **Config** tab and set your API key.
 
 - **Default provider:** OpenAI (`OPENAI_API_KEY`), default model `gpt-5.4`.
 - **Switch to Anthropic:** select it in the Config tab, or set `ANTHROPIC_API_KEY` and `CYBERRACCOON_PROVIDER=anthropic`.
-- **Custom model:** override with `--model` or `CYBERRACCOON_MODEL` — any OpenAI- or Anthropic-compatible ID works.
+- **Custom model:** override with `--model`, or set `{PROVIDER}_MODEL` (e.g. `OPENAI_MODEL=gpt-4o`, `ANTHROPIC_MODEL=claude-sonnet-4-6`).
 
 ### 5. Run a task
 
@@ -249,11 +249,10 @@ The most-used CLI flags also accept `CYBERRACCOON_*` environment variables (full
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENAI_API_KEY` | — | **Required** for OpenAI provider |
-| `ANTHROPIC_API_KEY` | — | **Required** for Anthropic provider |
-| `CYBERRACCOON_PROVIDER` | `openai` | LLM provider (`openai` or `anthropic`) |
-| `CYBERRACCOON_MODEL` | `gpt-5.4` | Any OpenAI/Anthropic-compatible model ID |
-| `CYBERRACCOON_BASE_URL` | — | Custom API base URL |
+| `CYBERRACCOON_PROVIDER` | `openai` | Active LLM provider (e.g. `openai`, `anthropic`, or any custom name) |
+| `{PROVIDER}_API_KEY` | — | API key for the active provider (e.g. `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) |
+| `{PROVIDER}_MODEL` | provider default | Model ID for that provider (e.g. `OPENAI_MODEL=gpt-5.4`, `ANTHROPIC_MODEL=claude-opus-4-6`) |
+| `{PROVIDER}_BASE_URL` | — | Custom API base URL for that provider (e.g. `OPENAI_BASE_URL` for OpenAI-compatible services) |
 | `CYBERRACCOON_SOURCE` | `uvc` | Capture source — `csi`, `airplay`, `uvc`, or `picamera` (`csi`/`airplay` recommended; see [Capture Sources](#capture-sources)) |
 | `CYBERRACCOON_DEVICE` | `0` | Device index for UVC/CSI |
 | `CYBERRACCOON_TRANSPORT` | `usb` | HID transport (`usb` or `bt`) |

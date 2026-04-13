@@ -6,7 +6,7 @@
     <title>CyberRaccoon</title>
     <link rel="stylesheet" href="/static/style.css?v=12">
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <script src="/static/app.js?v=14"></script>
+    <script src="/static/app.js?v=15"></script>
 </head>
 <body>
 
@@ -600,13 +600,19 @@
                 <fieldset>
                     <legend>LLM (M3)</legend>
                     <label>Provider
-                        <select x-model="config.llm.provider">
+                        <select x-model="config.llm.provider" @change="saveSection('llm')">
                             <option value="anthropic">Anthropic</option>
                             <option value="openai">OpenAI</option>
                         </select>
                     </label>
                     <label>Model
-                        <input type="text" x-model="config.llm.model">
+                        <input type="text" list="llm-model-options"
+                               x-model="config.llm.model">
+                        <datalist id="llm-model-options">
+                            <template x-for="m in currentModelOptions()" :key="m">
+                                <option :value="m"></option>
+                            </template>
+                        </datalist>
                     </label>
                     <label>API Key
                         <input type="password" x-model="config.llm.api_key"

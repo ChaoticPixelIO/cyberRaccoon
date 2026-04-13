@@ -221,11 +221,10 @@ Security notes:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENAI_API_KEY` | — | API key for OpenAI provider |
-| `ANTHROPIC_API_KEY` | — | API key for Anthropic provider |
-| `CYBERRACCOON_PROVIDER` | `openai` | LLM provider |
-| `CYBERRACCOON_MODEL` | — | Model name (provider default if omitted) |
-| `CYBERRACCOON_BASE_URL` | — | Custom API base URL |
+| `CYBERRACCOON_PROVIDER` | `openai` | Active LLM provider. Any string works; built-in model defaults exist for `openai` and `anthropic`. |
+| `{PROVIDER}_API_KEY` | — | API key for the given provider. Provider name is uppercased (e.g. `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `MINIMAX_API_KEY`). |
+| `{PROVIDER}_MODEL` | provider default | Model name for the given provider (e.g. `OPENAI_MODEL=gpt-4o`, `ANTHROPIC_MODEL=claude-sonnet-4-6`). |
+| `{PROVIDER}_BASE_URL` | — | Custom API base URL for the given provider (e.g. `OPENAI_BASE_URL` for OpenAI-compatible services like MiniMax, Groq, DeepSeek, Together). |
 | `CYBERRACCOON_SOURCE` | `hdmi` | Capture source (`hdmi`, `csi`, `airplay`) |
 | `CYBERRACCOON_DEVICE` | `0` | Device index for HDMI/CSI |
 | `CYBERRACCOON_TRANSPORT` | `usb` | HID transport (`usb`, `bt`) |

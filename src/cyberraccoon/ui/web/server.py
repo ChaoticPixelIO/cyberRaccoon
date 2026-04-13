@@ -242,8 +242,13 @@ def create_app(controller: AppController) -> FastAPI:
         sections = ["capture", "llm", "agent", "executor", "network", "ble"]
         for name in sections:
             sub = getattr(config, name)
-            section_dict = {}
+            section_dict: dict[str, Any] = {}
             for f in fields(type(sub)):
+                # LLM per-provider snapshots are backend-only state; hide
+                # them from the API to avoid round-tripping masked secrets
+                # back into the authoritative config.
+                if name == "llm" and f.name == "providers":
+                    continue
                 val = getattr(sub, f.name)
                 # Mask secrets in API response
                 if f.name == "api_key" and val:

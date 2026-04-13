@@ -123,6 +123,20 @@ class CommandHandler:
                 # Mask secrets
                 if f.name in ("api_key", "wifi_password") and val:
                     display = val[:4] + "..." if len(str(val)) > 4 else "***"
+                elif name == "llm" and f.name == "providers" and isinstance(val, dict):
+                    # Mask api_key inside each per-provider snapshot
+                    masked = {
+                        pname: {
+                            k: (
+                                (v[:4] + "..." if len(str(v)) > 4 else "***")
+                                if k == "api_key" and v
+                                else v
+                            )
+                            for k, v in (snap or {}).items()
+                        }
+                        for pname, snap in val.items()
+                    }
+                    display = masked
                 else:
                     display = val
                 lines.append(f"    {f.name}: {display}")

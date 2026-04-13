@@ -17,7 +17,12 @@ import sys
 
 from cyberraccoon.agent.protocols import create_protocol
 from cyberraccoon.agent.skills import SkillNotFoundError, load_skills
-from cyberraccoon.config import resolve_api_key
+from cyberraccoon.config import (
+    LLM_PROVIDER_DEFAULTS,
+    resolve_api_key,
+    resolve_provider_base_url,
+    resolve_provider_model,
+)
 
 
 def main() -> None:
@@ -41,18 +46,18 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("CYBERRACCOON_MODEL", "gpt-5.4"),
-        help="Model name (default: gpt-5.4)",
+        default=None,
+        help="Model name (default: {PROVIDER}_MODEL env var, or provider's built-in default)",
     )
     parser.add_argument(
         "--api-key",
         default=None,
-        help="API key (default: from ANTHROPIC_API_KEY or OPENAI_API_KEY env var)",
+        help="API key (default: {PROVIDER}_API_KEY env var)",
     )
     parser.add_argument(
         "--base-url",
-        default=os.environ.get("CYBERRACCOON_BASE_URL"),
-        help="Custom API base URL (for OpenAI-compatible services)",
+        default=None,
+        help="Custom API base URL (default: {PROVIDER}_BASE_URL env var)",
     )
     parser.add_argument(
         "--protocol",
@@ -66,6 +71,19 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    # Resolve provider-scoped LLM defaults now that --provider is known.
+    provider_defaults = LLM_PROVIDER_DEFAULTS.get(args.provider, {})
+    if args.model is None:
+        args.model = (
+            resolve_provider_model(args.provider)
+            or provider_defaults.get("model", "")
+        )
+    if args.base_url is None:
+        args.base_url = (
+            resolve_provider_base_url(args.provider)
+            or provider_defaults.get("base_url")
+        )
 
     # Read and encode image
     try:

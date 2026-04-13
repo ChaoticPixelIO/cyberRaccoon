@@ -44,7 +44,11 @@ from cyberraccoon.agent.vision_agent import TaskResult, TaskStatus, VisionAgent
 from cyberraccoon.agent.protocols import create_protocol
 from cyberraccoon.capture import create_capture
 from cyberraccoon.capture.base import CaptureError, CaptureResult, CaptureSource
-from cyberraccoon.config import AppConfig
+from cyberraccoon.config import (
+    LLM_PROVIDER_DEFAULTS,
+    AppConfig,
+    resolve_api_key,
+)
 from cyberraccoon.executor.hid_executor import ActionExecutor
 from cyberraccoon.executor.bluetooth_executor import BluetoothExecutor
 from cyberraccoon.ui.config_store import ConfigStore
@@ -241,6 +245,17 @@ def _validate_completed_step_lock(
     return None
 
 
+def _snapshot_llm_flat(llm: Any) -> dict[str, Any]:
+    """Extract the per-provider snapshot fields from a flat LLMConfig view."""
+    return {
+        "model": llm.model,
+        "api_key": llm.api_key,
+        "base_url": llm.base_url,
+        "max_tokens": llm.max_tokens,
+        "temperature": llm.temperature,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Log capture handler (ring buffer)
 # ---------------------------------------------------------------------------
@@ -424,6 +439,21 @@ class AppController:
         """
         config = self.get_config()
 
+        # Pull the provider swap out separately so we can order it correctly:
+        # apply any other llm.* edits under the OLD provider first, snapshot,
+        # then swap and load the new provider's snapshot.
+        new_provider = kwargs.pop("llm.provider", None)
+        old_provider = config.llm.provider
+
+        # Drop round-tripped masked api_key so it doesn't clobber the real
+        # value held server-side. The API masks api_key in GET responses;
+        # unedited masked strings end with "..." or equal "***".
+        api_key_incoming = kwargs.get("llm.api_key")
+        if isinstance(api_key_incoming, str) and (
+            api_key_incoming == "***" or api_key_incoming.endswith("...")
+        ):
+            kwargs.pop("llm.api_key")
+
         for key, value in kwargs.items():
             if "." in key:
                 section, _, field_name = key.partition(".")
@@ -438,12 +468,27 @@ class AppController:
                 else:
                     logger.warning("Unknown config key: %s", key)
 
-        # When provider changes, re-resolve API key from env vars
-        if "llm.provider" in kwargs:
-            from cyberraccoon.config import resolve_api_key
-            env_key = resolve_api_key(config.llm.provider)
-            if env_key:
-                config.llm.api_key = env_key
+        # Mirror the current flat llm fields into the active provider's
+        # snapshot. Done on every update_config call so edits to model /
+        # temperature / etc. are captured under the current provider.
+        config.llm.providers[old_provider] = _snapshot_llm_flat(config.llm)
+
+        if new_provider is not None and new_provider != old_provider:
+            config.llm.provider = new_provider
+            snapshot = config.llm.providers.get(new_provider)
+            if snapshot is None:
+                snapshot = dict(LLM_PROVIDER_DEFAULTS.get(new_provider, {}))
+            for fname, fval in snapshot.items():
+                if hasattr(config.llm, fname):
+                    setattr(config.llm, fname, fval)
+            # If the new provider's stored snapshot has no api_key, try env.
+            if not config.llm.api_key:
+                env_key = resolve_api_key(new_provider)
+                if env_key:
+                    config.llm.api_key = env_key
+            # Persist the (possibly env-filled) snapshot for the new provider
+            # so subsequent swaps see a consistent state.
+            config.llm.providers[new_provider] = _snapshot_llm_flat(config.llm)
 
         self._config_store.save(config)
         with self._lock:

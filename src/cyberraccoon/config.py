@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import Any
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +29,36 @@ class CaptureConfig:
 # M3 LLM Client
 # ---------------------------------------------------------------------------
 
+# Built-in defaults for each LLM provider, used when switching to a provider
+# that has no saved snapshot yet. Keyed by the value of ``LLMConfig.provider``.
+# Fields mirror the flat ``LLMConfig`` fields populated when that provider is
+# active (``model``, ``base_url``, ``max_tokens``, ``temperature``). ``api_key``
+# is intentionally excluded — it is resolved from env vars at load time.
+LLM_PROVIDER_DEFAULTS: dict[str, dict[str, Any]] = {
+    "anthropic": {
+        "model": "claude-opus-4-6",
+        "base_url": None,
+        "max_tokens": 1024,
+        "temperature": 0.0,
+    },
+    "openai": {
+        "model": "gpt-5.4",
+        "base_url": None,
+        "max_tokens": 1024,
+        "temperature": 0.0,
+    },
+}
+
+# Fields snapshotted per provider inside ``LLMConfig.providers``.
+_LLM_PROVIDER_SNAPSHOT_FIELDS: tuple[str, ...] = (
+    "model",
+    "api_key",
+    "base_url",
+    "max_tokens",
+    "temperature",
+)
+
+
 @dataclass
 class LLMConfig:
     provider: str = "openai"
@@ -36,6 +67,11 @@ class LLMConfig:
     base_url: str | None = None
     max_tokens: int = 1024
     temperature: float = 0.0
+    # Per-provider snapshots of the flat fields above. When the active provider
+    # is switched, the current flat fields are saved here under the old provider
+    # name, and the new provider's snapshot (or ``LLM_PROVIDER_DEFAULTS``) is
+    # loaded into the flat fields.
+    providers: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -185,32 +221,49 @@ class AppConfig:
 # ---------------------------------------------------------------------------
 
 def load_llm_config() -> LLMConfig:
-    """Build LLMConfig from environment variables."""
+    """Build LLMConfig from environment variables.
+
+    ``CYBERRACCOON_PROVIDER`` selects the active provider. All other LLM
+    settings are sourced from provider-scoped env vars — ``{PROVIDER}_API_KEY``,
+    ``{PROVIDER}_MODEL``, ``{PROVIDER}_BASE_URL`` (provider name uppercased).
+    Unknown providers still work; they just start with empty flat fields
+    unless their env vars are set.
+    """
     provider = os.environ.get("CYBERRACCOON_PROVIDER", "openai")
-    api_key = resolve_api_key(provider)
+    defaults = LLM_PROVIDER_DEFAULTS.get(provider, {})
     return LLMConfig(
         provider=provider,
-        model=os.environ.get("CYBERRACCOON_MODEL", "gpt-5.4"),
-        api_key=api_key,
-        base_url=os.environ.get("CYBERRACCOON_BASE_URL") or None,
+        model=resolve_provider_model(provider) or defaults.get("model", ""),
+        api_key=resolve_api_key(provider),
+        base_url=resolve_provider_base_url(provider) or defaults.get("base_url"),
+        max_tokens=defaults.get("max_tokens", 1024),
+        temperature=defaults.get("temperature", 0.0),
     )
 
 
-def resolve_api_key(provider: str) -> str:
-    """Look up API key from provider-specific env vars, then fallback.
+def _provider_env_prefix(provider: str) -> str:
+    """Uppercase the provider name for use as an env var prefix."""
+    return provider.upper()
 
-    Checks the provider-specific variable first (e.g. ``ANTHROPIC_API_KEY``),
-    then falls back to the legacy ``CYBERRACCOON_API_KEY``.
+
+def resolve_api_key(provider: str) -> str:
+    """Look up the API key for ``provider`` via ``{PROVIDER}_API_KEY``."""
+    return os.environ.get(f"{_provider_env_prefix(provider)}_API_KEY", "")
+
+
+def resolve_provider_model(provider: str) -> str:
+    """Look up the model for ``provider`` via ``{PROVIDER}_MODEL``."""
+    return os.environ.get(f"{_provider_env_prefix(provider)}_MODEL", "")
+
+
+def resolve_provider_base_url(provider: str) -> str | None:
+    """Look up the base URL for ``provider`` via ``{PROVIDER}_BASE_URL``.
+
+    Returns ``None`` if unset so callers can distinguish "not configured"
+    from "explicitly empty".
     """
-    env_map: dict[str, list[str]] = {
-        "anthropic": ["ANTHROPIC_API_KEY", "CYBERRACCOON_API_KEY"],
-        "openai": ["OPENAI_API_KEY", "CYBERRACCOON_API_KEY"],
-    }
-    for env_var in env_map.get(provider, ["CYBERRACCOON_API_KEY"]):
-        value = os.environ.get(env_var, "")
-        if value:
-            return value
-    return ""
+    value = os.environ.get(f"{_provider_env_prefix(provider)}_BASE_URL")
+    return value if value else None
 
 
 def load_capture_config() -> CaptureConfig:

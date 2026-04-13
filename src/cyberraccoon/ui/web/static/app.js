@@ -97,6 +97,27 @@ function cyberRaccoon() {
         _captureAbort: null,
         _executorAbort: null,
 
+        // --- LLM model suggestions (per provider) ---
+        // Shown as <datalist> options; user may pick one or type freely.
+        modelOptions: {
+            anthropic: [
+                'claude-opus-4-6',
+                'claude-opus-4-5',
+                'claude-sonnet-4-6',
+                'claude-haiku-4-5',
+                'claude-3-5-sonnet-latest',
+                'claude-3-5-haiku-latest',
+            ],
+            openai: [
+                'gpt-5.4',
+                'gpt-4o',
+                'gpt-4o-mini',
+                'gpt-4-turbo',
+                'o1',
+                'o1-mini',
+            ],
+        },
+
         // --- WebSocket ---
         ws: null,
         wsConnected: false,
@@ -109,6 +130,11 @@ function cyberRaccoon() {
 
         get modulesReady() {
             return this.captureReady && this.executorReady;
+        },
+
+        currentModelOptions() {
+            const provider = this.config?.llm?.provider;
+            return this.modelOptions[provider] || [];
         },
 
         get filteredSteps() {
@@ -1800,6 +1826,37 @@ function cyberRaccoon() {
             return '<div class="image-placeholder">Screenshot' + sizeInfo + '</div>';
         },
 
+        // Convert provider-native tool_use input (Anthropic CU and similar)
+        // into the flat {action, x, y, ...} shape that renderActionCard reads.
+        // Returns the input unchanged if no provider-specific shape is detected.
+        _normalizeToolUseInput(input) {
+            if (!input || typeof input !== 'object') return input;
+            const out = { ...input };
+            if (Array.isArray(input.coordinate) && input.coordinate.length >= 2) {
+                if (out.x === undefined) out.x = input.coordinate[0];
+                if (out.y === undefined) out.y = input.coordinate[1];
+            }
+            if (Array.isArray(input.start_coordinate) && input.start_coordinate.length >= 2) {
+                if (out.startX === undefined) out.startX = input.start_coordinate[0];
+                if (out.startY === undefined) out.startY = input.start_coordinate[1];
+            }
+            // Anthropic drag: action='left_click_drag' with start_coordinate + coordinate as endpoints
+            if (input.action === 'left_click_drag') {
+                out.action = 'drag';
+                if (out.endX === undefined && out.x !== undefined) out.endX = out.x;
+                if (out.endY === undefined && out.y !== undefined) out.endY = out.y;
+            }
+            // Anthropic scroll: scroll_direction → direction
+            if (input.scroll_direction && !out.direction) {
+                out.direction = input.scroll_direction;
+            }
+            // Anthropic key: text holds the key combo string ("ctrl+c") instead of keys[]
+            if (input.action === 'key' && typeof input.text === 'string' && !Array.isArray(input.keys)) {
+                out.keys = input.text.split('+').map(k => k.trim());
+            }
+            return out;
+        },
+
         renderActionCard(command) {
             if (!command) return '<div class="action-card muted">(no command)</div>';
             const action = command.action || 'unknown';
@@ -1846,7 +1903,9 @@ function cyberRaccoon() {
                     case 'image_url':
                         return this.renderImagePlaceholder(block);
                     case 'tool_use':
-                        return this.renderActionCard(block.input || {action: block.name});
+                        return this.renderActionCard(
+                            this._normalizeToolUseInput(block.input || {action: block.name})
+                        );
                     case 'tool_result':
                         return '<div class="tool-result">' +
                                '<span class="tool-result-label">Tool Result</span>' +

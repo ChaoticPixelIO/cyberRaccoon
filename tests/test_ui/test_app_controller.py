@@ -177,6 +177,66 @@ class TestConfig:
         assert len(config_events) == 1
         assert config_events[0].data["source"] == "update"
 
+    def test_edit_mirrors_into_active_provider_snapshot(
+        self, tmp_path: Path
+    ) -> None:
+        ctrl = AppController(config_path=str(tmp_path / "cfg.yaml"))
+        ctrl.load_config()
+        ctrl.update_config(**{"llm.model": "custom-model", "llm.temperature": 0.7})
+
+        config = ctrl.get_config()
+        active = config.llm.provider
+        snap = config.llm.providers[active]
+        assert snap["model"] == "custom-model"
+        assert snap["temperature"] == 0.7
+
+    def test_provider_swap_snapshots_old_and_loads_new(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Avoid env-var resolution so we can assert exact flat values
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("CYBERRACCOON_API_KEY", raising=False)
+
+        ctrl = AppController(config_path=str(tmp_path / "cfg.yaml"))
+        ctrl.load_config()
+
+        # Swap to anthropic, then edit under it (matches real UI flow:
+        # provider change and field edits arrive in separate PUTs).
+        ctrl.update_config(**{"llm.provider": "anthropic"})
+        ctrl.update_config(**{
+            "llm.model": "claude-sonnet-4-6",
+            "llm.temperature": 0.3,
+        })
+
+        # Swap to openai
+        ctrl.update_config(**{"llm.provider": "openai"})
+        config = ctrl.get_config()
+
+        # Old provider snapshot preserves the final anthropic state
+        assert config.llm.providers["anthropic"]["model"] == "claude-sonnet-4-6"
+        assert config.llm.providers["anthropic"]["temperature"] == 0.3
+        # Flat fields now reflect openai defaults (no prior snapshot)
+        assert config.llm.provider == "openai"
+        assert config.llm.model == "gpt-5.4"
+
+        # Swap back — anthropic snapshot rehydrates flat fields
+        ctrl.update_config(**{"llm.provider": "anthropic"})
+        config = ctrl.get_config()
+        assert config.llm.model == "claude-sonnet-4-6"
+        assert config.llm.temperature == 0.3
+
+    def test_masked_api_key_roundtrip_is_ignored(self, tmp_path: Path) -> None:
+        ctrl = AppController(config_path=str(tmp_path / "cfg.yaml"))
+        ctrl.load_config()
+        ctrl.update_config(**{"llm.api_key": "sk-real-key-xyz"})
+        assert ctrl.get_config().llm.api_key == "sk-real-key-xyz"
+
+        # Frontend sends the masked value back (simulates user clicking
+        # Save without editing the API Key field).
+        ctrl.update_config(**{"llm.api_key": "sk-r..."})
+        assert ctrl.get_config().llm.api_key == "sk-real-key-xyz"
+
     def test_reset_config(self, tmp_path: Path) -> None:
         cfg_path = tmp_path / "cfg.yaml"
         ctrl = AppController(config_path=str(cfg_path))

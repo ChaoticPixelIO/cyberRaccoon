@@ -30,6 +30,7 @@ from typing import Any
 import yaml
 
 from cyberraccoon.config import (
+    LLM_PROVIDER_DEFAULTS,
     AgentConfig,
     AppConfig,
     BLEConfig,
@@ -39,6 +40,8 @@ from cyberraccoon.config import (
     NetworkConfig,
     load_app_config,
     resolve_api_key,
+    resolve_provider_base_url,
+    resolve_provider_model,
 )
 from cyberraccoon.ui.exceptions import ConfigError
 
@@ -56,8 +59,10 @@ _ENV_MAP: dict[str, tuple[str, str]] = {
     "CYBERRACCOON_TRANSPORT": ("", "executor_transport"),
     "CYBERRACCOON_DEVICE": ("capture", "device_index"),
     "CYBERRACCOON_PROVIDER": ("llm", "provider"),
-    "CYBERRACCOON_MODEL": ("llm", "model"),
-    "CYBERRACCOON_BASE_URL": ("llm", "base_url"),
+    # Per-provider LLM settings use {PROVIDER_UPPER}_MODEL /
+    # {PROVIDER_UPPER}_BASE_URL / {PROVIDER_UPPER}_API_KEY — handled
+    # specially in _apply_env_overrides so each provider's snapshot is
+    # hydrated independently.
     "CYBERRACCOON_WEB_HOST": ("network", "web_host"),
     "CYBERRACCOON_WEB_PORT": ("network", "web_port"),
     "CYBERRACCOON_WIFI_SSID": ("network", "wifi_ssid"),
@@ -256,6 +261,18 @@ class ConfigStore:
             if old_skill:
                 config.agent.skills = [str(old_skill)]
 
+        # Backward compat: seed `llm.providers[<active>]` from the flat llm
+        # fields if the YAML predates per-provider snapshots. Keeps existing
+        # configs working without a manual migration.
+        if config.llm.provider not in config.llm.providers:
+            config.llm.providers[config.llm.provider] = {
+                "model": config.llm.model,
+                "api_key": config.llm.api_key,
+                "base_url": config.llm.base_url,
+                "max_tokens": config.llm.max_tokens,
+                "temperature": config.llm.temperature,
+            }
+
         return config
 
     @staticmethod
@@ -268,7 +285,16 @@ class ConfigStore:
             if key not in valid_fields:
                 continue  # Ignore unknown keys
             target_type = valid_fields[key].type
-            updates[key] = _coerce_value(value, target_type)
+            # dict[str, dict[str, Any]] — used by LLMConfig.providers. The
+            # generic _coerce_value branches don't cover nested dicts, so
+            # pass through when we get a dict.
+            if "dict" in str(target_type) and isinstance(value, dict):
+                updates[key] = {
+                    str(k): dict(v) if isinstance(v, dict) else v
+                    for k, v in value.items()
+                }
+            else:
+                updates[key] = _coerce_value(value, target_type)
 
         if not updates:
             return current
@@ -296,10 +322,37 @@ class ConfigStore:
                     coerced = _coerce_value(value, valid_fields[key].type)
                     setattr(sub_config, key, coerced)
 
-        # Provider-specific API key: ANTHROPIC_API_KEY / OPENAI_API_KEY
-        # Only override if no key was set yet (YAML didn't provide one)
-        if not config.llm.api_key:
-            config.llm.api_key = resolve_api_key(config.llm.provider)
+        # Hydrate each provider's snapshot from its provider-scoped env vars
+        # ({PROVIDER_UPPER}_API_KEY / _MODEL / _BASE_URL). We process every
+        # provider we know about so a non-active provider's env vars are also
+        # captured — UI/CLI swaps then see the env-sourced values immediately.
+        known_providers = (
+            set(LLM_PROVIDER_DEFAULTS)
+            | set(config.llm.providers)
+            | {config.llm.provider}
+        )
+        for provider in known_providers:
+            snap = dict(config.llm.providers.get(provider, {}))
+            env_api_key = resolve_api_key(provider)
+            env_model = resolve_provider_model(provider)
+            env_base_url = resolve_provider_base_url(provider)
+            if env_api_key:
+                snap["api_key"] = env_api_key
+            if env_model:
+                snap["model"] = env_model
+            if env_base_url:
+                snap["base_url"] = env_base_url
+            if snap:
+                config.llm.providers[provider] = snap
+
+        # Sync the active provider's snapshot into the flat LLMConfig fields
+        # so every consumer that reads ``config.llm.model`` etc. sees the
+        # resolved values.
+        active_snap = config.llm.providers.get(config.llm.provider)
+        if active_snap:
+            for fname in ("model", "api_key", "base_url", "max_tokens", "temperature"):
+                if fname in active_snap:
+                    setattr(config.llm, fname, active_snap[fname])
 
         return config
 
@@ -335,6 +388,28 @@ class ConfigStore:
                     del section_dict[field_name]
                 elif field_name in _SECRET_FIELDS and not include_secrets:
                     del section_dict[field_name]
+
+            # Apply the same secret-stripping rule inside llm.providers
+            # snapshots so api_keys aren't persisted per-provider either.
+            if section_name == "llm":
+                providers = section_dict.get("providers")
+                if isinstance(providers, dict):
+                    cleaned: dict[str, dict[str, Any]] = {}
+                    for name, snap in providers.items():
+                        if not isinstance(snap, dict):
+                            continue
+                        pruned = {
+                            k: v for k, v in snap.items()
+                            if k not in _NEVER_PERSIST
+                            and (k not in _SECRET_FIELDS or include_secrets)
+                            and v is not None
+                        }
+                        if pruned:
+                            cleaned[name] = pruned
+                    if cleaned:
+                        section_dict["providers"] = cleaned
+                    else:
+                        section_dict.pop("providers", None)
 
             # Remove None values
             section_dict = {
