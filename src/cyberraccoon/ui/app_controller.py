@@ -494,7 +494,7 @@ class AppController:
                 self._close_capture_locked()
 
         source_kwargs: dict[str, object] = {}
-        if config.capture_source == "hdmi":
+        if config.capture_source == "uvc":
             source_kwargs["device_index"] = config.capture.device_index
         elif config.capture_source == "csi":
             pass  # CsiHdmiCapture discovers devices dynamically
@@ -522,7 +522,7 @@ class AppController:
             logger.warning("Test frame failed (capture still ready): %s", e)
 
         # Build a human-readable device name (describes the remote/hardware side)
-        if config.capture_source == "hdmi":
+        if config.capture_source == "uvc":
             device_name = getattr(capture, "v4l2_device_name", f"/dev/video{config.capture.device_index}")
         elif config.capture_source == "csi":
             device_name = "TC358743 HDMI-CSI"

@@ -117,12 +117,12 @@ def main() -> None:
         description="CyberRaccoon M1 Screen Capture CLI"
     )
     parser.add_argument(
-        "--source", choices=available_sources(), default="hdmi",
-        help=f"Capture source: {', '.join(available_sources())} (default: hdmi)",
+        "--source", choices=available_sources(), default="uvc",
+        help=f"Capture source: {', '.join(available_sources())} (default: uvc)",
     )
     parser.add_argument(
         "--device", type=int, default=0,
-        help="Device index for hdmi/csi mode (default: 0)",
+        help="Device index for uvc/csi mode (default: 0)",
     )
     parser.add_argument(
         "--rtp-port", type=int, default=5004,
@@ -184,7 +184,7 @@ def main() -> None:
         "target_height": args.height,
         "jpeg_quality": args.quality,
     }
-    if args.source == "hdmi":
+    if args.source == "uvc":
         source_kwargs["device_index"] = args.device
     elif args.source == "csi":
         pass  # CsiHdmiCapture discovers devices dynamically

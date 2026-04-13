@@ -36,13 +36,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--provider",
-        default=os.environ.get("CYBERRACCOON_PROVIDER", "anthropic"),
-        help="LLM provider: anthropic or openai (default: anthropic)",
+        default=os.environ.get("CYBERRACCOON_PROVIDER", "openai"),
+        help="LLM provider: openai or anthropic (default: openai)",
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("CYBERRACCOON_MODEL", "claude-opus-4-6"),
-        help="Model name (default: claude-opus-4-6)",
+        default=os.environ.get("CYBERRACCOON_MODEL", "gpt-5.4"),
+        help="Model name (default: gpt-5.4)",
     )
     parser.add_argument(
         "--api-key",

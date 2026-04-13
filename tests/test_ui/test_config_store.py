@@ -142,7 +142,7 @@ class TestPartialYAML:
         assert config.llm.model == "custom-model"
         # Other fields should still be defaults
         assert config.llm.temperature == 0.0
-        assert config.capture_source == "hdmi"
+        assert config.capture_source == "uvc"
 
     def test_unknown_keys_ignored(self, tmp_config_path: Path) -> None:
         tmp_config_path.parent.mkdir(parents=True, exist_ok=True)

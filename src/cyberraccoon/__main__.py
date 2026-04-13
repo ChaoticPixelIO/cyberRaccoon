@@ -129,7 +129,7 @@ def _run_task(args: argparse.Namespace, logger: logging.Logger) -> None:
     print(f"  Task:     {args.task}")
     print(f"  Provider: {args.provider} / {args.model}")
     _source_labels = {
-        "hdmi": f"HDMI /dev/video{args.device}",
+        "uvc": f"UVC /dev/video{args.device}",
         "csi": "HDMI-CSI (TC358743)",
         "airplay": "AirPlay (waiting for connection)",
     }
@@ -144,7 +144,7 @@ def _run_task(args: argparse.Namespace, logger: logging.Logger) -> None:
 
     # M1: Screen Capture — use factory
     source_kwargs: dict[str, object] = {}
-    if args.source == "hdmi":
+    if args.source == "uvc":
         source_kwargs["device_index"] = args.device
     elif args.source == "csi":
         pass  # CsiHdmiCapture discovers devices dynamically
@@ -158,7 +158,7 @@ def _run_task(args: argparse.Namespace, logger: logging.Logger) -> None:
     except Exception as e:
         print(f"\nError: Failed to open capture device: {e}", file=sys.stderr)
         _source_hints = {
-            "hdmi": "Check: HDMI cable, capture card, /dev/video*",
+            "uvc": "Check: HDMI cable, UVC capture card, /dev/video*",
             "csi": "Check: TC358743 on CAM0, dtoverlay in config.txt, HDMI cable, v4l-utils installed",
             "airplay": "Check: uxplay installed, GStreamer plugins, run scripts/setup.sh --airplay",
         }
@@ -311,13 +311,13 @@ def main() -> None:
     parser.add_argument(
         "--source",
         choices=available_sources(),
-        default=os.environ.get("CYBERRACCOON_SOURCE", "hdmi"),
-        help=f"Capture source: {', '.join(available_sources())} (default: hdmi)",
+        default=os.environ.get("CYBERRACCOON_SOURCE", "uvc"),
+        help=f"Capture source: {', '.join(available_sources())} (default: uvc)",
     )
     parser.add_argument(
         "--device", type=int,
         default=int(os.environ.get("CYBERRACCOON_DEVICE", "0")),
-        help="Device index for hdmi/csi mode (default: 0)",
+        help="Device index for uvc/csi mode (default: 0)",
     )
     parser.add_argument(
         "--rtp-port", type=int, default=5004,
@@ -327,13 +327,13 @@ def main() -> None:
     # LLM
     parser.add_argument(
         "--provider",
-        default=os.environ.get("CYBERRACCOON_PROVIDER", "anthropic"),
-        help="LLM provider: anthropic or openai (default: anthropic)",
+        default=os.environ.get("CYBERRACCOON_PROVIDER", "openai"),
+        help="LLM provider: openai or anthropic (default: openai)",
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("CYBERRACCOON_MODEL", "claude-opus-4-6"),
-        help="Model name (default: claude-opus-4-6)",
+        default=os.environ.get("CYBERRACCOON_MODEL", "gpt-5.4"),
+        help="Model name (default: gpt-5.4)",
     )
     parser.add_argument(
         "--api-key",

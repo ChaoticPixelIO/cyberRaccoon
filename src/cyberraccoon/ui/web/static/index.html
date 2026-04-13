@@ -42,8 +42,8 @@
                     <select class="connection-select" x-model="config.capture_source"
                             @change="saveTopLevel()"
                             :disabled="captureReady || connectingCapture">
-                        <option value="hdmi">HDMI</option>
-                        <option value="csi">CSI Camera</option>
+                        <option value="uvc">UVC (USB capture card)</option>
+                        <option value="csi">CSI (HDMI-to-CSI bridge)</option>
                         <option value="airplay">AirPlay</option>
                     </select>
                     <span class="tooltip-wrap">

@@ -30,8 +30,8 @@ class CaptureConfig:
 
 @dataclass
 class LLMConfig:
-    provider: str = "anthropic"
-    model: str = "claude-opus-4-6"
+    provider: str = "openai"
+    model: str = "gpt-5.4"
     api_key: str = ""
     base_url: str | None = None
     max_tokens: int = 1024
@@ -175,7 +175,7 @@ class AppConfig:
     executor: ExecutorConfig = field(default_factory=ExecutorConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     ble: BLEConfig = field(default_factory=BLEConfig)
-    capture_source: str = "hdmi"       # hdmi | csi | airplay
+    capture_source: str = "uvc"        # uvc | csi | airplay | picamera
     executor_transport: str = "bt"    # usb | bt
     target_os: str = ""               # "" (auto-detect) | windows | macos | linux
 
@@ -186,11 +186,11 @@ class AppConfig:
 
 def load_llm_config() -> LLMConfig:
     """Build LLMConfig from environment variables."""
-    provider = os.environ.get("CYBERRACCOON_PROVIDER", "anthropic")
+    provider = os.environ.get("CYBERRACCOON_PROVIDER", "openai")
     api_key = resolve_api_key(provider)
     return LLMConfig(
         provider=provider,
-        model=os.environ.get("CYBERRACCOON_MODEL", "claude-opus-4-6"),
+        model=os.environ.get("CYBERRACCOON_MODEL", "gpt-5.4"),
         api_key=api_key,
         base_url=os.environ.get("CYBERRACCOON_BASE_URL") or None,
     )
@@ -326,7 +326,7 @@ def load_app_config() -> AppConfig:
         executor=load_executor_config(),
         network=load_network_config(),
         ble=load_ble_config(),
-        capture_source=os.environ.get("CYBERRACCOON_SOURCE", "hdmi"),
+        capture_source=os.environ.get("CYBERRACCOON_SOURCE", "uvc"),
         executor_transport=os.environ.get("CYBERRACCOON_TRANSPORT", "bt"),
         target_os=os.environ.get("CYBERRACCOON_TARGET_OS", ""),
     )

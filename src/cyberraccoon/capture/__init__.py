@@ -5,7 +5,7 @@ backends and a registry / factory for instantiating them by name::
 
     from cyberraccoon.capture import create_capture
 
-    cap = create_capture("hdmi", device_index=0)
+    cap = create_capture("uvc", device_index=0)
     cap.open()
     result = cap.capture()
     cap.close()
@@ -15,7 +15,7 @@ Built-in sources:
 ======== ======================== ========================================
 Name     Class                    Hardware
 ======== ======================== ========================================
-hdmi     ScreenCapture            HDMI USB capture card (V4L2/MJPEG)
+uvc      ScreenCapture            USB HDMI capture card (UVC/V4L2/MJPEG)
 csi      CsiHdmiCapture           TC358743 HDMI-to-CSI bridge (V4L2/BGR)
 airplay  AirPlayCapture           AirPlay mirroring via uxplay
 picamera CameraCapture            Raspberry Pi CSI camera (picamera2)
@@ -59,7 +59,7 @@ def register_source(name: str, cls: type) -> None:
     """Register a capture source class under *name*.
 
     Args:
-        name: Short identifier used in CLI ``--source`` (e.g. ``"hdmi"``).
+        name: Short identifier used in CLI ``--source`` (e.g. ``"uvc"``).
         cls:  Class that satisfies the :class:`CaptureSource` protocol.
     """
     _REGISTRY[name] = cls
@@ -74,7 +74,7 @@ def create_capture(source: str, **kwargs: object) -> CaptureSource:
     """Instantiate a capture source by *name*.
 
     Args:
-        source:  Registered name (``"hdmi"``, ``"csi"``, ``"airplay"``, …).
+        source:  Registered name (``"uvc"``, ``"csi"``, ``"airplay"``, …).
         **kwargs: Forwarded to the source class constructor.
 
     Returns:
@@ -97,7 +97,7 @@ def create_capture(source: str, **kwargs: object) -> CaptureSource:
 # ---------------------------------------------------------------------------
 
 if ScreenCapture is not None:
-    register_source("hdmi", ScreenCapture)
+    register_source("uvc", ScreenCapture)
 if CsiHdmiCapture is not None:
     register_source("csi", CsiHdmiCapture)
 register_source("picamera", CameraCapture)

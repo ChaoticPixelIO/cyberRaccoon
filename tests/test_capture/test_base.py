@@ -136,18 +136,18 @@ class TestCaptureSourceProtocol:
 class TestRegistry:
     """Tests for the source registry and create_capture factory."""
 
-    def test_hdmi_registered(self) -> None:
+    def test_uvc_registered(self) -> None:
         from cyberraccoon.capture import available_sources
-        assert "hdmi" in available_sources()
+        assert "uvc" in available_sources()
 
     def test_csi_registered(self) -> None:
         from cyberraccoon.capture import available_sources
         assert "csi" in available_sources()
 
-    def test_create_hdmi(self) -> None:
+    def test_create_uvc(self) -> None:
         from cyberraccoon.capture import create_capture
         from cyberraccoon.capture.screen_capture import ScreenCapture
-        cap = create_capture("hdmi", device_index=0)
+        cap = create_capture("uvc", device_index=0)
         assert isinstance(cap, ScreenCapture)
 
     def test_create_csi(self) -> None:
