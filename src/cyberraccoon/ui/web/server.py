@@ -14,6 +14,7 @@ REST endpoints:
     GET  /api/wifi/status         — Wi-Fi status
     GET  /api/logs                — recent log entries
     DELETE /api/logs              — clear log buffer
+    GET  /api/setup/status        — hardware/software setup checks
 
 WebSocket:
     /ws — real-time event stream (task steps, logs, status changes)
@@ -60,6 +61,7 @@ from cyberraccoon.agent.skills import (
     save_user_skill,
 )
 from cyberraccoon.ui.app_controller import AppController, AppEvent, AppEventType
+from cyberraccoon.ui.setup_status import check_setup_status
 
 logger = logging.getLogger("M5.web")
 
@@ -626,6 +628,14 @@ def create_app(controller: AppController) -> FastAPI:
     async def clear_logs() -> JSONResponse:
         controller.clear_logs()
         return JSONResponse({"status": "ok"})
+
+    # ---- Setup Status API ----
+
+    @app.get("/api/setup/status")
+    async def get_setup_status() -> JSONResponse:
+        """Hardware/software setup status (non-root checks)."""
+        status = check_setup_status()
+        return JSONResponse(status)
 
     # ---- Skills API ----
 

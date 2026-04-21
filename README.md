@@ -40,35 +40,49 @@ The loop repeats until the task is complete. The target computer sees CyberRacco
 
 ## Quick Start
 
-### 1. Clone and install
+### 1. Install on the Pi (one command)
+
+SSH into your Pi (or open a terminal on it) and run:
 
 ```bash
-git clone https://github.com/ChaoticPixelIO/cyberRaccoon.git
-cd cyberRaccoon
-pip install -e ".[dev]"
+curl -sSL https://raw.githubusercontent.com/ChaoticPixelIO/cyberRaccoon/main/install.sh -o install.sh
+bash install.sh
 ```
 
-### 2. Set up hardware (run once on the Pi)
+> Run as your normal user — **not** with `sudo`. The installer asks for
+> `sudo` only where it's needed (apt install, systemd unit).
+
+The installer:
+- installs system prerequisites (`python3-opencv`, `python3-dbus`, `python3-gi`, …)
+- clones the repo to `~/cyberRaccoon`
+- creates a venv with `--system-site-packages` and installs the package
+- registers a systemd service so the Web UI auto-starts on boot
+
+When it finishes it prints the URL, e.g. `http://raspberrypi.local:8000`.
+
+**Already cloned the repo?** Just run `./install.sh` from inside the repo.
+
+**On macOS (development only):** skip the installer and run `pip install -e ".[dev]"` manually.
+
+### 2. Set up hardware from the Web UI
+
+Open the printed URL in your browser and go to the **Status** tab. The
+**Hardware Setup** section lists each component (Bluetooth HID, USB HID
+Gadget, CSI HDMI, AirPlay) with its live status and, for anything that
+needs setup, the exact command to run on the Pi:
 
 ```bash
-# Interactive — asks what to configure
-sudo scripts/setup.sh
-
-# Or specify components directly
-sudo scripts/setup.sh --bt              # Bluetooth HID
-sudo scripts/setup.sh --gadget          # USB HID Gadget (needs splitter on Pi 5)
-sudo scripts/setup.sh --airplay         # AirPlay capture (optional)
-sudo scripts/setup.sh --csi             # CSI HDMI capture (optional)
+sudo scripts/setup.sh --all        # set up everything applicable
+# or per component:
+sudo scripts/setup.sh --bt
+sudo scripts/setup.sh --csi        # reboot required after this one
+sudo scripts/setup.sh --airplay
 ```
 
-### 3. Start the Web UI
+The Status page refreshes every 10 seconds — run the command, glance at
+the browser, watch the row turn green.
 
-```bash
-python -m cyberraccoon --web
-# Open http://<pi-ip>:8000 in your browser
-```
-
-### 4. Configure the LLM
+### 3. Configure the LLM
 
 Open the **Config** tab and set your API key.
 
@@ -76,7 +90,7 @@ Open the **Config** tab and set your API key.
 - **Switch to Anthropic:** select it in the Config tab, or set `ANTHROPIC_API_KEY` and `CYBERRACCOON_PROVIDER=anthropic`.
 - **Custom model:** override with `--model`, or set `{PROVIDER}_MODEL` (e.g. `OPENAI_MODEL=gpt-4o`, `ANTHROPIC_MODEL=claude-sonnet-4-6`).
 
-### 5. Run a task
+### 4. Run a task
 
 In the **Task** tab:
 
@@ -102,7 +116,7 @@ python -m cyberraccoon --web --host 0.0.0.0 --port 8080
 - **Task** — Submit tasks, view live progress with step-by-step screenshots
 - **Config** — Edit capture source, LLM provider, transport settings
 - **Skills** — Browse, enable, edit, and create application skills
-- **Status** — System overview: module readiness, capture, transport, LLM
+- **Status** — System overview and live **Hardware Setup** checklist (Bluetooth, USB Gadget, CSI, AirPlay) with per-component fix commands
 - **Debug** — Real-time log streaming via WebSocket with level/module filtering
 
 ### Command line

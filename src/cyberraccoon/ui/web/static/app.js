@@ -44,6 +44,10 @@ function cyberRaccoon() {
         // --- Status ---
         statusData: {},
 
+        // --- Hardware setup status (populated by /api/setup/status) ---
+        setupStatus: null,        // null while loading, then {components, needs_setup, needs_reboot, setup_commands}
+        setupPollTimer: null,     // interval handle for periodic refresh
+
         // --- Debug / Logs ---
         logs: [],
         logFilter: {
@@ -1431,6 +1435,61 @@ function cyberRaccoon() {
             } catch (e) {
                 console.error('Status refresh error:', e);
             }
+        },
+
+        async refreshSetupStatus() {
+            try {
+                const resp = await fetch('/api/setup/status');
+                this.setupStatus = await resp.json();
+            } catch (e) {
+                console.error('Setup status refresh error:', e);
+            }
+        },
+
+        startSetupPolling() {
+            // Fire immediately, then every 10s while the Status tab is visible.
+            this.refreshSetupStatus();
+            if (this.setupPollTimer) return;
+            this.setupPollTimer = setInterval(() => this.refreshSetupStatus(), 10000);
+        },
+
+        stopSetupPolling() {
+            if (this.setupPollTimer) {
+                clearInterval(this.setupPollTimer);
+                this.setupPollTimer = null;
+            }
+        },
+
+        // Human-readable labels for the setup checklist
+        setupComponentLabel(key) {
+            return {
+                python_env: 'Python environment',
+                bluetooth: 'Bluetooth HID',
+                usb_gadget: 'USB HID Gadget',
+                csi_hdmi: 'CSI HDMI Capture',
+                airplay: 'AirPlay Capture',
+            }[key] || key;
+        },
+
+        // Command hint to run for a specific component (when it needs setup)
+        setupComponentCommand(key) {
+            return {
+                bluetooth: 'sudo scripts/setup.sh --bt',
+                usb_gadget: 'sudo scripts/setup.sh --gadget',
+                csi_hdmi: 'sudo scripts/setup.sh --csi',
+                airplay: 'sudo scripts/setup.sh --airplay',
+            }[key] || null;
+        },
+
+        // Maps status string → { cls, icon } for consistent badge styling
+        setupStatusBadge(status) {
+            return {
+                ready:           { cls: 'text-ok',    icon: '✓' },
+                not_configured:  { cls: 'text-error', icon: '✗' },
+                partial:         { cls: 'text-warn',  icon: '!' },
+                reboot_required: { cls: 'text-warn',  icon: '⟳' },
+                not_available:   { cls: 'muted',      icon: '—' },
+            }[status] || { cls: 'muted', icon: '?' };
         },
 
         // ================================================================

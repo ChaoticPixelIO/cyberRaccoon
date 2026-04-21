@@ -36,32 +36,35 @@ This guide covers installation, configuration, and usage of CyberRaccoon in deta
 
 ## Installation
 
+### On the Raspberry Pi — one-command install (recommended)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/ChaoticPixelIO/cyberRaccoon/main/install.sh -o install.sh
+bash install.sh
+```
+
+This handles system prerequisites, clones the repo to `~/cyberRaccoon`, creates a venv with `--system-site-packages`, installs the package, and registers a systemd service for the Web UI. Run it as your normal user — **not** with `sudo` (the script asks for `sudo` internally where needed).
+
+When it finishes it prints the URL, e.g. `http://raspberrypi.local:8000`.
+
+### Manual install (advanced — e.g. for dev work)
+
+If you'd rather install by hand, or you're on macOS for development:
+
 ```bash
 git clone https://github.com/ChaoticPixelIO/cyberRaccoon.git
 cd cyberRaccoon
-```
 
-### System prerequisites (Raspberry Pi)
+# On Raspberry Pi only: install system prerequisites
+sudo apt install python3-opencv python3-dbus python3-gi bluez libcap2-bin
 
-```bash
-# OpenCV with GStreamer support (required for AirPlay capture)
-sudo apt install python3-opencv
-
-# Bluetooth HID dependencies (installed automatically by scripts/setup.sh --bt)
-sudo apt install bluez libcap2-bin python3-dbus python3-gi
-```
-
-### Python setup
-
-On Raspberry Pi, create a venv with system site-packages (required for OpenCV with GStreamer support):
-
-```bash
+# Create a venv that inherits system packages (Pi: required for OpenCV + GStreamer)
 python3 -m venv --system-site-packages venv
 source venv/bin/activate
 pip install -e .
 ```
 
-> **Do not** `pip install opencv-python` inside the venv. It shadows the system OpenCV package and loses GStreamer support, which breaks AirPlay capture. If accidentally installed, fix with:
+> **Do not** `pip install opencv-python` inside the venv on Pi. It shadows the system OpenCV package and loses GStreamer support, which breaks AirPlay capture. If accidentally installed, fix with:
 > ```bash
 > pip uninstall opencv-python opencv-python-headless
 > ```

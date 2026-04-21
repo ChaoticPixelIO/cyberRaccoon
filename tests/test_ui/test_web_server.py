@@ -34,6 +34,20 @@ def client(ctrl: AppController) -> TestClient:
 # Config API
 # ---------------------------------------------------------------------------
 
+class TestSetupStatusAPI:
+    def test_get_setup_status(self, client: TestClient) -> None:
+        resp = client.get("/api/setup/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "components" in data
+        assert "setup_commands" in data
+        # Each component has the required shape
+        for name in ("python_env", "bluetooth", "usb_gadget", "csi_hdmi", "airplay"):
+            assert name in data["components"]
+            assert "status" in data["components"][name]
+            assert "detail" in data["components"][name]
+
+
 class TestConfigAPI:
     def test_get_config(self, client: TestClient) -> None:
         resp = client.get("/api/config")

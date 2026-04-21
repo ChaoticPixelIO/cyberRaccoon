@@ -758,7 +758,8 @@
     <!-- ============================================================ -->
     <!-- Status Panel                                                  -->
     <!-- ============================================================ -->
-    <section x-show="tab === 'status'" class="panel">
+    <section x-show="tab === 'status'" class="panel"
+             x-effect="tab === 'status' ? startSetupPolling() : stopSetupPolling()">
         <div class="status-grid">
             <div class="status-card">
                 <h3>Modules</h3>
@@ -792,7 +793,63 @@
             </div>
         </div>
         <div style="margin-top:1rem; display:flex; gap:0.5rem;">
-            <button @click="refreshStatus()" class="btn">Refresh</button>
+            <button @click="refreshStatus(); refreshSetupStatus()" class="btn">Refresh</button>
+        </div>
+
+        <!-- ============================================================ -->
+        <!-- Hardware Setup Status                                         -->
+        <!-- ============================================================ -->
+        <div class="setup-section">
+            <h2>Hardware Setup</h2>
+            <p class="muted setup-help">
+                Commands are run in the terminal (SSH into the Pi).
+                This view refreshes every 10 seconds.
+            </p>
+
+            <template x-if="!setupStatus">
+                <p class="muted">Loading…</p>
+            </template>
+
+            <template x-if="setupStatus">
+                <div>
+                    <!-- Top-level "run everything" hint -->
+                    <template x-if="setupStatus.setup_commands && setupStatus.setup_commands.length > 0">
+                        <div class="setup-action">
+                            <p class="setup-action-label">Run in terminal to set up everything:</p>
+                            <template x-for="cmd in setupStatus.setup_commands" :key="cmd">
+                                <code class="setup-cmd" x-text="cmd"></code>
+                            </template>
+                        </div>
+                    </template>
+
+                    <!-- Per-component checklist -->
+                    <ul class="setup-checklist">
+                        <template x-for="key in Object.keys(setupStatus.components)" :key="key">
+                            <li class="setup-item">
+                                <span class="setup-badge"
+                                      :class="setupStatusBadge(setupStatus.components[key].status).cls"
+                                      x-text="setupStatusBadge(setupStatus.components[key].status).icon"></span>
+                                <div class="setup-item-body">
+                                    <div class="setup-item-header">
+                                        <strong x-text="setupComponentLabel(key)"></strong>
+                                        <span class="setup-status"
+                                              :class="setupStatusBadge(setupStatus.components[key].status).cls"
+                                              x-text="setupStatus.components[key].status.replace(/_/g, ' ')"></span>
+                                    </div>
+                                    <p class="setup-detail" x-text="setupStatus.components[key].detail"></p>
+                                    <!-- Component-specific fix command for non-ready states -->
+                                    <template x-if="['not_configured', 'partial'].includes(setupStatus.components[key].status) && setupComponentCommand(key)">
+                                        <code class="setup-cmd-inline" x-text="setupComponentCommand(key)"></code>
+                                    </template>
+                                    <template x-if="setupStatus.components[key].status === 'reboot_required'">
+                                        <code class="setup-cmd-inline">sudo reboot</code>
+                                    </template>
+                                </div>
+                            </li>
+                        </template>
+                    </ul>
+                </div>
+            </template>
         </div>
     </section>
 
