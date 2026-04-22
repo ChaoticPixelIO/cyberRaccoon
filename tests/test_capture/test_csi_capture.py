@@ -114,17 +114,20 @@ def make_mock_csi_hdmi(
     height: int = 720,
     quality: int = 80,
 ) -> CsiHdmiCapture:
-    """Create a CsiHdmiCapture with a mocked cv2.VideoCapture backend."""
+    """Create a CsiHdmiCapture bypassing open(); ``_read_frame`` is mocked."""
     cap = CsiHdmiCapture(
         target_width=width,
         target_height=height,
         jpeg_quality=quality,
     )
-    mock_vc = MagicMock()
-    mock_vc.isOpened.return_value = True
-    mock_vc.read.return_value = (True, frame)
-    mock_vc.grab.return_value = True
-    cap._cap = mock_vc
+    cap._opened = True
+    cap._video_device = "/dev/video0"
+    cap._signal_height = frame.shape[0]
+    cap._signal_width = frame.shape[1]
+    # Tests use tightly packed BGR (no V4L2 row padding) — stride behavior
+    # is exercised directly against _read_frame in TestStridePadding.
+    cap._bytesperline = frame.shape[1] * 3
+    cap._read_frame = MagicMock(return_value=frame)  # type: ignore[method-assign]
     return cap
 
 
@@ -339,8 +342,7 @@ class TestBufferFlush:
     def test_three_grabs_before_read(self) -> None:
         cap = make_mock_csi_hdmi(_bgr_frame_720p())
         cap.capture()
-        assert cap._cap.grab.call_count == 3  # type: ignore[union-attr]
-        assert cap._cap.read.call_count == 1  # type: ignore[union-attr]
+        cap._read_frame.assert_called_once_with(skip=3)  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -376,13 +378,11 @@ class TestCaptureErrors:
             cap.capture()
 
     def test_read_failure(self) -> None:
-        cap = CsiHdmiCapture()
-        mock_vc = MagicMock()
-        mock_vc.isOpened.return_value = True
-        mock_vc.read.return_value = (False, None)
-        cap._cap = mock_vc
-
-        with pytest.raises(CaptureError, match="Failed to read frame"):
+        cap = make_mock_csi_hdmi(_bgr_frame_720p())
+        cap._read_frame = MagicMock(  # type: ignore[method-assign]
+            side_effect=CaptureError("v4l2-ctl streaming failed"),
+        )
+        with pytest.raises(CaptureError, match="streaming failed"):
             cap.capture()
 
 
@@ -403,10 +403,8 @@ class TestDeviceLifecycle:
 
     def test_close_releases_device(self) -> None:
         cap = make_mock_csi_hdmi(_bgr_frame_720p())
-        mock_vc = cap._cap
         cap.close()
         assert cap.is_open() is False
-        mock_vc.release.assert_called_once()  # type: ignore[union-attr]
 
     def test_double_close_safe(self) -> None:
         cap = make_mock_csi_hdmi(_bgr_frame_720p())
@@ -433,7 +431,8 @@ class TestInit:
         assert cap._signal_timeout == 15.0
         assert cap._lane_count == 0
         assert cap._max_capture_height == 720
-        assert cap._cap is None
+        assert cap._opened is False
+        assert cap._bytesperline == 0
         assert cap._media_device is None
         assert cap._subdev_path is None
         assert cap._video_device is None
@@ -542,6 +541,16 @@ def _make_run_side_effects(
     for _ in range(4):
         effects.append(_ok())
 
+    # v4l2-ctl --set-fmt-video (after _configure_pipeline, before warmup)
+    effects.append(_ok())
+    # v4l2-ctl --get-fmt-video (reads back actual format + bytesperline)
+    effects.append(_ok(
+        "Format Video Capture:\n"
+        "\tWidth/Height      : 1280/720\n"
+        "\tPixel Format      : 'BGR3' (24-bit BGR 8-8-8)\n"
+        "\tBytes per Line    : 3840\n"
+    ))
+
     return effects
 
 
@@ -549,35 +558,22 @@ class TestOpen:
     """Tests for the full open() pipeline with mocked subprocesses."""
 
     @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
+    @patch(
+        "cyberraccoon.capture.csi_capture.CsiHdmiCapture._read_frame",
+        return_value=np.full((720, 1280, 3), 128, dtype=np.uint8),
+    )
     @patch("cyberraccoon.capture.csi_capture.time.sleep")
-    @patch("cyberraccoon.capture.csi_capture.cv2.VideoCapture")
     @patch("cyberraccoon.capture.csi_capture.subprocess.run")
     @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
     @patch("cyberraccoon.capture.csi_capture.os.path.exists")
     def test_open_success(
-        self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
+        self, mock_exists, mock_which, mock_run, mock_sleep, mock_read,
         mock_lanes,
     ) -> None:
         """Full open() should succeed with proper mocking."""
         # /dev/media0-2 don't exist, /dev/media3 does
         mock_exists.side_effect = lambda p: p == "/dev/media3"
         mock_run.side_effect = _make_run_side_effects(media_device_index=0)
-
-        mock_vc = MagicMock()
-        mock_vc.isOpened.return_value = True
-        # Return correct width/height for the respective property queries
-        def _get_prop(prop_id):
-            if prop_id == cv2.CAP_PROP_FRAME_WIDTH:
-                return 1280
-            if prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
-                return 720
-            return 0
-        mock_vc.get.side_effect = _get_prop
-        # Warmup: return a non-black frame
-        warmup_frame = np.full((720, 1280, 3), 128, dtype=np.uint8)
-        mock_vc.read.return_value = (True, warmup_frame)
-        mock_vc.grab.return_value = True
-        mock_cv2_cap.return_value = mock_vc
 
         cap = CsiHdmiCapture()
         cap.open()
@@ -588,6 +584,7 @@ class TestOpen:
         assert cap._video_device == "/dev/video0"
         assert cap._signal_width == 1280
         assert cap._signal_height == 720
+        assert cap._bytesperline == 3840
 
     @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
     @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=False)
@@ -605,33 +602,22 @@ class TestOpen:
             cap.open()
 
     @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
+    @patch(
+        "cyberraccoon.capture.csi_capture.CsiHdmiCapture._read_frame",
+        return_value=np.full((720, 1280, 3), 128, dtype=np.uint8),
+    )
     @patch("cyberraccoon.capture.csi_capture.time.sleep")
-    @patch("cyberraccoon.capture.csi_capture.cv2.VideoCapture")
     @patch("cyberraccoon.capture.csi_capture.subprocess.run")
     @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
     @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=True)
     def test_open_signal_retry(
-        self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
+        self, mock_exists, mock_which, mock_run, mock_sleep, mock_read,
         mock_lanes,
     ) -> None:
         """Should retry signal detection before success."""
         mock_run.side_effect = _make_run_side_effects(
             media_device_index=0, signal_already_720p=False, signal_attempts=3,
         )
-        mock_vc = MagicMock()
-        mock_vc.isOpened.return_value = True
-        def _get_prop(prop_id):
-            if prop_id == cv2.CAP_PROP_FRAME_WIDTH:
-                return 1280
-            if prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
-                return 720
-            return 0
-        mock_vc.get.side_effect = _get_prop
-        warmup_frame = np.full((720, 1280, 3), 128, dtype=np.uint8)
-        mock_vc.read.return_value = (True, warmup_frame)
-        mock_vc.grab.return_value = True
-        mock_cv2_cap.return_value = mock_vc
-
         cap = CsiHdmiCapture(signal_timeout=30.0)
         cap.open()
         assert cap.is_open()
@@ -693,53 +679,43 @@ class TestOpen:
 
     @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
     @patch("cyberraccoon.capture.csi_capture.time.sleep")
-    @patch("cyberraccoon.capture.csi_capture.cv2.VideoCapture")
     @patch("cyberraccoon.capture.csi_capture.subprocess.run")
     @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
     @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=True)
-    def test_open_opencv_fails(
-        self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
-        mock_lanes,
+    def test_open_v4l2_format_mismatch(
+        self, mock_exists, mock_which, mock_run, mock_sleep, mock_lanes,
     ) -> None:
-        """Should raise CaptureError if OpenCV can't open the device."""
-        mock_run.side_effect = _make_run_side_effects(media_device_index=0)
-        mock_vc = MagicMock()
-        mock_vc.isOpened.return_value = False
-        mock_cv2_cap.return_value = mock_vc
+        """Should raise CaptureError if device reports a different resolution
+        than we set (pipeline did not apply correctly)."""
+        effects = _make_run_side_effects(media_device_index=0)
+        # Override the get-fmt-video response (last entry) with a mismatch
+        effects[-1] = _ok(
+            "Format Video Capture:\n"
+            "\tWidth/Height      : 640/480\n"
+            "\tBytes per Line    : 1920\n"
+        )
+        mock_run.side_effect = effects
 
         cap = CsiHdmiCapture()
-        with pytest.raises(CaptureError, match="Cannot open"):
+        with pytest.raises(CaptureError, match="format mismatch"):
             cap.open()
 
     @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=2)
+    @patch(
+        "cyberraccoon.capture.csi_capture.CsiHdmiCapture._read_frame",
+        return_value=np.zeros((720, 1280, 3), dtype=np.uint8),
+    )
     @patch("cyberraccoon.capture.csi_capture.time.sleep")
     @patch("cyberraccoon.capture.csi_capture.time.monotonic")
-    @patch("cyberraccoon.capture.csi_capture.cv2.VideoCapture")
     @patch("cyberraccoon.capture.csi_capture.subprocess.run")
     @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
     @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=True)
     def test_open_warmup_timeout(
-        self, mock_exists, mock_which, mock_run, mock_cv2_cap,
-        mock_monotonic, mock_sleep, mock_lanes,
+        self, mock_exists, mock_which, mock_run,
+        mock_monotonic, mock_sleep, mock_read, mock_lanes,
     ) -> None:
         """Should raise CaptureError if warmup produces only black frames."""
         mock_run.side_effect = _make_run_side_effects(media_device_index=0)
-
-        mock_vc = MagicMock()
-        mock_vc.isOpened.return_value = True
-        def _get_prop(prop_id):
-            if prop_id == cv2.CAP_PROP_FRAME_WIDTH:
-                return 1280
-            if prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
-                return 720
-            return 0
-        mock_vc.get.side_effect = _get_prop
-        # Always return black frames
-        black_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-        mock_vc.read.return_value = (True, black_frame)
-        mock_vc.grab.return_value = True
-        mock_cv2_cap.return_value = mock_vc
-
         # Simulate warmup timeout: monotonic returns past deadline immediately
         mock_monotonic.side_effect = [0.0, 6.0]
 
@@ -784,37 +760,33 @@ class TestOpen:
             cap.open()
 
     @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=4)
+    @patch(
+        "cyberraccoon.capture.csi_capture.CsiHdmiCapture._read_frame",
+        return_value=np.full((1080, 1920, 3), 128, dtype=np.uint8),
+    )
     @patch("cyberraccoon.capture.csi_capture.time.sleep")
-    @patch("cyberraccoon.capture.csi_capture.cv2.VideoCapture")
     @patch("cyberraccoon.capture.csi_capture.subprocess.run")
     @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
     @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=True)
     def test_open_4lane_accepts_1080p(
-        self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
+        self, mock_exists, mock_which, mock_run, mock_sleep, mock_read,
         mock_lanes,
     ) -> None:
         """On 4-lane CSI, 1080p signal should be accepted without EDID reload."""
         dv_1080p = _ok(SAMPLE_DV_TIMINGS_1080P)
+        fmt_1080p = _ok(
+            "Format Video Capture:\n"
+            "\tWidth/Height      : 1920/1080\n"
+            "\tBytes per Line    : 5760\n"
+        )
         mock_run.side_effect = [
             _ok(SAMPLE_TOPOLOGY_4LANE),   # _discover_media_device
             dv_1080p,                      # _query_current_signal: 1080p (accepted)
             _ok("BT timings set"),         # _set_dv_timings
             _ok(), _ok(), _ok(), _ok(),    # _configure_pipeline (4 commands)
+            _ok(),                         # v4l2-ctl --set-fmt-video
+            fmt_1080p,                     # v4l2-ctl --get-fmt-video
         ]
-
-        mock_vc = MagicMock()
-        mock_vc.isOpened.return_value = True
-        def _get_prop(prop_id):
-            if prop_id == cv2.CAP_PROP_FRAME_WIDTH:
-                return 1920
-            if prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
-                return 1080
-            return 0
-        mock_vc.get.side_effect = _get_prop
-        warmup_frame = np.full((1080, 1920, 3), 128, dtype=np.uint8)
-        mock_vc.read.return_value = (True, warmup_frame)
-        mock_vc.grab.return_value = True
-        mock_cv2_cap.return_value = mock_vc
 
         cap = CsiHdmiCapture()
         cap.open()
@@ -822,15 +794,19 @@ class TestOpen:
         assert cap._signal_height == 1080
         assert cap._max_capture_height == 1080
         assert cap._lane_count == 4
+        assert cap._bytesperline == 5760
 
     @patch("cyberraccoon.capture.csi_capture.CsiHdmiCapture._detect_lane_count", return_value=4)
+    @patch(
+        "cyberraccoon.capture.csi_capture.CsiHdmiCapture._read_frame",
+        return_value=np.full((1080, 1920, 3), 128, dtype=np.uint8),
+    )
     @patch("cyberraccoon.capture.csi_capture.time.sleep")
-    @patch("cyberraccoon.capture.csi_capture.cv2.VideoCapture")
     @patch("cyberraccoon.capture.csi_capture.subprocess.run")
     @patch("cyberraccoon.capture.csi_capture.shutil.which", return_value="/usr/bin/v4l2-ctl")
     @patch("cyberraccoon.capture.csi_capture.os.path.exists", return_value=True)
     def test_open_4lane_loads_1080p_edid(
-        self, mock_exists, mock_which, mock_run, mock_cv2_cap, mock_sleep,
+        self, mock_exists, mock_which, mock_run, mock_sleep, mock_read,
         mock_lanes,
     ) -> None:
         """On 4-lane CSI with no signal, should load 1080p EDID."""
@@ -838,6 +814,11 @@ class TestOpen:
             args=[], returncode=255, stdout="", stderr=SAMPLE_DV_TIMINGS_NO_SIGNAL,
         )
         dv_1080p = _ok(SAMPLE_DV_TIMINGS_1080P)
+        fmt_1080p = _ok(
+            "Format Video Capture:\n"
+            "\tWidth/Height      : 1920/1080\n"
+            "\tBytes per Line    : 5760\n"
+        )
         mock_run.side_effect = [
             _ok(SAMPLE_TOPOLOGY_4LANE),   # _discover_media_device
             no_signal,                     # _query_current_signal: no signal
@@ -845,21 +826,9 @@ class TestOpen:
             dv_1080p,                      # _wait_for_signal: locks at 1080p
             _ok("BT timings set"),         # _set_dv_timings
             _ok(), _ok(), _ok(), _ok(),    # _configure_pipeline
+            _ok(),                         # v4l2-ctl --set-fmt-video
+            fmt_1080p,                     # v4l2-ctl --get-fmt-video
         ]
-
-        mock_vc = MagicMock()
-        mock_vc.isOpened.return_value = True
-        def _get_prop(prop_id):
-            if prop_id == cv2.CAP_PROP_FRAME_WIDTH:
-                return 1920
-            if prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
-                return 1080
-            return 0
-        mock_vc.get.side_effect = _get_prop
-        warmup_frame = np.full((1080, 1920, 3), 128, dtype=np.uint8)
-        mock_vc.read.return_value = (True, warmup_frame)
-        mock_vc.grab.return_value = True
-        mock_cv2_cap.return_value = mock_vc
 
         cap = CsiHdmiCapture()
         cap.open()
@@ -956,3 +925,142 @@ class TestRunCmd:
         cap = CsiHdmiCapture()
         result = cap._run_cmd(["fail"], check=False)
         assert result.returncode == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests: Row-stride padding (regression — non-aligned source widths)
+# ---------------------------------------------------------------------------
+
+class TestStridePadding:
+    """The RP1-CFE CSI receiver pads each row to a 16-byte boundary, so
+    bytesperline may exceed width*3.  _read_frame must strip that padding;
+    otherwise rows shear diagonally.
+    """
+
+    def _build_padded_buffer(
+        self, width: int, height: int, bytesperline: int,
+    ) -> bytes:
+        """Build a raw V4L2 BGR3 buffer with a predictable per-row pattern.
+
+        Each row has a unique byte value so that shearing (if padding is
+        mishandled) shows up as cross-row contamination in the decoded frame.
+        """
+        pad = bytesperline - width * 3
+        assert pad >= 0
+        rows = []
+        for y in range(height):
+            # Row content: repeating triplet (y, y+1, y+2) so a correctly
+            # parsed BGR image has each row filled with pixel (y, y+1, y+2).
+            pixel = bytes([y % 256, (y + 1) % 256, (y + 2) % 256])
+            row = pixel * width + b"\xff" * pad  # sentinel padding
+            rows.append(row)
+        return b"".join(rows)
+
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    def test_strips_row_padding(self, mock_run) -> None:
+        width, height, bytesperline = 1720, 720, 5168  # real-world values
+        raw = self._build_padded_buffer(width, height, bytesperline)
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=raw, stderr=b"",
+        )
+        cap = CsiHdmiCapture()
+        cap._video_device = "/dev/video0"
+        cap._signal_width = width
+        cap._signal_height = height
+        cap._bytesperline = bytesperline
+
+        frame = cap._read_frame(skip=0)
+        assert frame.shape == (height, width, 3)
+        # If padding leaked, rows would shift progressively (diagonal shear)
+        # and a given row would not carry its expected pixel triplet.
+        # Row y is filled with pixel (y%256, (y+1)%256, (y+2)%256).
+        for y in (0, 100, 500, 719):
+            expected = np.array(
+                [y % 256, (y + 1) % 256, (y + 2) % 256], dtype=np.uint8,
+            )
+            assert np.all(frame[y] == expected), f"row {y} mismatched"
+
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    def test_no_padding_path(self, mock_run) -> None:
+        """When bytesperline == width*3 (naturally aligned width), the
+        slice is a no-op and the output matches input."""
+        width, height = 1280, 720
+        bytesperline = width * 3  # 3840, already 16-aligned
+        raw = self._build_padded_buffer(width, height, bytesperline)
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=raw, stderr=b"",
+        )
+        cap = CsiHdmiCapture()
+        cap._video_device = "/dev/video0"
+        cap._signal_width = width
+        cap._signal_height = height
+        cap._bytesperline = bytesperline
+
+        frame = cap._read_frame(skip=0)
+        assert frame.shape == (height, width, 3)
+        assert np.all(frame[0] == np.array([0, 1, 2], dtype=np.uint8))
+
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    def test_short_buffer_raises(self, mock_run) -> None:
+        """If v4l2-ctl returns fewer bytes than one frame, raise clearly."""
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"\x00" * 100, stderr=b"",
+        )
+        cap = CsiHdmiCapture()
+        cap._video_device = "/dev/video0"
+        cap._signal_width = 1720
+        cap._signal_height = 720
+        cap._bytesperline = 5168
+
+        with pytest.raises(CaptureError, match="expected at least"):
+            cap._read_frame(skip=0)
+
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    def test_v4l2ctl_nonzero_raises(self, mock_run) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout=b"", stderr=b"Device busy",
+        )
+        cap = CsiHdmiCapture()
+        cap._video_device = "/dev/video0"
+        cap._signal_width = 1280
+        cap._signal_height = 720
+        cap._bytesperline = 3840
+
+        with pytest.raises(CaptureError, match="Device busy"):
+            cap._read_frame(skip=0)
+
+
+# ---------------------------------------------------------------------------
+# Tests: V4L2 format parsing
+# ---------------------------------------------------------------------------
+
+class TestQueryVideoFormat:
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    def test_parse_typical_output(self, mock_run) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=(
+                "Format Video Capture:\n"
+                "\tWidth/Height      : 1720/720\n"
+                "\tPixel Format      : 'BGR3' (24-bit BGR 8-8-8)\n"
+                "\tField             : None\n"
+                "\tBytes per Line    : 5168\n"
+                "\tSize Image        : 3720960\n"
+            ),
+            stderr="",
+        )
+        cap = CsiHdmiCapture()
+        cap._video_device = "/dev/video0"
+        fmt = cap._query_video_format()
+        assert fmt == {"width": 1720, "height": 720, "bytesperline": 5168}
+
+    @patch("cyberraccoon.capture.csi_capture.subprocess.run")
+    def test_parse_missing_fields(self, mock_run) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout="garbage\nno fields here\n", stderr="",
+        )
+        cap = CsiHdmiCapture()
+        cap._video_device = "/dev/video0"
+        with pytest.raises(CaptureError, match="Could not parse"):
+            cap._query_video_format()

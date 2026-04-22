@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import threading
 import time
 from collections import deque
@@ -38,7 +37,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
 
-from cyberraccoon._project_root import PROJECT_ROOT
 from cyberraccoon.agent.planner import PlanStep, RewriteResult
 from cyberraccoon.agent.vision_agent import TaskResult, TaskStatus, VisionAgent
 from cyberraccoon.agent.protocols import create_protocol
@@ -47,7 +45,6 @@ from cyberraccoon.capture.base import CaptureError, CaptureResult, CaptureSource
 from cyberraccoon.config import (
     LLM_PROVIDER_DEFAULTS,
     AppConfig,
-    resolve_api_key,
 )
 from cyberraccoon.executor.hid_executor import ActionExecutor
 from cyberraccoon.executor.bluetooth_executor import BluetoothExecutor
@@ -481,13 +478,9 @@ class AppController:
             for fname, fval in snapshot.items():
                 if hasattr(config.llm, fname):
                     setattr(config.llm, fname, fval)
-            # If the new provider's stored snapshot has no api_key, try env.
-            if not config.llm.api_key:
-                env_key = resolve_api_key(new_provider)
-                if env_key:
-                    config.llm.api_key = env_key
-            # Persist the (possibly env-filled) snapshot for the new provider
-            # so subsequent swaps see a consistent state.
+            # Persist the snapshot for the new provider so subsequent swaps
+            # see a consistent state. If api_key is empty, the UI will prompt
+            # the user to enter one before tasks can run.
             config.llm.providers[new_provider] = _snapshot_llm_flat(config.llm)
 
         self._config_store.save(config)
@@ -652,30 +645,6 @@ class AppController:
                 self.close_executor()
                 return
 
-    def _setup_usb_gadget(self) -> None:
-        """Run ``scripts/setup/gadget.sh`` to create ``/dev/hidg0``.
-
-        Called automatically when the USB HID device file does not exist.
-
-        Raises:
-            TaskError: If the setup script fails.
-        """
-        script = PROJECT_ROOT / "scripts" / "setup" / "gadget.sh"
-        if not script.exists():
-            raise TaskError(f"USB Gadget setup script not found: {script}")
-        logger.info("USB Gadget device not found, running setup/gadget.sh ...")
-        try:
-            result = subprocess.run(
-                [str(script)],
-                capture_output=True, text=True, timeout=30,
-            )
-        except subprocess.TimeoutExpired as e:
-            raise TaskError("USB Gadget setup timed out") from e
-        if result.returncode != 0:
-            stderr = result.stderr.strip() or result.stdout.strip()
-            raise TaskError(f"USB Gadget setup failed: {stderr}")
-        logger.info("USB Gadget setup completed successfully")
-
     def init_executor(self) -> None:
         """Initialise M4 (Executor), emit ``EXECUTOR_READY``.
 
@@ -701,7 +670,10 @@ class AppController:
         else:
             device_path = config.executor.device
             if not os.path.exists(device_path):
-                self._setup_usb_gadget()
+                raise TaskError(
+                    f"USB HID Gadget not set up ({device_path} missing). "
+                    "Run: sudo scripts/setup.sh --gadget"
+                )
             executor = ActionExecutor(
                 device=device_path,
                 target_os=target_os,

@@ -221,48 +221,87 @@ class AppConfig:
 # ---------------------------------------------------------------------------
 
 def load_llm_config() -> LLMConfig:
-    """Build LLMConfig from environment variables.
+    """Build LLMConfig by reading the active provider's values from the YAML
+    config at ``~/.cyberraccoon/config.yaml``.
 
-    ``CYBERRACCOON_PROVIDER`` selects the active provider. All other LLM
-    settings are sourced from provider-scoped env vars — ``{PROVIDER}_API_KEY``,
-    ``{PROVIDER}_MODEL``, ``{PROVIDER}_BASE_URL`` (provider name uppercased).
-    Unknown providers still work; they just start with empty flat fields
-    unless their env vars are set.
+    If the YAML has no entry for the active provider, the built-in defaults
+    for that provider (from :data:`LLM_PROVIDER_DEFAULTS`) are used instead,
+    with an empty ``api_key``.  Callers should surface a clear error when
+    ``api_key`` is empty — keys are managed exclusively via the Config tab
+    of the web UI (or by hand-editing the YAML).
     """
-    provider = os.environ.get("CYBERRACCOON_PROVIDER", "openai")
+    # Lazy import to avoid config ↔ config_store circular import.
+    from cyberraccoon.ui.config_store import ConfigStore
+
+    store = ConfigStore()
+    config = store.load() if store.exists() else None
+    if config is not None:
+        return config.llm
+
+    # No YAML yet → fall back to dataclass defaults for the requested provider.
+    provider = "openai"
     defaults = LLM_PROVIDER_DEFAULTS.get(provider, {})
     return LLMConfig(
         provider=provider,
-        model=resolve_provider_model(provider) or defaults.get("model", ""),
-        api_key=resolve_api_key(provider),
-        base_url=resolve_provider_base_url(provider) or defaults.get("base_url"),
+        model=defaults.get("model", ""),
+        api_key="",
+        base_url=defaults.get("base_url"),
         max_tokens=defaults.get("max_tokens", 1024),
         temperature=defaults.get("temperature", 0.0),
     )
 
 
-def _provider_env_prefix(provider: str) -> str:
-    """Uppercase the provider name for use as an env var prefix."""
-    return provider.upper()
+def _load_llm_section() -> LLMConfig | None:
+    """Internal: load ``AppConfig.llm`` from YAML, or ``None`` if no YAML yet."""
+    from cyberraccoon.ui.config_store import ConfigStore
+    store = ConfigStore()
+    return store.load().llm if store.exists() else None
 
 
 def resolve_api_key(provider: str) -> str:
-    """Look up the API key for ``provider`` via ``{PROVIDER}_API_KEY``."""
-    return os.environ.get(f"{_provider_env_prefix(provider)}_API_KEY", "")
+    """Look up the API key for ``provider`` from the YAML config file.
+
+    Returns ``""`` if no key is configured (neither the active provider's
+    flat ``api_key`` nor the provider's snapshot under ``llm.providers``
+    holds one).  API keys are configured exclusively via the Config tab
+    of the web UI; there is no environment-variable fallback.
+    """
+    llm = _load_llm_section()
+    if llm is None:
+        return ""
+    if provider == llm.provider and llm.api_key:
+        return llm.api_key
+    snap = llm.providers.get(provider) or {}
+    return snap.get("api_key", "") or ""
 
 
 def resolve_provider_model(provider: str) -> str:
-    """Look up the model for ``provider`` via ``{PROVIDER}_MODEL``."""
-    return os.environ.get(f"{_provider_env_prefix(provider)}_MODEL", "")
+    """Look up the model for ``provider`` from the YAML config file.
+
+    Returns ``""`` if unset.
+    """
+    llm = _load_llm_section()
+    if llm is None:
+        return ""
+    if provider == llm.provider and llm.model:
+        return llm.model
+    snap = llm.providers.get(provider) or {}
+    return snap.get("model", "") or ""
 
 
 def resolve_provider_base_url(provider: str) -> str | None:
-    """Look up the base URL for ``provider`` via ``{PROVIDER}_BASE_URL``.
+    """Look up the base URL for ``provider`` from the YAML config file.
 
     Returns ``None`` if unset so callers can distinguish "not configured"
     from "explicitly empty".
     """
-    value = os.environ.get(f"{_provider_env_prefix(provider)}_BASE_URL")
+    llm = _load_llm_section()
+    if llm is None:
+        return None
+    if provider == llm.provider:
+        return llm.base_url or None
+    snap = llm.providers.get(provider) or {}
+    value = snap.get("base_url")
     return value if value else None
 
 

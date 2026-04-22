@@ -1405,8 +1405,16 @@ function cyberRaccoon() {
             }
         },
 
-        async saveTopLevel() {
+        async saveTopLevel(changedKey) {
             if (!this.config) return;
+            // Clear stale error messages tied to the setting that just changed —
+            // an old failure under one transport/source shouldn't linger when
+            // the user has picked a different option.
+            if (changedKey === 'capture_source') {
+                this.captureError = '';
+            } else if (changedKey === 'executor_transport' || changedKey === 'target_os') {
+                this.executorError = '';
+            }
             try {
                 for (const key of ['capture_source', 'executor_transport', 'target_os']) {
                     await fetch(`/api/config/${key}`, {

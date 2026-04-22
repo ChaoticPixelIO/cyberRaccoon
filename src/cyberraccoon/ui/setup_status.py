@@ -147,12 +147,62 @@ def _check_bluetooth() -> dict[str, str]:
     return {"status": READY, "detail": "Bluetooth HID configured"}
 
 
+def _read_dwc2_overlay(config_paths: list[str], model_filter: str) -> dict[str, Any]:
+    """Walk config.txt and return the active dwc2 overlay setting for this model.
+
+    Section headers like ``[cm5]`` or ``[pi4]`` scope subsequent lines. Only
+    sections that apply to ``model_filter`` (plus the implicit default scope
+    and ``[all]``) are considered. Lines under non-matching sections (e.g.
+    ``[cm5]`` on a Pi 5 Model B) are ignored.
+
+    Returns:
+        ``{"present": bool, "dr_mode": str | None, "config_path": str | None}``
+        where ``dr_mode`` is the lowercase value (``"peripheral"``,
+        ``"otg"``, ``"host"``, …) or ``None`` if the overlay is loaded
+        without an explicit ``dr_mode=`` (which the firmware defaults to OTG).
+        ``config_path`` is the file we actually parsed.
+    """
+    applied = {"", "all", model_filter}
+    last: dict[str, Any] = {"present": False, "dr_mode": None, "config_path": None}
+    for path in config_paths:
+        try:
+            content = Path(path).read_text()
+        except FileNotFoundError:
+            continue
+        last["config_path"] = path
+        section = ""
+        for raw in content.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1].lower()
+                continue
+            if section not in applied:
+                continue
+            if not line.startswith("dtoverlay=dwc2"):
+                continue
+            # Parse dr_mode= parameter if present
+            dr_mode = None
+            for part in line.split(",")[1:]:
+                kv = part.strip()
+                if kv.startswith("dr_mode="):
+                    dr_mode = kv.split("=", 1)[1].strip().lower()
+                    break
+            # Later applied lines override earlier ones, just like the firmware
+            last["present"] = True
+            last["dr_mode"] = dr_mode
+        return last  # only inspect the first config file that exists
+    return last
+
+
 def _check_usb_gadget() -> dict[str, str]:
     """Check USB HID Gadget setup status.
 
-    On Pi 5, USB Gadget is not available (USB-C is power-only without
-    a splitter cable, and dwc2 has known issues).
-    On Pi 4B, checks /dev/hidg0 and libcomposite.
+    On Pi 5, walks /boot/firmware/config.txt to confirm the dwc2 overlay is
+    enabled in a model-applicable section and not pinned to host mode —
+    catching the most common reason ``/sys/class/udc`` is empty before
+    blaming cables or target power state.
     """
     if not _is_raspberry_pi():
         return {"status": NOT_AVAILABLE, "detail": "Not running on a Raspberry Pi"}
@@ -165,42 +215,87 @@ def _check_usb_gadget() -> dict[str, str]:
     except FileNotFoundError:
         pass
 
+    config_paths = ["/boot/firmware/config.txt", "/boot/config.txt"]
+
     if is_pi5:
-        # Check if gadget is somehow working (user has splitter)
+        pi5_cable_note = (
+            "Pi 5 cable check: the Pi USB-C port (the same one used for power) "
+            "must carry data to the target, and the target needs to be powered "
+            "on — otherwise the Pi can't act as a USB device. If you are "
+            "powering the Pi from the target through one cable, use a USB "
+            "power/data splitter (external power to Pi, separate data cable to "
+            "target) to avoid a known dwc2 kernel bug."
+        )
+
+        # 1. Verify config.txt enables dwc2 in a usable mode for Pi 5.
+        overlay = _read_dwc2_overlay(config_paths, "pi5")
+        if overlay["config_path"] is None:
+            return {
+                "status": NOT_CONFIGURED,
+                "detail": "config.txt not found at /boot/firmware/config.txt or /boot/config.txt.",
+                "note": pi5_cable_note,
+            }
+        if not overlay["present"]:
+            return {
+                "status": NOT_CONFIGURED,
+                "detail": (
+                    "dwc2 overlay not enabled in config.txt — Pi can't act as "
+                    "a USB device until it is added. Run setup --gadget, then reboot."
+                ),
+                "note": pi5_cable_note,
+            }
+        if overlay["dr_mode"] == "host":
+            return {
+                "status": NOT_CONFIGURED,
+                "detail": (
+                    f"dwc2 overlay in {overlay['config_path']} is set to host "
+                    "mode, so the Pi can't act as a USB device. Change "
+                    "dr_mode=host to dr_mode=peripheral and reboot."
+                ),
+                "note": pi5_cable_note,
+            }
+
+        # 2. Overlay is fine — now check runtime state.
         if Path("/dev/hidg0").exists():
             return {
                 "status": READY,
-                "detail": "/dev/hidg0 available (USB splitter detected)",
+                "detail": "/dev/hidg0 available",
+                "note": pi5_cable_note,
             }
+        udc_present = any(Path("/sys/class/udc").iterdir()) if Path("/sys/class/udc").exists() else False
+        if udc_present:
+            detail = "/dev/hidg0 missing. Run setup --gadget."
+        else:
+            detail = (
+                "Pi can't currently act as a USB device — usually because the "
+                "target is powered off, or the cable to the target doesn't "
+                "carry data. Power on the target and re-check, then run setup."
+            )
         return {
-            "status": NOT_AVAILABLE,
-            "detail": (
-                "Pi 5 USB-C is power-only. "
-                "Use Bluetooth HID (--transport bt) or a USB power/data splitter cable."
-            ),
+            "status": NOT_CONFIGURED,
+            "detail": detail,
+            "note": pi5_cable_note,
         }
 
-    # Pi 4B or other: check if gadget is configured
+    # Pi 4B or other
     if Path("/dev/hidg0").exists():
         return {"status": READY, "detail": "/dev/hidg0 available"}
 
-    # Check if dwc2 overlay is in config.txt
-    dwc2_configured = False
-    for config_path in ["/boot/firmware/config.txt", "/boot/config.txt"]:
-        try:
-            content = Path(config_path).read_text()
-            if "dtoverlay=dwc2" in content:
-                dwc2_configured = True
-                break
-        except FileNotFoundError:
-            continue
-
-    if not dwc2_configured:
+    overlay = _read_dwc2_overlay(config_paths, "pi4")
+    if not overlay["present"]:
         return {
             "status": NOT_CONFIGURED,
             "detail": "dwc2 overlay not in config.txt and /dev/hidg0 missing",
         }
-
+    if overlay["dr_mode"] == "host":
+        return {
+            "status": NOT_CONFIGURED,
+            "detail": (
+                f"dwc2 overlay in {overlay['config_path']} is set to host "
+                "mode. Change dr_mode=host to dr_mode=peripheral (or remove "
+                "dr_mode=) and reboot."
+            ),
+        }
     return {
         "status": NOT_CONFIGURED,
         "detail": "/dev/hidg0 not present (run setup or reboot after config change)",

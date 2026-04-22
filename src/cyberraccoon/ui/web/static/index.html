@@ -40,7 +40,7 @@
                 <div class="connection-item">
                     <span class="connection-label-fixed">Screen Capture:</span>
                     <select class="connection-select" x-model="config.capture_source"
-                            @change="saveTopLevel()"
+                            @change="saveTopLevel('capture_source')"
                             :disabled="captureReady || connectingCapture">
                         <option value="uvc">UVC (USB capture card)</option>
                         <option value="csi">CSI (HDMI-to-CSI bridge)</option>
@@ -76,7 +76,7 @@
                 <div class="connection-item">
                     <span class="connection-label-fixed">Mouse/Keyboard:</span>
                     <select class="connection-select" x-model="config.executor_transport"
-                            @change="saveTopLevel()"
+                            @change="saveTopLevel('executor_transport')"
                             :disabled="executorReady || connectingExecutor">
                         <option value="usb">USB HID</option>
                         <option value="bt">Bluetooth</option>
@@ -111,7 +111,7 @@
                 <div class="connection-item">
                     <span class="connection-label-fixed">Target OS:</span>
                     <select class="connection-select" x-model="config.target_os"
-                            @change="saveTopLevel()">
+                            @change="saveTopLevel('target_os')">
                         <option value="">Auto-detect</option>
                         <option value="windows">Windows</option>
                         <option value="macos">macOS</option>
@@ -837,6 +837,10 @@
                                               x-text="setupStatus.components[key].status.replace(/_/g, ' ')"></span>
                                     </div>
                                     <p class="setup-detail" x-text="setupStatus.components[key].detail"></p>
+                                    <!-- Optional component note (e.g. Pi 5 cable warning) -->
+                                    <template x-if="setupStatus.components[key].note">
+                                        <p class="setup-note" x-text="setupStatus.components[key].note"></p>
+                                    </template>
                                     <!-- Component-specific fix command for non-ready states -->
                                     <template x-if="['not_configured', 'partial'].includes(setupStatus.components[key].status) && setupComponentCommand(key)">
                                         <code class="setup-cmd-inline" x-text="setupComponentCommand(key)"></code>

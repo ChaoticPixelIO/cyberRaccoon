@@ -81,7 +81,7 @@ sudo scripts/setup.sh
 
 # Or specify components directly
 sudo scripts/setup.sh --bt              # Bluetooth HID
-sudo scripts/setup.sh --gadget          # USB HID Gadget (needs splitter on Pi 5)
+sudo scripts/setup.sh --gadget          # USB HID Gadget
 sudo scripts/setup.sh --airplay         # AirPlay capture
 sudo scripts/setup.sh --csi             # CSI HDMI capture (TC358743)
 sudo scripts/setup.sh --all             # everything applicable
@@ -89,7 +89,7 @@ sudo scripts/setup.sh --all             # everything applicable
 
 ### USB HID Gadget
 
-> **Note:** On Pi 5, USB Gadget requires a USB power/data splitter cable (the USB-C port is power-only by default). Bluetooth HID (`--transport bt`) is the simpler option and requires no extra hardware.
+> **Note:** On Pi 5, single-cable USB-C OTG (Pi powered by the target Mac) is affected by a known dwc2 kernel bug ([raspberrypi/linux#6289](https://github.com/raspberrypi/linux/issues/6289)) — the UDC stays `not attached`. The documented workaround is a USB power/data splitter cable (external power to the Pi, data to the target). Bluetooth HID (`--transport bt`) avoids the issue entirely and needs no extra hardware.
 
 Creates `/dev/hidg0` so the Pi appears as a USB keyboard and mouse to the target computer. A single combined HID device is used with Report IDs (ID 1 = keyboard, ID 2 = mouse) for cross-platform compatibility (macOS requires this approach).
 
@@ -99,7 +99,7 @@ sudo scripts/setup.sh --gadget
 
 What it does:
 
-1. Detects Pi model (on Pi 5, requires USB power/data splitter cable)
+1. Detects Pi model (Pi 5 single-cable USB-C OTG is unreliable — see note above)
 2. Loads the `libcomposite` kernel module
 3. Creates a USB Gadget at `/sys/kernel/config/usb_gadget/cyber_raccoon`
 4. Configures a combined HID function with Report ID descriptors:
@@ -160,15 +160,9 @@ On the source Mac/iPhone/iPad:
 
 ### API Keys
 
-Set the API key for your LLM provider:
+Open the Web UI → **Config** tab → enter your API key for the active provider and click **Save LLM**. Keys are written to `~/.cyberraccoon/config.yaml` with `0o600` permissions and survive restarts. Switching providers later remembers each provider's key separately.
 
-```bash
-# OpenAI (default provider)
-export OPENAI_API_KEY="sk-..."
-
-# Anthropic (if using --provider anthropic)
-export ANTHROPIC_API_KEY="sk-ant-..."
-```
+If you prefer the CLI, pass `--api-key` for a one-off run, or edit the yaml directly — there is no env-var fallback for API keys, models, or base URLs.
 
 ### Config File
 
@@ -190,9 +184,17 @@ capture:
 llm:
   provider: openai
   model: ""                    # uses provider default if empty
+  api_key: sk-...              # set via the Config tab
   base_url: null
   max_tokens: 1024
   temperature: 0.0
+  providers:                   # per-provider snapshots remembered across swaps
+    anthropic:
+      model: claude-opus-4-6
+      api_key: sk-ant-...
+    openai:
+      model: gpt-5.4
+      api_key: sk-...
 
 agent:
   max_steps: 50
@@ -217,17 +219,14 @@ network:
 Security notes:
 
 - `wifi_password` is never saved to the config file
-- `api_key` is excluded by default
-- The config file is created with mode `0o600` (owner read/write only)
+- `api_key` IS saved (it has no other source) — the file is mode `0o600`, owner read/write only
+- For exporting a redacted config (e.g. to share or commit), use `ConfigStore.save(config, include_secrets=False)`
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CYBERRACCOON_PROVIDER` | `openai` | Active LLM provider. Any string works; built-in model defaults exist for `openai` and `anthropic`. |
-| `{PROVIDER}_API_KEY` | — | API key for the given provider. Provider name is uppercased (e.g. `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `MINIMAX_API_KEY`). |
-| `{PROVIDER}_MODEL` | provider default | Model name for the given provider (e.g. `OPENAI_MODEL=gpt-4o`, `ANTHROPIC_MODEL=claude-sonnet-4-6`). |
-| `{PROVIDER}_BASE_URL` | — | Custom API base URL for the given provider (e.g. `OPENAI_BASE_URL` for OpenAI-compatible services like MiniMax, Groq, DeepSeek, Together). |
+| `CYBERRACCOON_PROVIDER` | `openai` | Active LLM provider name (`openai`, `anthropic`, or custom). API key / model / base URL are configured in the Config tab (yaml only) — no env-var support. |
 | `CYBERRACCOON_SOURCE` | `hdmi` | Capture source (`hdmi`, `csi`, `airplay`) |
 | `CYBERRACCOON_DEVICE` | `0` | Device index for HDMI/CSI |
 | `CYBERRACCOON_TRANSPORT` | `usb` | HID transport (`usb`, `bt`) |
@@ -444,7 +443,7 @@ python -m cyberraccoon.capture.cli --device 0 --output screenshot.jpg
 
 ### USB
 
-The Pi appears as a USB keyboard and mouse via USB HID Gadget. On Pi 5, this requires a USB power/data splitter cable.
+The Pi appears as a USB keyboard and mouse via USB HID Gadget. On Pi 5, single-cable USB-C OTG is affected by a known dwc2 kernel bug — see the [USB HID Gadget setup note](#usb-hid-gadget) for the splitter-cable workaround.
 
 ```bash
 python -m cyberraccoon --task "..." --transport usb
@@ -757,13 +756,14 @@ python -m cyberraccoon.executor.cli drag 100 200 400 500
 - Pair "CyberRaccoon" from the target computer first.
 
 **USB HID not working on Pi 5**
-- On Pi 5, USB Gadget requires a USB power/data splitter cable. Use `--transport bt` for a simpler setup.
+- Single-cable USB-C OTG (Pi powered by the target) is broken by a dwc2 kernel bug ([raspberrypi/linux#6289](https://github.com/raspberrypi/linux/issues/6289)) — UDC stays `not attached`. Workaround: USB power/data splitter cable (external power to Pi, data to target). Or use `--transport bt` to avoid the issue.
 
 ### LLM
 
-**"API key not set"**
-- Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in your environment.
-- On the Pi, API keys are typically in `~/.apikeys` (sourced by `~/.bashrc`). Use `source ~/.apikeys` before running.
+**"No API key configured for provider …"**
+- Open the Web UI → **Config** tab → enter your key under the active provider and click **Save LLM**.
+- Or, for a one-off CLI run, pass `--api-key sk-...`.
+- Keys live in `~/.cyberraccoon/config.yaml` (mode `0o600`). There is no env-var fallback — if you have keys in `~/.bashrc` / `~/.apikeys`, import them once via the Config tab and you can then remove the exports.
 
 **"Model not found" or 404 errors**
 - Check the model name matches your provider. OpenAI models start with `gpt-`, Anthropic models with `claude-`.

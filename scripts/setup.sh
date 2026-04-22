@@ -115,16 +115,6 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Pi 5: skip gadget in non-interactive mode (same logic as interactive)
-# ---------------------------------------------------------------------------
-
-if $DO_GADGET && ! $DO_INTERACTIVE && is_pi5; then
-    echo -e "${YELLOW}[WARN]${NC} USB Gadget is not available on Pi 5 — skipping."
-    echo -e "       Use Bluetooth HID instead (--bt)."
-    DO_GADGET=false
-fi
-
-# ---------------------------------------------------------------------------
 # Root check
 # ---------------------------------------------------------------------------
 
@@ -142,25 +132,19 @@ if $DO_INTERACTIVE; then
     echo ""
 
     # Detect Pi model
+    MODEL="Raspberry Pi"
+    [ -f /proc/device-tree/model ] && MODEL=$(tr -d '\0' < /proc/device-tree/model)
+    info "Detected: $MODEL"
+    echo ""
+    echo "  Available components:"
+    echo "    [B] Bluetooth HID  — wireless keyboard/mouse to target"
+    echo "    [G] USB Gadget     — wired keyboard/mouse via USB OTG"
+    echo "    [A] AirPlay        — screen capture from Mac/iPhone"
+    echo "    [C] CSI HDMI       — screen capture via TC358743 bridge"
     if is_pi5; then
-        info "Detected: Raspberry Pi 5"
         echo ""
-        echo "  Pi 5 supports:"
-        echo "    [B] Bluetooth HID  — wireless keyboard/mouse to target"
-        echo "    [A] AirPlay        — screen capture from Mac/iPhone"
-        echo "    [C] CSI HDMI       — screen capture via TC358743 bridge"
-        echo ""
-        echo "  Note: USB HID Gadget is not available on Pi 5 (USB-C is power-only)"
-    else
-        MODEL="Raspberry Pi"
-        [ -f /proc/device-tree/model ] && MODEL=$(tr -d '\0' < /proc/device-tree/model)
-        info "Detected: $MODEL"
-        echo ""
-        echo "  Available components:"
-        echo "    [B] Bluetooth HID  — wireless keyboard/mouse to target"
-        echo "    [G] USB Gadget     — wired keyboard/mouse via USB OTG"
-        echo "    [A] AirPlay        — screen capture from Mac/iPhone"
-        echo "    [C] CSI HDMI       — screen capture via TC358743 bridge"
+        echo "  Note: On Pi 5, single-cable USB-C OTG hits a known dwc2 kernel bug."
+        echo "        USB Gadget works with a USB power/data splitter cable."
     fi
 
     echo ""
@@ -173,23 +157,14 @@ if $DO_INTERACTIVE; then
 
     if [ "$CHOICES" = "ALL" ]; then
         DO_BT=true
+        DO_GADGET=true
         DO_AIRPLAY=true
         DO_CSI=true
-        if ! is_pi5; then
-            DO_GADGET=true
-        fi
     else
         [[ "$CHOICES" == *B* ]] && DO_BT=true
         [[ "$CHOICES" == *G* ]] && DO_GADGET=true
         [[ "$CHOICES" == *A* ]] && DO_AIRPLAY=true
         [[ "$CHOICES" == *C* ]] && DO_CSI=true
-    fi
-
-    # Warn about USB Gadget on Pi 5
-    if $DO_GADGET && is_pi5; then
-        warn "USB Gadget is not available on Pi 5 — skipping."
-        warn "Use Bluetooth HID instead (--bt)."
-        DO_GADGET=false
     fi
 
     if ! $DO_BT && ! $DO_GADGET && ! $DO_AIRPLAY && ! $DO_CSI; then
@@ -241,7 +216,18 @@ if $DO_CSI; then
     echo ""
 fi
 
+if $DO_GADGET && is_pi5; then
+    echo "  Pi 5 USB Gadget cable check:"
+    echo "    - Use the Pi USB-C port (the one used for power) as the data link."
+    echo "    - Single-cable USB-C OTG (Pi powered by the target) hits a known"
+    echo "      dwc2 kernel bug. If you are not already using a USB power/data"
+    echo "      splitter cable, set one up: external power to the Pi, data"
+    echo "      cable from Pi USB-C to the target."
+    echo ""
+fi
+
 echo "  Next steps:"
-echo "    1. Set API key:  export ANTHROPIC_API_KEY=\"sk-ant-...\""
-echo "    2. Run a task:   python -m cyberraccoon --task \"Open Notepad\" --transport bt"
+echo "    Return to the CyberRaccoon Web UI to configure your API key,"
+echo "    pick a screen capture source, and run a task."
+echo "    (If the Web UI isn't running yet: python -m cyberraccoon --web)"
 echo ""

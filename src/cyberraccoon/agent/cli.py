@@ -47,17 +47,17 @@ def main() -> None:
     parser.add_argument(
         "--model",
         default=None,
-        help="Model name (default: {PROVIDER}_MODEL env var, or provider's built-in default)",
+        help="Model name (default: from ~/.cyberraccoon/config.yaml, or provider's built-in default)",
     )
     parser.add_argument(
         "--api-key",
         default=None,
-        help="API key (default: {PROVIDER}_API_KEY env var)",
+        help="API key (default: from ~/.cyberraccoon/config.yaml — set it in the web UI's Config tab)",
     )
     parser.add_argument(
         "--base-url",
         default=None,
-        help="Custom API base URL (default: {PROVIDER}_BASE_URL env var)",
+        help="Custom API base URL (default: from ~/.cyberraccoon/config.yaml)",
     )
     parser.add_argument(
         "--protocol",

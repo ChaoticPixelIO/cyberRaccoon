@@ -190,6 +190,13 @@ def create_protocol(
             f"Must be one of: {', '.join(sorted(valid_overrides))}"
         )
 
+    if not api_key:
+        raise ValueError(
+            f"No API key configured for provider {provider!r}. "
+            "Open the Config tab in the web UI and enter your API key, "
+            "or pass --api-key on the CLI."
+        )
+
     provider_lower = provider.lower()
 
     use_anthropic_native = False

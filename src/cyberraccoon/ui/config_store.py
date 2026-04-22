@@ -30,7 +30,6 @@ from typing import Any
 import yaml
 
 from cyberraccoon.config import (
-    LLM_PROVIDER_DEFAULTS,
     AgentConfig,
     AppConfig,
     BLEConfig,
@@ -39,9 +38,6 @@ from cyberraccoon.config import (
     LLMConfig,
     NetworkConfig,
     load_app_config,
-    resolve_api_key,
-    resolve_provider_base_url,
-    resolve_provider_model,
 )
 from cyberraccoon.ui.exceptions import ConfigError
 
@@ -59,10 +55,8 @@ _ENV_MAP: dict[str, tuple[str, str]] = {
     "CYBERRACCOON_TRANSPORT": ("", "executor_transport"),
     "CYBERRACCOON_DEVICE": ("capture", "device_index"),
     "CYBERRACCOON_PROVIDER": ("llm", "provider"),
-    # Per-provider LLM settings use {PROVIDER_UPPER}_MODEL /
-    # {PROVIDER_UPPER}_BASE_URL / {PROVIDER_UPPER}_API_KEY — handled
-    # specially in _apply_env_overrides so each provider's snapshot is
-    # hydrated independently.
+    # Per-provider LLM settings (api_key, model, base_url) live exclusively
+    # in the YAML — configure them via the Config tab, not via env vars.
     "CYBERRACCOON_WEB_HOST": ("network", "web_host"),
     "CYBERRACCOON_WEB_PORT": ("network", "web_port"),
     "CYBERRACCOON_WIFI_SSID": ("network", "wifi_ssid"),
@@ -127,13 +121,16 @@ class ConfigStore:
 
         return config
 
-    def save(self, config: AppConfig, *, include_secrets: bool = False) -> None:
+    def save(self, config: AppConfig, *, include_secrets: bool = True) -> None:
         """Persist config to YAML file.
 
         Args:
             config: The configuration to save.
-            include_secrets: If ``True``, include ``api_key`` in output.
-                ``wifi_password`` is **never** saved regardless of this flag.
+            include_secrets: If ``True`` (default), persist ``api_key`` values
+                so they survive restarts. ``wifi_password`` is **never** saved
+                regardless of this flag. The yaml is written with ``0o600``
+                permissions; API keys are the canonical source of truth and
+                belong in this file (there is no env-var fallback).
 
         Raises:
             ConfigError: If the directory cannot be created or file not writable.
@@ -322,32 +319,9 @@ class ConfigStore:
                     coerced = _coerce_value(value, valid_fields[key].type)
                     setattr(sub_config, key, coerced)
 
-        # Hydrate each provider's snapshot from its provider-scoped env vars
-        # ({PROVIDER_UPPER}_API_KEY / _MODEL / _BASE_URL). We process every
-        # provider we know about so a non-active provider's env vars are also
-        # captured — UI/CLI swaps then see the env-sourced values immediately.
-        known_providers = (
-            set(LLM_PROVIDER_DEFAULTS)
-            | set(config.llm.providers)
-            | {config.llm.provider}
-        )
-        for provider in known_providers:
-            snap = dict(config.llm.providers.get(provider, {}))
-            env_api_key = resolve_api_key(provider)
-            env_model = resolve_provider_model(provider)
-            env_base_url = resolve_provider_base_url(provider)
-            if env_api_key:
-                snap["api_key"] = env_api_key
-            if env_model:
-                snap["model"] = env_model
-            if env_base_url:
-                snap["base_url"] = env_base_url
-            if snap:
-                config.llm.providers[provider] = snap
-
-        # Sync the active provider's snapshot into the flat LLMConfig fields
-        # so every consumer that reads ``config.llm.model`` etc. sees the
-        # resolved values.
+        # Sync the active provider's stored snapshot into the flat LLMConfig
+        # fields so every consumer that reads ``config.llm.model`` etc. sees
+        # the values the user last saved under this provider.
         active_snap = config.llm.providers.get(config.llm.provider)
         if active_snap:
             for fname in ("model", "api_key", "base_url", "max_tokens", "temperature"):

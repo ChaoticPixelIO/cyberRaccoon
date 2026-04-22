@@ -40,24 +40,29 @@ class TestSaveAndLoad:
         network = raw.get("network", {})
         assert "wifi_password" not in network
 
-    def test_api_key_excluded_by_default(
+    def test_api_key_persisted_by_default(
         self, tmp_config_path: Path, sample_config: AppConfig
     ) -> None:
+        """The yaml is the canonical source of truth for API keys, so
+        save() persists them by default. File permissions (0o600) keep
+        the file owner-only readable."""
         store = ConfigStore(str(tmp_config_path))
         store.save(sample_config)
 
         raw = yaml.safe_load(tmp_config_path.read_text())
-        llm = raw.get("llm", {})
-        assert "api_key" not in llm
+        assert raw["llm"]["api_key"] == "sk-test-key"
 
-    def test_api_key_included_when_requested(
+    def test_api_key_can_be_stripped_for_export(
         self, tmp_config_path: Path, sample_config: AppConfig
     ) -> None:
+        """``include_secrets=False`` preserves the pre-yaml-only behavior
+        for uses like exporting a redacted config for sharing/backup."""
         store = ConfigStore(str(tmp_config_path))
-        store.save(sample_config, include_secrets=True)
+        store.save(sample_config, include_secrets=False)
 
         raw = yaml.safe_load(tmp_config_path.read_text())
-        assert raw["llm"]["api_key"] == "sk-test-key"
+        llm = raw.get("llm", {})
+        assert "api_key" not in llm
 
     def test_file_permissions_0600(
         self, tmp_config_path: Path, sample_config: AppConfig
@@ -87,61 +92,41 @@ class TestLoadDefaults:
 
 
 class TestEnvironmentOverrides:
-    """Environment variables override YAML and defaults."""
+    """Infrastructure env vars (paths, network, etc.) still override YAML.
 
-    def test_env_overrides_default(
+    Provider-scoped env vars (``{PROVIDER}_API_KEY`` / ``_MODEL`` /
+    ``_BASE_URL``) are intentionally NOT supported — API keys, models, and
+    base URLs live exclusively in the YAML and are edited via the Config
+    tab.
+    """
+
+    def test_provider_env_vars_are_ignored(
         self, tmp_config_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Default provider is openai → OPENAI_MODEL flows into flat field
-        monkeypatch.setenv("OPENAI_MODEL", "gpt-4o")
+        """Setting OPENAI_API_KEY / OPENAI_MODEL has no effect — yaml wins."""
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-should-be-ignored")
+        monkeypatch.setenv("OPENAI_MODEL", "gpt-ignored")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-be-ignored")
         store = ConfigStore(str(tmp_config_path))
 
         config = store.load()
-        assert config.llm.model == "gpt-4o"
+        # No yaml exists → defaults; api_key stays empty, model = default.
+        assert config.llm.api_key == ""
+        assert config.llm.model != "gpt-ignored"
+        assert "anthropic" not in config.llm.providers or \
+            config.llm.providers["anthropic"].get("api_key", "") \
+                != "sk-ant-should-be-ignored"
 
-    def test_env_overrides_yaml(
+    def test_cyberraccoon_provider_env_still_selects_active(
         self, tmp_config_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """``CYBERRACCOON_PROVIDER`` is infrastructure config (which provider
+        to use) and is still honored; only the per-provider *secrets* aren't."""
+        monkeypatch.setenv("CYBERRACCOON_PROVIDER", "anthropic")
         store = ConfigStore(str(tmp_config_path))
-        cfg = AppConfig()
-        cfg.llm.provider = "openai"
-        cfg.llm.model = "gpt-5.4"
-        store.save(cfg)
 
-        # Provider-scoped env var wins over YAML
-        monkeypatch.setenv("OPENAI_MODEL", "gpt-4o")
-        loaded = store.load()
-        assert loaded.llm.model == "gpt-4o"
-
-    def test_provider_scoped_env_fills_nonactive_snapshot(
-        self, tmp_config_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Active = openai; ANTHROPIC_MODEL populates anthropic snapshot too
-        monkeypatch.setenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
-        store = ConfigStore(str(tmp_config_path))
         config = store.load()
-
-        assert config.llm.provider == "openai"
-        snap = config.llm.providers.get("anthropic", {})
-        assert snap.get("model") == "claude-sonnet-4-6"
-        assert snap.get("api_key") == "sk-ant-env"
-
-    def test_custom_provider_env_vars(
-        self, tmp_config_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Unknown provider like 'minimax' still works via {PROVIDER}_*
-        monkeypatch.setenv("CYBERRACCOON_PROVIDER", "minimax")
-        monkeypatch.setenv("MINIMAX_API_KEY", "mm-xxx")
-        monkeypatch.setenv("MINIMAX_MODEL", "abab6.5")
-        monkeypatch.setenv("MINIMAX_BASE_URL", "https://api.minimax.chat/v1")
-        store = ConfigStore(str(tmp_config_path))
-        config = store.load()
-
-        assert config.llm.provider == "minimax"
-        assert config.llm.api_key == "mm-xxx"
-        assert config.llm.model == "abab6.5"
-        assert config.llm.base_url == "https://api.minimax.chat/v1"
+        assert config.llm.provider == "anthropic"
 
     def test_env_int_coercion(
         self, tmp_config_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -247,15 +232,32 @@ class TestLLMProviderSnapshots:
         assert loaded.llm.providers["openai"]["model"] == "gpt-4o"
         assert loaded.llm.providers["openai"]["temperature"] == 0.5
 
-    def test_api_key_stripped_from_provider_snapshots(
+    def test_api_key_persisted_in_provider_snapshots(
         self, tmp_config_path: Path
     ) -> None:
+        """Per-provider snapshots keep their api_key on save so the user's
+        non-active provider keys don't vanish when they switch providers."""
         store = ConfigStore(str(tmp_config_path))
         cfg = AppConfig()
         cfg.llm.providers = {
             "anthropic": {"model": "claude-opus-4-6", "api_key": "sk-secret"},
         }
         store.save(cfg)
+
+        raw = yaml.safe_load(tmp_config_path.read_text())
+        providers = raw["llm"]["providers"]
+        assert providers["anthropic"]["api_key"] == "sk-secret"
+
+    def test_api_key_stripped_from_provider_snapshots_on_export(
+        self, tmp_config_path: Path
+    ) -> None:
+        """``include_secrets=False`` strips api_keys from snapshots too."""
+        store = ConfigStore(str(tmp_config_path))
+        cfg = AppConfig()
+        cfg.llm.providers = {
+            "anthropic": {"model": "claude-opus-4-6", "api_key": "sk-secret"},
+        }
+        store.save(cfg, include_secrets=False)
 
         raw = yaml.safe_load(tmp_config_path.read_text())
         providers = raw["llm"]["providers"]

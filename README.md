@@ -20,7 +20,7 @@ The loop repeats until the task is complete. The target computer sees CyberRacco
 ## Features
 
 - **4 capture sources** — HDMI-to-CSI bridge (TC358743), AirPlay mirroring, USB HDMI capture card (UVC), or Pi camera module (picamera2)
-- **2 HID transports** — Bluetooth HID (wireless) or USB HID Gadget (wired, requires USB power/data splitter on Pi 5)
+- **2 HID transports** — Bluetooth HID (wireless) or USB HID Gadget (wired; on Pi 5, single-cable USB-C OTG is affected by a dwc2 kernel bug — splitter cable is the documented workaround)
 - **Multiple LLM providers** — OpenAI (GPT), Anthropic (Claude), or any OpenAI-compatible API
 - **Input humanization** — Bezier curve mouse movements, variable typing rhythm, jitter, and overshoot to avoid bot detection
 - **Web UI + CLI** — Remote task management via browser or interactive terminal REPL
@@ -34,7 +34,7 @@ The loop repeats until the task is complete. The target computer sees CyberRacco
 | HDMI-to-CSI bridge (TC358743) | Optional | HDMI capture via Pi CSI port | Recommended capture path; no USB needed |
 | USB HDMI capture card (UVC) | Optional | HDMI capture via USB | ~$10–20; capture path still being validated |
 | Raspberry Pi Camera Module | Optional | Capture a physical screen via picamera2 | Capture path still being validated |
-| USB power/data splitter cable | Optional | USB HID output (Gadget mode) | Needed only if you use USB HID instead of Bluetooth |
+| USB power/data splitter cable | Optional | USB HID output (Gadget mode) | Workaround for the Pi 5 dwc2 single-cable bug; only needed if you use USB HID and single-cable OTG doesn't work for you |
 
 > **Minimal setup (no extra hardware):** A Raspberry Pi 5 alone is enough — pair it as a wireless keyboard/mouse over Bluetooth and capture the target screen via AirPlay (macOS/iOS only). All other capture sources and the USB HID transport need the optional hardware above.
 
@@ -84,11 +84,11 @@ the browser, watch the row turn green.
 
 ### 3. Configure the LLM
 
-Open the **Config** tab and set your API key.
+Open the **Config** tab and fill in your API key, provider, and model. Settings are saved to `~/.cyberraccoon/config.yaml` with `0o600` permissions.
 
-- **Default provider:** OpenAI (`OPENAI_API_KEY`), default model `gpt-5.4`.
-- **Switch to Anthropic:** select it in the Config tab, or set `ANTHROPIC_API_KEY` and `CYBERRACCOON_PROVIDER=anthropic`.
-- **Custom model:** override with `--model`, or set `{PROVIDER}_MODEL` (e.g. `OPENAI_MODEL=gpt-4o`, `ANTHROPIC_MODEL=claude-sonnet-4-6`).
+- **Default provider:** OpenAI, default model `gpt-5.4`.
+- **Switch to Anthropic:** change the Provider dropdown in the Config tab. Per‑provider keys are remembered so switching back doesn't lose them.
+- **Custom model:** type it into the Model field, or pass `--model` on the CLI.
 
 ### 4. Run a task
 
@@ -121,7 +121,7 @@ python -m cyberraccoon --web --host 0.0.0.0 --port 8080
 
 ### Command line
 
-The CLI needs an API key — either set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` in the environment, or pass it with `--api-key`. (The Web UI stores keys in its config for you.)
+The CLI reads the API key from `~/.cyberraccoon/config.yaml` (the same file the Web UI's Config tab writes to). Configure your key there once, or pass a one‑off with `--api-key`.
 
 ```bash
 # One-shot task
@@ -150,7 +150,7 @@ python -m cyberraccoon --web --cli
 |------|---------|-------------|
 | `--provider` | `openai` | LLM provider: `openai` or `anthropic` |
 | `--model` | `gpt-5.4` | Any OpenAI- or Anthropic-compatible model ID |
-| `--api-key` | env var | API key (or set `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) |
+| `--api-key` | yaml | API key (falls back to `~/.cyberraccoon/config.yaml`) |
 | `--base-url` | — | Custom API base URL (OpenAI-compatible) |
 | `--protocol` | `auto` | Protocol mode: `auto`, `native` (computer-use tool), or `prompt` (prompt-based) |
 | `--no-cache` | (cache on) | Disable Anthropic prompt caching |
@@ -263,10 +263,7 @@ The most-used CLI flags also accept `CYBERRACCOON_*` environment variables (full
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CYBERRACCOON_PROVIDER` | `openai` | Active LLM provider (e.g. `openai`, `anthropic`, or any custom name) |
-| `{PROVIDER}_API_KEY` | — | API key for the active provider (e.g. `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) |
-| `{PROVIDER}_MODEL` | provider default | Model ID for that provider (e.g. `OPENAI_MODEL=gpt-5.4`, `ANTHROPIC_MODEL=claude-opus-4-6`) |
-| `{PROVIDER}_BASE_URL` | — | Custom API base URL for that provider (e.g. `OPENAI_BASE_URL` for OpenAI-compatible services) |
+| `CYBERRACCOON_PROVIDER` | `openai` | Active LLM provider name (`openai`, `anthropic`, or custom). API key / model / base URL are **not** read from env — configure them in the Config tab (`~/.cyberraccoon/config.yaml`). |
 | `CYBERRACCOON_SOURCE` | `uvc` | Capture source — `csi`, `airplay`, `uvc`, or `picamera` (`csi`/`airplay` recommended; see [Capture Sources](#capture-sources)) |
 | `CYBERRACCOON_DEVICE` | `0` | Device index for UVC/CSI |
 | `CYBERRACCOON_TRANSPORT` | `usb` | HID transport (`usb` or `bt`) |
@@ -276,7 +273,7 @@ The most-used CLI flags also accept `CYBERRACCOON_*` environment variables (full
 | `CYBERRACCOON_WEB_PORT` | `8000` | Web server port |
 | `CYBERRACCOON_CONFIG_PATH` | `~/.cyberraccoon/config.yaml` | YAML config file path |
 
-Config precedence: **CLI flags > environment variables > YAML file > dataclass defaults**
+Config precedence: **CLI flags > environment variables > YAML file > dataclass defaults** (API keys, models, and base URLs are yaml-only — no env fallback; see the row for `CYBERRACCOON_PROVIDER` above).
 
 ## Further Reading
 

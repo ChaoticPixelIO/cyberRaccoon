@@ -43,6 +43,7 @@ import tempfile
 import time
 
 import cv2
+import numpy as np
 from PIL import Image
 
 from cyberraccoon.capture.base import CaptureError, CaptureResult, frame_to_capture_result
@@ -257,7 +258,8 @@ class CsiHdmiCapture:
         self._signal_height: int = 0
         self._lane_count: int = 0
         self._max_capture_height: int = 720
-        self._cap: cv2.VideoCapture | None = None
+        self._bytesperline: int = 0
+        self._opened: bool = False
 
     # ------------------------------------------------------------------
     # CaptureSource protocol
@@ -321,28 +323,24 @@ class CsiHdmiCapture:
         # Configure CSI media pipeline
         self._configure_pipeline()
 
-        # Open OpenCV V4L2 capture.  OpenCV resets the format to 640x480 on
-        # open, so we set the correct resolution AFTER opening via cap.set().
-        video_index = int(
-            self._video_device.replace("/dev/video", "")  # type: ignore[union-attr]
+        # Set BGR3 pixel format and resolution on the V4L2 video device.
+        # We use v4l2-ctl rather than OpenCV because OpenCV's CAP_V4L2
+        # backend assumes a tightly packed `width * 3` row stride and
+        # ignores the V4L2-reported ``bytesperline`` — which the RP1-CFE
+        # CSI receiver pads to 16 bytes.  Non-aligned source widths (e.g.
+        # 1720, when a Windows GPU picks a half-ultrawide fallback) then
+        # produce diagonally sheared frames.
+        self._run_cmd(
+            [
+                "v4l2-ctl", "-d", self._video_device,  # type: ignore[list-item]
+                f"--set-fmt-video=width={self._signal_width},"
+                f"height={self._signal_height},pixelformat=BGR3",
+            ],
+            check=True, timeout=5.0,
         )
-        self._cap = cv2.VideoCapture(video_index, cv2.CAP_V4L2)
-        if not self._cap.isOpened():
-            raise CaptureError(
-                f"Cannot open {self._video_device} via OpenCV. "
-                "Pipeline configured but V4L2 device not readable. "
-                "Check permissions (may need sudo)."
-            )
 
-        # Set BGR3 pixel format and resolution to match the CSI pipeline.
-        # Must happen after open() because OpenCV resets to defaults on open.
-        fourcc = cv2.VideoWriter_fourcc(*"BGR3")
-        self._cap.set(cv2.CAP_PROP_FOURCC, fourcc)
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._signal_width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._signal_height)
-
-        actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fmt = self._query_video_format()
+        actual_w, actual_h = fmt["width"], fmt["height"]
         if actual_w != self._signal_width or actual_h != self._signal_height:
             raise CaptureError(
                 f"V4L2 format mismatch: requested {self._signal_width}x"
@@ -351,6 +349,22 @@ class CsiHdmiCapture:
                 "correctly. Try: reboot the Pi, or check "
                 "'media-ctl -p' to verify the pipeline state."
             )
+        self._bytesperline = fmt["bytesperline"]
+        padding = self._bytesperline - actual_w * 3
+        if padding < 0:
+            raise CaptureError(
+                f"V4L2 reports bytesperline={self._bytesperline} smaller "
+                f"than width*3={actual_w * 3} for BGR3 — driver bug?"
+            )
+        if padding > 0:
+            logger.info(
+                "V4L2 row padding: %d bytes per row (%dx3=%d + %d pad "
+                "= %d bytesperline). Will strip per-row on capture.",
+                padding, actual_w, actual_w * 3, padding,
+                self._bytesperline,
+            )
+
+        self._opened = True
 
         # Warmup: discard frames until we get a non-black one.  After a
         # resolution switch the CSI receiver may output blank frames for a
@@ -359,13 +373,17 @@ class CsiHdmiCapture:
         warmup_timeout = 10.0 if edid_loaded else 5.0
         warmup_deadline = time.monotonic() + warmup_timeout
         while time.monotonic() < warmup_deadline:
-            self._cap.grab()
-            ret, frame = self._cap.read()
-            if ret and frame is not None and int(frame.max()) > 10:
+            try:
+                frame = self._read_frame(skip=2)
+            except CaptureError:
+                time.sleep(0.1)
+                continue
+            if int(frame.max()) > 10:
                 logger.info("Pipeline warmed up (max_pixel=%d)", int(frame.max()))
                 break
             time.sleep(0.05)
         else:
+            self._opened = False
             raise CaptureError(
                 "CSI pipeline opened but only producing black frames after "
                 f"{warmup_timeout:.0f}s warmup. The HDMI signal may have dropped during setup, "
@@ -385,23 +403,13 @@ class CsiHdmiCapture:
         Discards 3 buffered frames first to ensure the latest image
         (V4L2 typically buffers 2-4 frames internally).
         """
-        if self._cap is None or not self._cap.isOpened():
+        if not self._opened:
             raise CaptureError(
                 "CSI HDMI capture not opened. Call open() first."
             )
 
         timestamp = time.monotonic()
-
-        # Discard buffered frames to get the latest
-        for _ in range(3):
-            self._cap.grab()
-
-        ret, frame = self._cap.read()
-        if not ret or frame is None:
-            raise CaptureError(
-                "Failed to read frame from TC358743. "
-                "HDMI signal may have been disconnected."
-            )
+        frame = self._read_frame(skip=3)
 
         # Warn on nearly-black frames
         frame_max = int(frame.max())
@@ -431,18 +439,98 @@ class CsiHdmiCapture:
         return result
 
     def close(self) -> None:
-        """Release V4L2 capture. Safe to call multiple times."""
-        if self._cap is not None:
-            try:
-                self._cap.release()
-            except cv2.error as e:
-                logger.warning("Error releasing V4L2 capture: %s", e)
-            self._cap = None
+        """Release capture state. Safe to call multiple times."""
+        if self._opened:
+            self._opened = False
             logger.info("CSI HDMI capture closed")
 
     def is_open(self) -> bool:
         """Check if the capture device is currently open."""
-        return self._cap is not None and self._cap.isOpened()
+        return self._opened
+
+    # ------------------------------------------------------------------
+    # V4L2 streaming helpers
+    # ------------------------------------------------------------------
+
+    def _query_video_format(self) -> dict[str, int]:
+        """Query the current V4L2 format and return width/height/bytesperline.
+
+        Runs ``v4l2-ctl --get-fmt-video`` and parses the human-readable output.
+        """
+        result = self._run_cmd(
+            ["v4l2-ctl", "-d", self._video_device, "--get-fmt-video"],  # type: ignore[list-item]
+            check=True, timeout=5.0,
+        )
+        fmt: dict[str, int] = {}
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("Width/Height"):
+                m = re.search(r":\s*(\d+)/(\d+)", line)
+                if m:
+                    fmt["width"] = int(m.group(1))
+                    fmt["height"] = int(m.group(2))
+            elif line.startswith("Bytes per Line"):
+                m = re.search(r":\s*(\d+)", line)
+                if m:
+                    fmt["bytesperline"] = int(m.group(1))
+        missing = {"width", "height", "bytesperline"} - fmt.keys()
+        if missing:
+            raise CaptureError(
+                f"Could not parse v4l2-ctl --get-fmt-video output "
+                f"(missing: {sorted(missing)}):\n{result.stdout}"
+            )
+        return fmt
+
+    def _read_frame(self, skip: int = 3) -> np.ndarray:
+        """Capture a single frame via ``v4l2-ctl --stream-mmap``.
+
+        Grabs ``skip + 1`` frames and returns only the last one, which
+        drains stale kernel-side buffers so the returned image reflects
+        the current screen (V4L2 typically buffers 2-4 frames internally).
+
+        The raw buffer is reshaped honoring the V4L2-reported
+        ``bytesperline`` and sliced to the real pixel width, so any
+        per-row padding added by the RP1-CFE CSI receiver (16-byte
+        alignment) is stripped before conversion.
+
+        Returns:
+            An ``H × W × 3`` BGR ``np.uint8`` array.
+        """
+        frame_size = self._bytesperline * self._signal_height
+        total = (skip + 1) * frame_size
+        proc = subprocess.run(
+            [
+                "v4l2-ctl", "-d", self._video_device,  # type: ignore[list-item]
+                "--stream-mmap",
+                f"--stream-count={skip + 1}",
+                f"--stream-skip={skip}",
+                "--stream-to=-",
+            ],
+            capture_output=True, timeout=10.0,
+        )
+        if proc.returncode != 0:
+            raise CaptureError(
+                f"v4l2-ctl streaming failed (rc={proc.returncode}): "
+                f"{proc.stderr.decode('utf-8', errors='replace').strip()}"
+            )
+        raw = proc.stdout
+        if len(raw) < frame_size:
+            raise CaptureError(
+                f"v4l2-ctl returned {len(raw)} bytes, expected at least "
+                f"{frame_size} ({self._signal_height} rows × "
+                f"{self._bytesperline} bytes). HDMI signal may have dropped."
+            )
+        # Take the last full frame; --stream-skip should already drain
+        # stale buffers but being defensive costs nothing.
+        frame_raw = raw[-frame_size:] if len(raw) >= total else raw[-frame_size:]
+        arr = np.frombuffer(frame_raw, dtype=np.uint8).reshape(
+            self._signal_height, self._bytesperline,
+        )
+        # Strip per-row padding, reshape to (H, W, 3) BGR.
+        arr = arr[:, : self._signal_width * 3].reshape(
+            self._signal_height, self._signal_width, 3,
+        )
+        return arr
 
     # ------------------------------------------------------------------
     # Pipeline setup helpers
