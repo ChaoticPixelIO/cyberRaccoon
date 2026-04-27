@@ -20,13 +20,7 @@
 
 set -euo pipefail
 
-GADGET_DIR="/sys/kernel/config/usb_gadget/cyber_raccoon"
-
-# Check if already configured AND device file exists
-if [ -d "$GADGET_DIR" ] && [ -e /dev/hidg0 ]; then
-    echo "[INFO] USB Gadget already configured at $GADGET_DIR — skipping."
-    exit 0
-fi
+# Note: do NOT early-exit if gadget is up. We still install/refresh the systemd unit and helper script so a repo upgrade picks up new versions. The helper script (cyberraccoon-usb-gadget-create) is itself idempotent.
 
 echo "[INFO] Setting up CyberRaccoon USB Gadget..."
 
@@ -196,122 +190,66 @@ for mod in g_ether g_serial g_mass_storage g_multi g_webcam; do
     fi
 done
 
-# Clean up stale configfs gadget (dir exists but /dev/hidg0 missing)
-if [ -d "$GADGET_DIR" ] && [ ! -e /dev/hidg0 ]; then
-    echo "[INFO] Cleaning up stale gadget configuration..."
-    echo "" > "$GADGET_DIR/UDC" 2>/dev/null || true
-    rm -f "$GADGET_DIR/configs/c.1/hid.combo" 2>/dev/null || true
-    rmdir "$GADGET_DIR/configs/c.1/strings/0x409" 2>/dev/null || true
-    rmdir "$GADGET_DIR/configs/c.1" 2>/dev/null || true
-    rmdir "$GADGET_DIR/functions/hid.combo" 2>/dev/null || true
-    rmdir "$GADGET_DIR/strings/0x409" 2>/dev/null || true
-    rmdir "$GADGET_DIR" 2>/dev/null || true
+# ---------------------------------------------------------------------------
+# Install persistent gadget creator + systemd unit
+#
+# configfs gadgets live in tmpfs (/sys/kernel/config) and disappear on every
+# reboot. Instead of creating the gadget here (which only survives until the
+# next reboot), install a standalone helper script + a systemd oneshot unit
+# that recreates the gadget on every boot. Mirrors the persistence pattern
+# already used by cyberraccoon-pair-agent.service (see scripts/setup/bluetooth.sh).
+# ---------------------------------------------------------------------------
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+HELPER_SRC="$REPO_ROOT/scripts/lib/cyberraccoon-usb-gadget-create.sh"
+HELPER_DST="/usr/local/sbin/cyberraccoon-usb-gadget-create"
+UNIT_PATH="/etc/systemd/system/cyberraccoon-usb-gadget.service"
+
+if [ ! -f "$HELPER_SRC" ]; then
+    echo "[ERROR] Missing $HELPER_SRC — repo layout is broken."
+    exit 1
 fi
 
-# Load composite module
-modprobe libcomposite
+echo "[INFO] Installing gadget creator helper to $HELPER_DST..."
+install -m 0755 "$HELPER_SRC" "$HELPER_DST"
 
-# ---------------------------------------------------------------------------
-# Verify UDC is available.
-#   - Pi 4B: needs dtoverlay=dwc2 in /boot/firmware/config.txt + reboot.
-#   - Pi 5: dwc2 is loaded automatically, but single-cable USB-C OTG is
-#     affected by a kernel bug (raspberrypi/linux#6289) — UDC stays
-#     "not attached". A USB power/data splitter cable is the documented
-#     workaround. Bluetooth HID (--bt) avoids USB entirely.
-# ---------------------------------------------------------------------------
-if [ -z "$(ls /sys/class/udc 2>/dev/null)" ]; then
-    echo "[ERROR] The Pi cannot present itself as a USB device right now."
-    echo "        (Technical detail: no USB Device Controller is exposed by"
-    echo "         the kernel — /sys/class/udc is empty.)"
-    echo ""
-    if [ -f /proc/device-tree/model ] && grep -q "Raspberry Pi 5" /proc/device-tree/model; then
-        echo "        On Pi 5 the USB-C port only switches to device mode when it"
-        echo "        sees a real host on the other end. Common reasons it doesn't:"
-        echo ""
-        echo "        1. The target computer is powered off — turn it on, then"
-        echo "           re-run this script."
-        echo "        2. The cable plugged into the Pi USB-C port doesn't carry"
-        echo "           data (some chargers / cables are power-only). Try a"
-        echo "           known-good USB-C data cable to the target."
-        echo "        3. You are powering the Pi through the same single USB-C"
-        echo "           cable from the target. This hits a known dwc2 kernel"
-        echo "           bug — use a USB power/data splitter so the Pi has its"
-        echo "           own power and a separate data link to the target."
-        echo ""
-        echo "        Quick check (after fixing): ls /sys/class/udc — should"
-        echo "        list a controller (e.g. xhci-hcd.0.auto)."
-        echo "        Or skip USB entirely with Bluetooth HID:"
-        echo "        sudo scripts/setup.sh --bt"
+echo "[INFO] Installing systemd unit at $UNIT_PATH..."
+cat > "$UNIT_PATH" << 'UNITEOF'
+[Unit]
+Description=CyberRaccoon USB HID Gadget (configfs)
+After=sys-kernel-config.mount systemd-modules-load.service
+Requires=sys-kernel-config.mount
+ConditionPathExistsGlob=/sys/class/udc/*
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/cyberraccoon-usb-gadget-create
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+
+systemctl daemon-reload
+systemctl enable cyberraccoon-usb-gadget.service
+
+# Run the helper once now to create the gadget for the current boot.
+# Same outcome as the old inline creation, but routed through the unit so
+# logs go to the journal and the path matches future boots exactly.
+echo "[INFO] Starting cyberraccoon-usb-gadget.service for the current boot..."
+if systemctl restart cyberraccoon-usb-gadget.service; then
+    if [ -e /dev/hidg0 ]; then
+        echo "[OK] CyberRaccoon USB Gadget active — /dev/hidg0 ready."
+        echo "     The unit is enabled and will recreate the gadget on every boot."
     else
-        echo "        On this Pi model the dwc2 overlay must be enabled. Add"
-        echo "        the following line to /boot/firmware/config.txt and reboot:"
-        echo "            dtoverlay=dwc2"
+        echo "[WARN] cyberraccoon-usb-gadget.service started but /dev/hidg0 is missing."
+        echo "       Run 'systemctl status cyberraccoon-usb-gadget' for details."
+        echo "       Most common cause on Pi 5: target unplugged or single-cable USB-C bug."
     fi
-    exit 1
+else
+    echo "[WARN] cyberraccoon-usb-gadget.service did not start cleanly."
+    echo "       Run 'sudo systemctl status cyberraccoon-usb-gadget' and"
+    echo "       'journalctl -u cyberraccoon-usb-gadget' for details."
 fi
-
-# Create gadget directory
-mkdir -p "$GADGET_DIR"
-cd "$GADGET_DIR"
-
-# Device identifiers
-echo 0x1d6b > idVendor      # Linux Foundation
-echo 0x0104 > idProduct     # Multifunction Composite Gadget
-echo 0x0100 > bcdDevice     # Device version
-echo 0x0200 > bcdUSB        # USB 2.0
-
-# Strings (English)
-mkdir -p strings/0x409
-echo "CyberRaccoon"       > strings/0x409/manufacturer
-echo "AI HID Controller"  > strings/0x409/product
-echo "CR00001"            > strings/0x409/serialnumber
-
-# Configuration
-mkdir -p configs/c.1/strings/0x409
-echo "CyberRaccoon HID Config" > configs/c.1/strings/0x409/configuration
-echo 250 > configs/c.1/MaxPower
-
-# ---------------------------------------------------------------------------
-# Combined HID Function (hidg0): Keyboard + Mouse via Report IDs
-#
-# Report ID 1 — Keyboard (9 bytes total):
-#   report_id(1B) | modifier(1B) | reserved(1B) | keycodes(6B)
-#
-# Report ID 2 — Absolute Mouse (8 bytes total):
-#   report_id(1B) | buttons(1B) | X(2B LE) | Y(2B LE) | wheel(1B) | pad(1B)
-#
-# Combined HID Report Descriptor (138 bytes)
-# ---------------------------------------------------------------------------
-mkdir -p functions/hid.combo
-echo 0 > functions/hid.combo/protocol
-echo 0 > functions/hid.combo/subclass
-echo 9 > functions/hid.combo/report_length    # max(9, 8) = 9
-
-# Keyboard collection (Report ID 1) + Mouse collection (Report ID 2)
-echo -ne '\x05\x01\x09\x06\xa1\x01\x85\x01\x05\x07\x19\xe0\x29\xe7\x15\x00\x25\x01\x75\x01\x95\x08\x81\x02\x95\x01\x75\x08\x81\x01\x95\x05\x75\x01\x05\x08\x19\x01\x29\x05\x91\x02\x95\x01\x75\x03\x91\x01\x95\x06\x75\x08\x15\x00\x26\xff\x00\x05\x07\x19\x00\x29\xff\x81\x00\xc0\x05\x01\x09\x02\xa1\x01\x85\x02\x09\x01\xa1\x00\x05\x09\x19\x01\x29\x05\x15\x00\x25\x01\x75\x01\x95\x05\x81\x02\x95\x01\x75\x03\x81\x01\x05\x01\x09\x30\x09\x31\x16\x00\x00\x26\xff\x7f\x75\x10\x95\x02\x81\x02\x09\x38\x15\x81\x25\x7f\x75\x08\x95\x01\x81\x06\x95\x01\x75\x08\x81\x01\xc0\xc0' > functions/hid.combo/report_desc
-
-ln -s functions/hid.combo configs/c.1/
-
-# ---------------------------------------------------------------------------
-# Activate gadget by binding to UDC
-# ---------------------------------------------------------------------------
-UDC=$(ls /sys/class/udc | head -1)
-if [ -z "$UDC" ]; then
-    echo "[ERROR] No UDC found. Ensure USB OTG is available."
-    exit 1
-fi
-echo "$UDC" > UDC
-
-# ---------------------------------------------------------------------------
-# Make /dev/hidg0 writable by non-root users so the web server (running as
-# the invoking user) can drive the gadget without sudo. The kernel creates
-# /dev/hidg0 with mode 0600 root:root by default, which gives non-root
-# processes EACCES on every write. World-rw is appropriate for a dedicated
-# CyberRaccoon Pi — the threat model is the connected target machine, not
-# other local users.
-# ---------------------------------------------------------------------------
-chmod 0666 /dev/hidg0 || echo "[WARN] chmod 0666 /dev/hidg0 failed — non-root processes may get permission denied."
-
-echo "[OK] CyberRaccoon USB Gadget configured successfully."
-echo "     Keyboard + Mouse: /dev/hidg0 (Report ID 1=keyboard, 2=mouse)"
-echo "     UDC:              $UDC"

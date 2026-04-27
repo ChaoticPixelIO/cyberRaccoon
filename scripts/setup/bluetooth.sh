@@ -419,6 +419,47 @@ else
     rm -f "$TMP_CONF"
 fi
 
+# ---------------------------------------------------------------------------
+# Step 9: Warn if a cyberraccoon web server is already running
+# ---------------------------------------------------------------------------
+# File capabilities apply only on execve(), so a server started BEFORE this
+# script ran will still have CapEff=0 even though /usr/bin/python3.13 now
+# carries cap_net_bind_service+cap_net_admin. Without this warning the user
+# clicks Connect and sees a misleading "run sudo scripts/setup.sh --bt" error
+# (which they just did). Tell them to restart instead.
+# Filter on `comm` so only the actual python interpreter matches. Bare
+# pgrep -f would also match the parent shell whose argv literally contains
+# the search regex (e.g. the `pgrep` invocation inside a `bash -c '…'`).
+RUNNING_PIDS=$(ps -eo pid=,comm=,args= \
+    | awk '$2 ~ /^python/ && $0 ~ /-m cyberraccoon([[:space:]]|$)/ && $0 ~ /--web([[:space:]]|$)/ {print $1}' \
+    | tr '\n' ' ' | xargs)
+
+if [ -n "$RUNNING_PIDS" ]; then
+    echo ""
+    echo "[WARN] cyberraccoon --web is currently running (PID(s): $RUNNING_PIDS)."
+    echo "       File capabilities apply only on process start, so the running"
+    echo "       server still has no CAP_NET_BIND_SERVICE / CAP_NET_ADMIN."
+    echo "       Restart it before clicking Connect:"
+
+    # If the cyberraccoon.service unit owns one of the running pids, show
+    # `systemctl restart`. Otherwise show the manual kill+relaunch path.
+    SERVICE_PID=""
+    if systemctl list-unit-files cyberraccoon.service >/dev/null 2>&1; then
+        SERVICE_PID=$(systemctl show -p MainPID --value cyberraccoon.service 2>/dev/null || echo "")
+    fi
+    if [ -n "$SERVICE_PID" ] && [ "$SERVICE_PID" != "0" ] \
+       && echo " $RUNNING_PIDS " | grep -q " $SERVICE_PID "; then
+        echo "         sudo systemctl restart cyberraccoon"
+    else
+        echo "         # If you launched via systemd:"
+        echo "         sudo systemctl restart cyberraccoon"
+        echo "         # If you launched manually (e.g. via nohup / foreground):"
+        echo "         kill $RUNNING_PIDS"
+        echo "         # ...then re-run your launch command:"
+        echo "         cd $REPO_ROOT && source ~/.apikeys && venv/bin/python3 -m cyberraccoon --web --host 0.0.0.0 --port 8000"
+    fi
+fi
+
 echo ""
 echo "==========================================="
 echo "  CyberRaccoon Bluetooth HID Ready"

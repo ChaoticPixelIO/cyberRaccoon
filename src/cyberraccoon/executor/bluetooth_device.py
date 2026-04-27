@@ -28,8 +28,10 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -42,6 +44,57 @@ logger = logging.getLogger("M4.bluetooth")
 # L2CAP channel numbers for HID
 _PSM_CTRL = 0x0011   # HID Control (PSM 17)
 _PSM_INTR = 0x0013   # HID Interrupt (PSM 19)
+
+# CAP_NET_BIND_SERVICE = 10 (Linux capability bit). Used to disambiguate the
+# "binary has caps but this process didn't pick them up at execve" case from
+# the "binary has no caps" case in the EACCES diagnostic below.
+_CAP_NET_BIND_SERVICE_BIT = 10
+
+
+def _diagnose_bind_eacces() -> str:
+    """Return a tailored hint for an EACCES on L2CAP bind.
+
+    Three cases:
+    1. Current process has CAP_NET_BIND_SERVICE in CapEff but bind still failed
+       — not a cap problem; suggest checking bluetoothd / input plugin.
+    2. Binary at sys.executable has the cap (per getcap) but this process
+       does not — process was launched before `setcap` was applied;
+       restart the web server.
+    3. Otherwise — binary lacks the cap; fall back to "run setup.sh --bt".
+
+    Best-effort: any failure falls back to case 3.
+    """
+    try:
+        status = Path("/proc/self/status").read_text()
+        cap_eff = 0
+        for line in status.splitlines():
+            if line.startswith("CapEff:"):
+                cap_eff = int(line.split()[1], 16)
+                break
+        if cap_eff & (1 << _CAP_NET_BIND_SERVICE_BIT):
+            return "Ensure bluetoothd is running with the input plugin disabled."
+
+        getcap = shutil.which("getcap") or "/sbin/getcap"
+        if Path(getcap).exists():
+            real_python = os.path.realpath(sys.executable)
+            result = subprocess.run(
+                [getcap, real_python],
+                capture_output=True, text=True, timeout=2,
+            )
+            if "cap_net_bind_service" in result.stdout:
+                return (
+                    "The Python binary has CAP_NET_BIND_SERVICE but this "
+                    "process did not inherit it — the web server was started "
+                    "before `sudo scripts/setup.sh --bt` ran. "
+                    "Restart the web server to pick up the capabilities."
+                )
+    except Exception:  # noqa: BLE001 — diagnostic must never raise
+        pass
+
+    return (
+        "Python needs CAP_NET_BIND_SERVICE to bind PSM 17/19. "
+        "Fix: sudo scripts/setup.sh --bt"
+    )
 
 # BDADDR_ANY — explicit form required by Python 3.13+
 _BDADDR_ANY = "00:00:00:00:00:00"
@@ -367,8 +420,7 @@ class BluetoothHIDConnection:
             if e.errno == 13:  # EACCES
                 raise HIDDeviceError(
                     f"Failed to create L2CAP sockets: {e}. "
-                    "Python needs CAP_NET_BIND_SERVICE to bind PSM 17/19. "
-                    "Fix: sudo scripts/setup.sh --bt"
+                    f"{_diagnose_bind_eacces()}"
                 )
             if e.errno == 98:  # EADDRINUSE
                 self._kill_stale_l2cap_holder()

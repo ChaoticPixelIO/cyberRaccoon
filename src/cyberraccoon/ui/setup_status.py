@@ -69,6 +69,10 @@ NOT_AVAILABLE = "not_available"
 REBOOT_REQUIRED = "reboot_required"
 PARTIAL = "partial"
 
+# Name of the systemd unit that recreates /dev/hidg0 on every boot
+# (installed by scripts/setup/gadget.sh; runs scripts/lib/cyberraccoon-usb-gadget-create.sh).
+_USB_GADGET_UNIT = "cyberraccoon-usb-gadget"
+
 
 def _is_raspberry_pi() -> bool:
     """True if running on any Raspberry Pi model."""
@@ -196,13 +200,102 @@ def _read_dwc2_overlay(config_paths: list[str], model_filter: str) -> dict[str, 
     return last
 
 
+def _dwc2_module_loaded() -> bool:
+    """True if the running kernel has the dwc2 module loaded.
+
+    ``/sys/module/<name>`` exists when the module is present in the
+    kernel, regardless of whether it's a loadable module or built-in
+    for that subsystem. On a freshly-booted Pi with the dwc2 overlay
+    applied, this directory appears.
+    """
+    return Path("/sys/module/dwc2").exists()
+
+
+def _gadget_runtime_status(pi5_cable_note: str | None) -> dict[str, str]:
+    """Decide the gadget status from runtime state.
+
+    Called once the dwc2 overlay is present + sane. Inspects:
+      - /dev/hidg0 (the device node we ultimately need)
+      - /sys/class/udc (does the kernel have a USB Device Controller?)
+      - cyberraccoon-usb-gadget.service install state (so we can tell
+        "old install / pre-persistence" from "unit installed but disabled"
+        from "unit enabled but the boot-time helper had no UDC").
+
+    Pulled out so Pi 5 and Pi 4B paths share the same systemd-unit logic.
+    ``pi5_cable_note`` is attached as a top-level "note" on Pi 5 only.
+    """
+    note_kv = {"note": pi5_cable_note} if pi5_cable_note else {}
+
+    # Branch A: /dev/hidg0 exists → READY (regardless of unit state).
+    if Path("/dev/hidg0").exists():
+        return {"status": READY, "detail": "/dev/hidg0 available", **note_kv}
+
+    udc_present = (
+        any(Path("/sys/class/udc").iterdir())
+        if Path("/sys/class/udc").exists() else False
+    )
+    unit_state = _systemctl_unit_state(_USB_GADGET_UNIT)
+
+    # Branch B: unit not installed (pre-persistence install) — tell user to run setup.sh.
+    if unit_state == "not-found":
+        return {
+            "status": NOT_CONFIGURED,
+            "detail": (
+                "/dev/hidg0 missing and persistent gadget service is not installed. "
+                "Run: sudo scripts/setup.sh --gadget"
+            ),
+            **note_kv,
+        }
+
+    # Branch C: unit installed but disabled — re-run setup.sh OR enable directly.
+    if unit_state == "disabled":
+        return {
+            "status": PARTIAL,
+            "detail": (
+                "Persistent gadget service is installed but disabled. "
+                "Run: sudo systemctl enable --now cyberraccoon-usb-gadget "
+                "(or re-run: sudo scripts/setup.sh --gadget)"
+            ),
+            **note_kv,
+        }
+
+    # Branch E: UDC empty — existing cable/power messaging, unchanged.
+    if not udc_present:
+        return {
+            "status": NOT_CONFIGURED,
+            "detail": (
+                "Pi can't currently act as a USB device — usually because the "
+                "target is powered off, or the cable to the target doesn't "
+                "carry data. Power on the target and re-check."
+            ),
+            **note_kv,
+        }
+
+    # Branch D: unit looks healthy on paper but /dev/hidg0 still missing.
+    # Likely the unit ran early, found UDC absent, and ConditionPathExistsGlob
+    # silently skipped it. User reconnects + restarts the unit.
+    return {
+        "status": PARTIAL,
+        "detail": (
+            "Persistent gadget service is enabled but /dev/hidg0 is missing. "
+            "Reconnect the target USB cable, then run: "
+            "sudo systemctl restart cyberraccoon-usb-gadget. "
+            "For details: sudo systemctl status cyberraccoon-usb-gadget"
+        ),
+        **note_kv,
+    }
+
+
 def _check_usb_gadget() -> dict[str, str]:
     """Check USB HID Gadget setup status.
 
     On Pi 5, walks /boot/firmware/config.txt to confirm the dwc2 overlay is
     enabled in a model-applicable section and not pinned to host mode —
     catching the most common reason ``/sys/class/udc`` is empty before
-    blaming cables or target power state.
+    blaming cables or target power state. After that, hands off to
+    ``_gadget_runtime_status`` which knows about the persistent systemd
+    unit (cyberraccoon-usb-gadget.service) installed by
+    ``scripts/setup/gadget.sh``.
     """
     if not _is_raspberry_pi():
         return {"status": NOT_AVAILABLE, "detail": "Not running on a Raspberry Pi"}
@@ -255,34 +348,32 @@ def _check_usb_gadget() -> dict[str, str]:
                 "note": pi5_cable_note,
             }
 
-        # 2. Overlay is fine — now check runtime state.
-        if Path("/dev/hidg0").exists():
+        # Overlay is configured correctly but the running kernel hasn't picked
+        # it up yet (e.g. immediately after `sudo scripts/setup.sh --gadget`).
+        # Distinguish this from a runtime cable/power problem so the user is
+        # told to reboot, not to re-run setup.
+        if not _dwc2_module_loaded():
             return {
-                "status": READY,
-                "detail": "/dev/hidg0 available",
+                "status": REBOOT_REQUIRED,
+                "detail": (
+                    f"dwc2 overlay is in {overlay['config_path']} but the "
+                    "running kernel hasn't loaded the dwc2 module — reboot "
+                    "to apply."
+                ),
                 "note": pi5_cable_note,
             }
-        udc_present = any(Path("/sys/class/udc").iterdir()) if Path("/sys/class/udc").exists() else False
-        if udc_present:
-            detail = "/dev/hidg0 missing. Run setup --gadget."
-        else:
-            detail = (
-                "Pi can't currently act as a USB device — usually because the "
-                "target is powered off, or the cable to the target doesn't "
-                "carry data. Power on the target and re-check, then run setup."
-            )
-        return {
-            "status": NOT_CONFIGURED,
-            "detail": detail,
-            "note": pi5_cable_note,
-        }
+
+        # 2. Overlay is fine — now check runtime state (incl. systemd unit).
+        return _gadget_runtime_status(pi5_cable_note)
 
     # Pi 4B or other
-    if Path("/dev/hidg0").exists():
-        return {"status": READY, "detail": "/dev/hidg0 available"}
-
     overlay = _read_dwc2_overlay(config_paths, "pi4")
     if not overlay["present"]:
+        # Preserve "/dev/hidg0 missing" wording for the no-overlay path so
+        # the message stays accurate even if the device node happens to exist
+        # for some unrelated reason.
+        if Path("/dev/hidg0").exists():
+            return {"status": READY, "detail": "/dev/hidg0 available"}
         return {
             "status": NOT_CONFIGURED,
             "detail": "dwc2 overlay not in config.txt and /dev/hidg0 missing",
@@ -296,10 +387,18 @@ def _check_usb_gadget() -> dict[str, str]:
                 "dr_mode=) and reboot."
             ),
         }
-    return {
-        "status": NOT_CONFIGURED,
-        "detail": "/dev/hidg0 not present (run setup or reboot after config change)",
-    }
+    if not _dwc2_module_loaded():
+        return {
+            "status": REBOOT_REQUIRED,
+            "detail": (
+                f"dwc2 overlay is in {overlay['config_path']} but the "
+                "running kernel hasn't loaded the dwc2 module — reboot "
+                "to apply."
+            ),
+        }
+
+    # Overlay is fine on Pi 4B — share the same systemd-unit-aware runtime path.
+    return _gadget_runtime_status(None)
 
 
 def _check_csi() -> dict[str, str]:
@@ -470,6 +569,34 @@ def _systemctl_is_active(service: str) -> bool:
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
+
+
+def _systemctl_unit_state(unit: str) -> str:
+    """Return the install state of a systemd unit.
+
+    Wraps ``systemctl is-enabled <unit>``. Returns one of:
+        - "enabled"     — unit installed and enabled
+        - "disabled"    — unit installed but not enabled
+        - "static"      — unit installed but cannot be enabled (no [Install])
+        - "masked"      — unit masked
+        - "not-found"   — unit file does not exist
+        - "unknown"     — systemctl missing, timed out, or returned unrecognised state
+    """
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-enabled", unit],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return "unknown"
+    state = result.stdout.strip()
+    if state in {"enabled", "disabled", "static", "masked"}:
+        return state
+    # systemctl returns non-zero + "Failed to get unit file state for X: No such
+    # file or directory" on stderr when the unit isn't installed.
+    if "No such file" in result.stderr or state == "":
+        return "not-found"
+    return "unknown"
 
 
 # ---------------------------------------------------------------------------
