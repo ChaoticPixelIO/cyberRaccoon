@@ -1,7 +1,7 @@
 """OpenAI native computer-use protocol.
 
 Uses OpenAI's Responses API with the ``computer`` tool to get structured
-computer-use actions from GPT-5.4.
+computer-use actions from GPT-5.5.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ class OpenAICUProtocol(ComputerUseProtocol):
     """OpenAI native computer-use protocol.
 
     Uses the Responses API with ``{"type": "computer"}`` tool to get
-    structured ``computer_call`` responses from GPT-5.4.
+    structured ``computer_call`` responses from GPT-5.5.
 
     OpenAI may return multiple actions per ``computer_call``.  Since
     VisionAgent expects one command per ``step()``, actions are queued
@@ -623,7 +623,7 @@ class OpenAICUProtocol(ComputerUseProtocol):
             return {"action": "key", "keys": normalized}
 
         if action_type == "wait":
-            # GPT-5.4 sends duration in ms via "ms" or "duration_ms" field
+            # GPT-5.5 sends duration in ms via "ms" or "duration_ms" field
             ms = _g(action, "ms")
             if ms is None:
                 ms = _g(action, "duration_ms")

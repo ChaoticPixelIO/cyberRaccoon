@@ -86,7 +86,7 @@ the browser, watch the row turn green.
 
 Open the **Config** tab and fill in your API key, provider, and model. Settings are saved to `~/.cyberraccoon/config.yaml` with `0o600` permissions.
 
-- **Default provider:** OpenAI, default model `gpt-5.4`.
+- **Default provider:** OpenAI, default model `gpt-5.5`.
 - **Switch to Anthropic:** change the Provider dropdown in the Config tab. Per‑provider keys are remembered so switching back doesn't lose them.
 - **Custom model:** type it into the Model field, or pass `--model` on the CLI.
 
@@ -149,7 +149,7 @@ python -m cyberraccoon --web --cli
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--provider` | `openai` | LLM provider: `openai` or `anthropic` |
-| `--model` | `gpt-5.4` | Any OpenAI- or Anthropic-compatible model ID |
+| `--model` | `gpt-5.5` | Any OpenAI- or Anthropic-compatible model ID |
 | `--api-key` | yaml | API key (falls back to `~/.cyberraccoon/config.yaml`) |
 | `--base-url` | — | Custom API base URL (OpenAI-compatible) |
 | `--protocol` | `auto` | Protocol mode: `auto`, `native` (computer-use tool), or `prompt` (prompt-based) |

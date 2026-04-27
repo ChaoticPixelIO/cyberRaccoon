@@ -14,7 +14,7 @@ one at a time.
 
 Usage::
 
-    planner = TaskPlanner(provider="anthropic", model="claude-sonnet-4-6",
+    planner = TaskPlanner(provider="anthropic", model="claude-opus-4-7",
                           api_key="sk-...")
     steps = planner.plan(task_goal, screenshot_b64, skill_text)
     # steps = ["Open a terminal", "Type: shutdown /r /fw /t 0", ...]

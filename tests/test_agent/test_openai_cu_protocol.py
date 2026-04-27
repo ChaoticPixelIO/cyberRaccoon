@@ -33,7 +33,7 @@ class _MockAPIError(Exception):
 def _make_protocol() -> OpenAICUProtocol:
     """Create a protocol instance with mocked OpenAI client."""
     proto = OpenAICUProtocol.__new__(OpenAICUProtocol)
-    proto._model = "gpt-5.4"
+    proto._model = "gpt-5.5"
     proto._display_width = 1280
     proto._display_height = 720
     mock_openai = MagicMock()

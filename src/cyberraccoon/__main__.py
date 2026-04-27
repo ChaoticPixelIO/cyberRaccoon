@@ -4,7 +4,7 @@ Usage::
 
     # One-shot task execution
     python -m cyberraccoon --task "Open Notepad and type Hello"
-    python -m cyberraccoon --task "Click the Start menu" --provider openai --model gpt-4o
+    python -m cyberraccoon --task "Click the Start menu" --provider openai --model gpt-5.5
     python -m cyberraccoon --task "Open Chrome" --device 0 --max-steps 20
     python -m cyberraccoon --task "Open Notepad" --source csi    # use Pi camera
     python -m cyberraccoon --task "Open Chrome" --transport bt   # use Bluetooth HID

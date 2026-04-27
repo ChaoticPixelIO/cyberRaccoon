@@ -14,11 +14,12 @@ from typing import Any
 logger = logging.getLogger("M3.protocol")
 
 # Models supporting the computer_20251124 tool (Anthropic native CU).
-# Prefix matching: "claude-opus-4-6" matches "claude-opus-4-6-20260101", etc.
-# Only Opus 4.6, Sonnet 4.6, and Opus 4.5 support computer_20251124.
-# Older models (Sonnet 4.5, Sonnet 4, Opus 4, Opus 4.1, etc.) only support
-# computer_20250124 and fall back to prompt-based protocol.
+# Prefix matching: "claude-opus-4-7" matches "claude-opus-4-7-20260415", etc.
+# Opus 4.7 (latest), Opus 4.6, Opus 4.5, and Sonnet 4.6 support
+# computer_20251124. Older models (Sonnet 4.5, Sonnet 4, Opus 4, Opus 4.1,
+# etc.) only support computer_20250124 and fall back to prompt-based protocol.
 ANTHROPIC_CU_MODEL_PREFIXES: list[str] = [
+    "claude-opus-4-7",
     "claude-opus-4-6",
     "claude-opus-4-5",
     "claude-sonnet-4-6",
@@ -26,6 +27,7 @@ ANTHROPIC_CU_MODEL_PREFIXES: list[str] = [
 
 # Models supporting OpenAI's native computer-use via the Responses API.
 OPENAI_CU_MODEL_PREFIXES: list[str] = [
+    "gpt-5.5",
     "gpt-5.4",
 ]
 

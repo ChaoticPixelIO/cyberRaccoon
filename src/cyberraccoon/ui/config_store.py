@@ -9,7 +9,7 @@ Usage::
 
     store = ConfigStore()                      # default path
     config = store.load()                      # 3-tier merged AppConfig
-    config.llm.model = "gpt-4o"
+    config.llm.model = "gpt-5.5"
     store.save(config)                         # persist to YAML
 
 Security:

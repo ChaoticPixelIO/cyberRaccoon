@@ -187,7 +187,7 @@ class TestLLMProviderSnapshots:
             yaml.dump({
                 "llm": {
                     "provider": "anthropic",
-                    "model": "claude-opus-4-6",
+                    "model": "claude-opus-4-7",
                     "base_url": "https://api.example.com",
                     "temperature": 0.2,
                 },
@@ -200,7 +200,7 @@ class TestLLMProviderSnapshots:
 
         assert "anthropic" in config.llm.providers
         snap = config.llm.providers["anthropic"]
-        assert snap["model"] == "claude-opus-4-6"
+        assert snap["model"] == "claude-opus-4-7"
         assert snap["base_url"] == "https://api.example.com"
         assert snap["temperature"] == 0.2
 
@@ -208,10 +208,10 @@ class TestLLMProviderSnapshots:
         store = ConfigStore(str(tmp_config_path))
         cfg = AppConfig()
         cfg.llm.provider = "anthropic"
-        cfg.llm.model = "claude-opus-4-6"
+        cfg.llm.model = "claude-opus-4-7"
         cfg.llm.providers = {
             "anthropic": {
-                "model": "claude-opus-4-6",
+                "model": "claude-opus-4-7",
                 "api_key": "sk-ant-xxx",
                 "base_url": None,
                 "max_tokens": 1024,
@@ -240,7 +240,7 @@ class TestLLMProviderSnapshots:
         store = ConfigStore(str(tmp_config_path))
         cfg = AppConfig()
         cfg.llm.providers = {
-            "anthropic": {"model": "claude-opus-4-6", "api_key": "sk-secret"},
+            "anthropic": {"model": "claude-opus-4-7", "api_key": "sk-secret"},
         }
         store.save(cfg)
 
@@ -255,7 +255,7 @@ class TestLLMProviderSnapshots:
         store = ConfigStore(str(tmp_config_path))
         cfg = AppConfig()
         cfg.llm.providers = {
-            "anthropic": {"model": "claude-opus-4-6", "api_key": "sk-secret"},
+            "anthropic": {"model": "claude-opus-4-7", "api_key": "sk-secret"},
         }
         store.save(cfg, include_secrets=False)
 

@@ -36,13 +36,13 @@ class CaptureConfig:
 # is intentionally excluded — it is resolved from env vars at load time.
 LLM_PROVIDER_DEFAULTS: dict[str, dict[str, Any]] = {
     "anthropic": {
-        "model": "claude-opus-4-6",
+        "model": "claude-opus-4-7",
         "base_url": None,
         "max_tokens": 1024,
         "temperature": 0.0,
     },
     "openai": {
-        "model": "gpt-5.4",
+        "model": "gpt-5.5",
         "base_url": None,
         "max_tokens": 1024,
         "temperature": 0.0,
@@ -62,7 +62,7 @@ _LLM_PROVIDER_SNAPSHOT_FIELDS: tuple[str, ...] = (
 @dataclass
 class LLMConfig:
     provider: str = "openai"
-    model: str = "gpt-5.4"
+    model: str = "gpt-5.5"
     api_key: str = ""
     base_url: str | None = None
     max_tokens: int = 1024

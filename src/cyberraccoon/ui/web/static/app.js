@@ -110,22 +110,15 @@ function cyberRaccoon() {
 
         // --- LLM model suggestions (per provider) ---
         // Shown as <datalist> options; user may pick one or type freely.
+        // Only the latest models are suggested. Older snapshots that still
+        // support native computer-use (Opus 4.6/4.5, Sonnet 4.6, GPT-5.4)
+        // continue to route correctly via prefix-matching in base.py.
         modelOptions: {
             anthropic: [
-                'claude-opus-4-6',
-                'claude-opus-4-5',
-                'claude-sonnet-4-6',
-                'claude-haiku-4-5',
-                'claude-3-5-sonnet-latest',
-                'claude-3-5-haiku-latest',
+                'claude-opus-4-7',
             ],
             openai: [
-                'gpt-5.4',
-                'gpt-4o',
-                'gpt-4o-mini',
-                'gpt-4-turbo',
-                'o1',
-                'o1-mini',
+                'gpt-5.5',
             ],
         },
 

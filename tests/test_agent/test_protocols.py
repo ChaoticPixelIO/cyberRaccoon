@@ -496,11 +496,9 @@ class TestCreateProtocol:
         assert _supports_anthropic_cu("claude-sonnet-4-6") is True
         assert _supports_anthropic_cu("claude-sonnet-4-6-20260101") is True
 
-    def test_supports_anthropic_cu_opus_4_6(self) -> None:
-        assert _supports_anthropic_cu("claude-opus-4-6") is True
-
-    def test_supports_anthropic_cu_opus_4_5(self) -> None:
-        assert _supports_anthropic_cu("claude-opus-4-5-20251009") is True
+    def test_supports_anthropic_cu_opus_4_7(self) -> None:
+        assert _supports_anthropic_cu("claude-opus-4-7") is True
+        assert _supports_anthropic_cu("claude-opus-4-7-20260415") is True
 
     def test_does_not_support_sonnet_4_5(self) -> None:
         """Sonnet 4.5 only supports computer_20250124, not 20251124."""
@@ -580,31 +578,31 @@ class TestCreateProtocol:
         with patch.dict("sys.modules", {"openai": mock_openai}):
             protocol = create_protocol(
                 provider="openai",
-                model="gpt-5.4",
+                model="gpt-5.5",
                 api_key="test-key",
                 protocol_override="native",
             )
             from cyberraccoon.agent.protocols.openai_cu import OpenAICUProtocol
             assert isinstance(protocol, OpenAICUProtocol)
 
-    def test_auto_openai_gpt54_creates_openai_cu(self) -> None:
-        """auto + openai + gpt-5.4 → OpenAICUProtocol."""
+    def test_auto_openai_gpt55_creates_openai_cu(self) -> None:
+        """auto + openai + gpt-5.5 → OpenAICUProtocol."""
         from unittest.mock import patch, MagicMock
 
         mock_openai = MagicMock()
         with patch.dict("sys.modules", {"openai": mock_openai}):
             protocol = create_protocol(
                 provider="openai",
-                model="gpt-5.4",
+                model="gpt-5.5",
                 api_key="test-key",
             )
             from cyberraccoon.agent.protocols.openai_cu import OpenAICUProtocol
             assert isinstance(protocol, OpenAICUProtocol)
 
     def test_supports_openai_cu_prefixes(self) -> None:
-        assert _supports_openai_cu("gpt-5.4") is True
-        assert _supports_openai_cu("gpt-5.4-2026-03-01") is True
-        assert _supports_openai_cu("GPT-5.4") is True
+        assert _supports_openai_cu("gpt-5.5") is True
+        assert _supports_openai_cu("gpt-5.5-2026-04-23") is True
+        assert _supports_openai_cu("GPT-5.5") is True
         assert _supports_openai_cu("gpt-4o") is False
         assert _supports_openai_cu("gpt-5") is False
         assert _supports_openai_cu("claude-sonnet-4-6") is False
@@ -1109,7 +1107,7 @@ class TestCompletionStatusPropagation:
         from unittest.mock import MagicMock
         from cyberraccoon.agent.protocols.openai_cu import OpenAICUProtocol
         proto = OpenAICUProtocol.__new__(OpenAICUProtocol)
-        proto._model = "gpt-5.4"
+        proto._model = "gpt-5.5"
         proto._display_width = 1280
         proto._display_height = 720
         mock_openai = MagicMock()

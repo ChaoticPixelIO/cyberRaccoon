@@ -219,7 +219,7 @@ class TestConfig:
         assert config.llm.providers["anthropic"]["temperature"] == 0.3
         # Flat fields now reflect openai defaults (no prior snapshot)
         assert config.llm.provider == "openai"
-        assert config.llm.model == "gpt-5.4"
+        assert config.llm.model == "gpt-5.5"
 
         # Swap back — anthropic snapshot rehydrates flat fields
         ctrl.update_config(**{"llm.provider": "anthropic"})

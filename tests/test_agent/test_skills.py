@@ -430,7 +430,7 @@ class TestProtocolIntegration:
             from cyberraccoon.agent.protocols.anthropic_cu import AnthropicCUProtocol
 
             proto = AnthropicCUProtocol(
-                model="claude-opus-4-6",
+                model="claude-opus-4-7",
                 api_key="fake",
                 skill_text="# KiCad Tips",
             )
@@ -445,11 +445,11 @@ class TestProtocolIntegration:
             from cyberraccoon.agent.protocols.anthropic_cu import AnthropicCUProtocol
 
             proto = AnthropicCUProtocol(
-                model="claude-opus-4-6",
+                model="claude-opus-4-7",
                 api_key="fake",
             )
             proto_none = AnthropicCUProtocol(
-                model="claude-opus-4-6",
+                model="claude-opus-4-7",
                 api_key="fake",
                 skill_text=None,
             )
@@ -464,7 +464,7 @@ class TestProtocolIntegration:
             from cyberraccoon.agent.protocols.openai_cu import OpenAICUProtocol
 
             proto = OpenAICUProtocol(
-                model="gpt-5.4",
+                model="gpt-5.5",
                 api_key="fake",
                 skill_text="# WeChat Tips",
             )
@@ -479,11 +479,11 @@ class TestProtocolIntegration:
             from cyberraccoon.agent.protocols.openai_cu import OpenAICUProtocol
 
             proto = OpenAICUProtocol(
-                model="gpt-5.4",
+                model="gpt-5.5",
                 api_key="fake",
             )
             proto_none = OpenAICUProtocol(
-                model="gpt-5.4",
+                model="gpt-5.5",
                 api_key="fake",
                 skill_text=None,
             )

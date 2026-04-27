@@ -190,10 +190,10 @@ llm:
   temperature: 0.0
   providers:                   # per-provider snapshots remembered across swaps
     anthropic:
-      model: claude-opus-4-6
+      model: claude-opus-4-7
       api_key: sk-ant-...
     openai:
-      model: gpt-5.4
+      model: gpt-5.5
       api_key: sk-...
 
 agent:

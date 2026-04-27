@@ -91,7 +91,7 @@ class CommandHandler:
             return self._config_show()
         elif sub == "set":
             if len(parts) < 3:
-                return "Usage: config set <key> <value>\nExample: config set llm.model gpt-4o"
+                return "Usage: config set <key> <value>\nExample: config set llm.model gpt-5.5"
             return self._config_set(parts[1], parts[2])
         elif sub == "reset":
             self._ctrl.reset_config()
@@ -338,7 +338,7 @@ class CommandHandler:
         lines.append("  quit / exit — exit the REPL")
         lines.append("")
         lines.append("Examples:")
-        lines.append('  config set llm.model gpt-4o')
+        lines.append('  config set llm.model gpt-5.5')
         lines.append('  task run "Open Notepad and type Hello"')
         lines.append('  wifi connect MyNetwork password123')
         lines.append('  logs tail 50')
