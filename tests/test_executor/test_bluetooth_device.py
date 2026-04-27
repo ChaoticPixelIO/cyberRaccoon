@@ -5,6 +5,7 @@ All tests use mocks (no real Bluetooth hardware needed).
 
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import MagicMock, patch, ANY
 
 from cyberraccoon.executor.bluetooth_device import BluetoothHIDConnection, BluetoothHIDDevice
@@ -183,6 +184,126 @@ class TestBluetoothHIDConnection:
         conn = make_mock_connection()
         conn.disconnect()
         conn.disconnect()  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# Tests: _configure_adapter EPERM hard-fail (BTHID-02)
+# ---------------------------------------------------------------------------
+
+class TestConfigureAdapterEPERM:
+    """BTHID-02: _configure_adapter must raise on EPERM (not warn-and-skip)."""
+
+    def test_raises_on_operation_not_permitted(self) -> None:
+        conn = BluetoothHIDConnection()
+        err = subprocess.CalledProcessError(
+            returncode=1, cmd=["hciconfig", "hci0", "class", "0x002540"],
+            stderr=b"Can't change local class of device: Operation not permitted",
+        )
+        with patch("cyberraccoon.executor.bluetooth_device.subprocess.run",
+                   side_effect=err):
+            try:
+                conn._configure_adapter()
+                assert False, "Should have raised HIDDeviceError"
+            except HIDDeviceError as exc:
+                assert "CAP_NET_ADMIN" in str(exc)
+                assert "sudo scripts/setup.sh --bt" in str(exc)
+
+    def test_passes_through_unrelated_called_process_error(self) -> None:
+        """Non-EPERM CalledProcessError still raises with original message; chain preserved."""
+        conn = BluetoothHIDConnection()
+        err = subprocess.CalledProcessError(
+            returncode=1, cmd=["hciconfig", "hci0", "class", "0x002540"],
+            stderr=b"Some other failure",
+        )
+        with patch("cyberraccoon.executor.bluetooth_device.subprocess.run",
+                   side_effect=err):
+            try:
+                conn._configure_adapter()
+                assert False, "Should have raised HIDDeviceError"
+            except HIDDeviceError as exc:
+                assert "CAP_NET_ADMIN" not in str(exc)
+                assert "Failed to configure Bluetooth adapter" in str(exc)
+                # `from e` chaining — codex review LOW concern, explicit assertion
+                assert exc.__cause__ is err
+
+
+# ---------------------------------------------------------------------------
+# Tests: _configure_adapter bluetoothctl path (BTHID-01 gap closure)
+# ---------------------------------------------------------------------------
+
+class TestConfigureAdapterBluetoothctlPath:
+    """BTHID-01 gap closure: _configure_adapter routes via bluetoothctl, not hciconfig."""
+
+    def test_issues_bluetoothctl_calls_in_order(self) -> None:
+        """system-alias, power on, discoverable on, pairable on — in that order."""
+        conn = BluetoothHIDConnection()
+        with patch("cyberraccoon.executor.bluetooth_device.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=b"", stderr=b"",
+            )
+            conn._configure_adapter()
+
+        calls = [c.args[0] for c in mock_run.call_args_list]
+        # Each call's first positional arg is the list passed as cmd.
+        assert len(calls) == 4, f"expected 4 bluetoothctl calls, got {len(calls)}: {calls}"
+        assert calls[0][:2] == ["bluetoothctl", "system-alias"]
+        assert calls[1] == ["bluetoothctl", "power", "on"]
+        assert calls[2] == ["bluetoothctl", "discoverable", "on"]
+        assert calls[3] == ["bluetoothctl", "pairable", "on"]
+
+    def test_does_not_call_hciconfig(self) -> None:
+        """No hciconfig subprocess invocations remain (BTHID-01 root-cause fix)."""
+        conn = BluetoothHIDConnection()
+        with patch("cyberraccoon.executor.bluetooth_device.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=b"", stderr=b"",
+            )
+            conn._configure_adapter()
+
+        for call in mock_run.call_args_list:
+            cmd = call.args[0]
+            assert cmd[0] != "hciconfig", (
+                f"_configure_adapter must not call hciconfig; saw {cmd}. "
+                "BTHID-01 fix routes all privileged ops through bluetoothctl."
+            )
+
+    def test_raises_on_bluetoothctl_eperm(self) -> None:
+        """If bluetoothctl returns EPERM stderr, raise actionable HIDDeviceError; preserve __cause__."""
+        conn = BluetoothHIDConnection()
+        err = subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["bluetoothctl", "discoverable", "on"],
+            stderr=b"Failed to set discoverable on: Operation not permitted",
+        )
+
+        def side_effect(cmd, *args, **kwargs):
+            # First call (system-alias) succeeds; subsequent power/discoverable raises EPERM.
+            if cmd[:2] == ["bluetoothctl", "system-alias"]:
+                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b"", stderr=b"")
+            raise err
+
+        with patch("cyberraccoon.executor.bluetooth_device.subprocess.run",
+                   side_effect=side_effect):
+            try:
+                conn._configure_adapter()
+                assert False, "Should have raised HIDDeviceError"
+            except HIDDeviceError as exc:
+                assert "CAP_NET_ADMIN" in str(exc)
+                assert "sudo scripts/setup.sh --bt" in str(exc)
+                # `from e` chain preserved
+                assert exc.__cause__ is err
+
+    def test_raises_on_bluetoothctl_missing(self) -> None:
+        """If bluetoothctl is not on PATH, raise actionable HIDDeviceError."""
+        conn = BluetoothHIDConnection()
+        with patch("cyberraccoon.executor.bluetooth_device.subprocess.run",
+                   side_effect=FileNotFoundError("bluetoothctl")):
+            try:
+                conn._configure_adapter()
+                assert False, "Should have raised HIDDeviceError"
+            except HIDDeviceError as exc:
+                assert "bluetoothctl not found" in str(exc)
+                assert "sudo apt install bluez" in str(exc)
 
 
 # ---------------------------------------------------------------------------

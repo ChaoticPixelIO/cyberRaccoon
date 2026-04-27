@@ -19,6 +19,7 @@ from cyberraccoon.ui.app_controller import (
     LogCaptureHandler,
 )
 from cyberraccoon.ui.exceptions import TaskError
+from cyberraccoon.executor.hid_device import HIDDeviceError
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +410,40 @@ class TestSplitModuleLifecycle:
 
             executor_events = [e for e in events if e.type == AppEventType.EXECUTOR_READY]
             assert len(executor_events) == 1
+
+    def test_init_executor_emits_init_failed_on_failure(self, tmp_path: Path) -> None:
+        """BTHID-03: failure in executor.open() emits EXECUTOR_INIT_FAILED."""
+        patches, _ = self._mock_modules()
+
+        # Override BluetoothExecutor so its open() raises (mimics _configure_adapter EPERM)
+        failing_executor = MagicMock()
+        failing_executor.open.side_effect = HIDDeviceError(
+            "Adapter requires CAP_NET_ADMIN. Run 'sudo scripts/setup.sh --bt' ..."
+        )
+        patches["BluetoothExecutor"] = patch(
+            "cyberraccoon.ui.app_controller.BluetoothExecutor",
+            return_value=failing_executor,
+        )
+
+        with patches["create_capture"], patches["create_protocol"], \
+             patches["ActionExecutor"], patches["BluetoothExecutor"], \
+             patches["VisionAgent"]:
+            ctrl = AppController(config_path=str(tmp_path / "cfg.yaml"))
+            ctrl.load_config()
+            ctrl.update_config(executor_transport="bt")
+
+            events: list[AppEvent] = []
+            ctrl.add_listener(events.append)
+
+            with pytest.raises(TaskError, match="Executor init failed"):
+                ctrl.init_executor()
+
+            failed_events = [
+                e for e in events
+                if e.type == AppEventType.EXECUTOR_INIT_FAILED
+            ]
+            assert len(failed_events) == 1
+            assert "CAP_NET_ADMIN" in failed_events[0].data["error"]
 
     def test_both_connected_means_modules_ready(self, tmp_path: Path) -> None:
         patches, _ = self._mock_modules()
@@ -960,13 +995,18 @@ class TestPlanDiscussion:
         assert ctrl._plan_discussion.chat_history[0]["role"] == "user"
         assert ctrl._plan_discussion.chat_history[1]["role"] == "assistant"
 
-    def test_chat_returns_none_when_no_plan_cached(self, tmp_path: Path) -> None:
+    def test_chat_raises_no_plan_cached_error_when_no_plan(self, tmp_path: Path) -> None:
+        """Review I4 — chat_about_plan now raises NoPlanCachedError instead of
+        returning None for the no-plan case so the HTTP boundary can return
+        409 Conflict (user error) instead of 503 (transient)."""
+        from cyberraccoon.ui.exceptions import NoPlanCachedError
         ctrl = self._ctrl(tmp_path)
         assert ctrl._plan_discussion is None
-        result = ctrl.chat_about_plan("any question")
-        assert result is None, (
-            "chat_about_plan MUST return None when no plan is cached"
-        )
+        try:
+            ctrl.chat_about_plan("any question")
+            assert False, "should have raised NoPlanCachedError"
+        except NoPlanCachedError as e:
+            assert "no plan" in str(e).lower()
 
     def test_reject_ends_with_aborted(self, tmp_path: Path) -> None:
         ctrl = self._ctrl(tmp_path)
@@ -2002,3 +2042,85 @@ class TestCompletedStepLock:
         # No steps should have [COMPLETED] in their goals
         for step in ctrl._plan_discussion.steps:
             assert "[COMPLETED]" not in step.goal
+
+
+# ===========================================================================
+# Phase 3 — Auto Re-plan persistence + pending dialogs getter
+# ===========================================================================
+
+
+@pytest.mark.skipif(
+    not hasattr(
+        __import__("cyberraccoon.ui.app_controller", fromlist=["AppController"]).AppController,
+        "set_auto_replan",
+    ),
+    reason="set_auto_replan not yet implemented (plan 03-03)",
+)
+class TestAutoReplanPersistence:
+    """REPLAN-06: set_auto_replan persists agent.auto_replan to config.yaml."""
+
+    def _ctrl(self, tmp_path: Path) -> AppController:
+        c = AppController(config_path=str(tmp_path / "cfg.yaml"))
+        c.load_config()
+        return c
+
+    def test_set_auto_replan_writes_config(self, tmp_path: Path) -> None:
+        ctrl = self._ctrl(tmp_path)
+        assert ctrl.get_config().agent.auto_replan is False
+        ctrl.set_auto_replan(True)
+        assert ctrl.get_config().agent.auto_replan is True
+        ctrl.set_auto_replan(False)
+        assert ctrl.get_config().agent.auto_replan is False
+
+    def test_set_auto_replan_default_off(self, tmp_path: Path) -> None:
+        """Fresh controller has auto_replan == False."""
+        ctrl = self._ctrl(tmp_path)
+        assert ctrl.get_config().agent.auto_replan is False
+
+
+@pytest.mark.skipif(
+    not hasattr(
+        __import__("cyberraccoon.ui.app_controller", fromlist=["AppController"]).AppController,
+        "get_pending_dialogs",
+    ),
+    reason="get_pending_dialogs not yet implemented (plan 03-03)",
+)
+class TestPendingDialogsGetter:
+    """H7 — getter returns {dialogs: [...]} shape."""
+
+    def _ctrl(self, tmp_path: Path) -> AppController:
+        c = AppController(config_path=str(tmp_path / "cfg.yaml"))
+        c.load_config()
+        return c
+
+    def test_empty_returns_empty_list(self, tmp_path: Path) -> None:
+        ctrl = self._ctrl(tmp_path)
+        assert ctrl.get_pending_dialogs() == {"dialogs": []}
+
+    def test_replan_dialog_gets_active_gate_marker(self, tmp_path: Path) -> None:
+        ctrl = self._ctrl(tmp_path)
+        ctrl._on_step_bridge({
+            "type": "replan_dialog", "path": "A", "step_number": 1,
+            "step_goal": "x",
+        })
+        result = ctrl.get_pending_dialogs()
+        assert len(result["dialogs"]) == 1
+        assert result["dialogs"][0]["_active_gate"] == "replan_A"
+        # Path B
+        ctrl._on_step_bridge({
+            "type": "replan_dialog_resolved", "choice": "abort",
+        })
+        ctrl._on_step_bridge({
+            "type": "replan_dialog", "path": "B", "step_number": 2,
+            "step_goal": "y",
+        })
+        result = ctrl.get_pending_dialogs()
+        assert result["dialogs"][0]["_active_gate"] == "replan_B"
+
+    def test_escalation_gets_escalation_c_marker(self, tmp_path: Path) -> None:
+        ctrl = self._ctrl(tmp_path)
+        ctrl._on_step_bridge({
+            "type": "escalate", "step_number": 1, "reason": "x",
+        })
+        result = ctrl.get_pending_dialogs()
+        assert result["dialogs"][0]["_active_gate"] == "escalation_C"

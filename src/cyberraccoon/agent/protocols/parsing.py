@@ -146,14 +146,19 @@ def try_parse_json(
 
 
 # Valid completion statuses for the structured completion signal.
-VALID_STATUSES: set[str] = {"success", "gave_up", "stuck"}
+# "escalate" is the Path C trigger — the LLM signals it cannot continue without
+# human input (CAPTCHA, 2FA, ambiguous credentials, structural blocker). It must
+# be in this whitelist for Anthropic CU / OpenAI CU done-text to reach
+# WorkflowRunner's escalation gate.
+VALID_STATUSES: set[str] = {"success", "gave_up", "stuck", "escalate"}
 
 
 def extract_completion_status(text: str) -> str:
     """Extract completion status from LLM done message text.
 
     Searches for JSON objects containing a ``"status"`` field with a valid
-    completion value (``"success"``, ``"gave_up"``, or ``"stuck"``).
+    completion value (``"success"``, ``"gave_up"``, ``"stuck"``, or
+    ``"escalate"``).
 
     Returns ``"success"`` if not found (safe default per D-07).
     """

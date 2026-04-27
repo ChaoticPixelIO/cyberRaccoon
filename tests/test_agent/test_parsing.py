@@ -179,3 +179,13 @@ class TestExtractCompletionStatus:
     def test_stuck_in_inline_json(self) -> None:
         result = extract_completion_status('I am stuck {"status": "stuck"} cannot proceed')
         assert result == "stuck"
+
+    def test_escalate_in_json(self) -> None:
+        """C1 regression-guard: 'escalate' must pass through the whitelist
+        so Path C reaches WorkflowRunner from production CU providers."""
+        result = extract_completion_status('Need help {"status": "escalate"} 2FA prompt')
+        assert result == "escalate"
+
+    def test_escalate_in_markdown_block(self) -> None:
+        result = extract_completion_status('```json\n{"status": "escalate"}\n```')
+        assert result == "escalate"

@@ -92,6 +92,8 @@ class AgentConfig:
     protocol_override: str = "auto"
     enable_cache: bool = True
     skills: list[str] = field(default_factory=list)
+    # Phase 3 — REPLAN-06: when True, paths A and B skip the dialog and re-plan automatically.
+    auto_replan: bool = False
 
 
 # ---------------------------------------------------------------------------

@@ -56,7 +56,7 @@ class TaskResult:
     total_cache_read_tokens: int = 0
     total_cache_creation_tokens: int = 0
     step_log: list[dict[str, Any]] = field(default_factory=list)
-    completion_status: str = "success"  # "success", "gave_up", or "stuck"
+    completion_status: str = "success"  # "success", "gave_up", "stuck", or "escalate"
 
 
 class VisionAgent:
@@ -139,7 +139,19 @@ class VisionAgent:
                 steps_total=0,
             )
 
-        runner = WorkflowRunner(agent=self, planner=planner)
+        # H6 — propagate auto_replan from AgentConfig (Phase 3 — REPLAN-06).
+        # Fallback to False if config not accessible in this scope.
+        try:
+            from cyberraccoon.config import load_agent_config
+            agent_config = load_agent_config()
+            auto_replan = agent_config.auto_replan
+        except Exception:
+            auto_replan = False
+        runner = WorkflowRunner(
+            agent=self,
+            planner=planner,
+            auto_replan=auto_replan,
+        )
         self._workflow_runner = runner  # expose for plan approval
         return runner.run(
             task_goal=task_goal,

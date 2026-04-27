@@ -85,6 +85,56 @@ class TestConfigAPI:
         # Should still return ok (unknown keys are logged but not errors)
         assert resp.status_code == 200
 
+    def test_agent_auto_replan_string_true_coerced_correctly(
+        self, client: TestClient, ctrl: AppController,
+    ) -> None:
+        """TC5 (review test-coverage gap): the StrictBool guard lives only
+        on the dedicated /api/task/auto-replan endpoint; the generic
+        /api/config write path uses YAML-style coercion. Verify that the
+        config-side _coerce_bool vocabulary correctly distinguishes
+        string 'true' / 'false' rather than relying on Python's loose
+        bool('false')==True semantics."""
+        # String "true" → real Python True
+        resp = client.put(
+            "/api/config/agent",
+            json={"auto_replan": "true"},
+        )
+        assert resp.status_code == 200
+        cfg = ctrl.get_config()
+        assert cfg.agent.auto_replan is True
+        assert isinstance(cfg.agent.auto_replan, bool)
+
+    def test_agent_auto_replan_string_false_coerced_correctly(
+        self, client: TestClient, ctrl: AppController,
+    ) -> None:
+        """The historical Python footgun: bool('false') is True.
+        _coerce_bool's explicit vocabulary must produce real False here."""
+        # First set to True so we can detect the false coercion working.
+        ctrl.update_config(**{"agent.auto_replan": True})
+        assert ctrl.get_config().agent.auto_replan is True
+
+        resp = client.put(
+            "/api/config/agent",
+            json={"auto_replan": "false"},
+        )
+        assert resp.status_code == 200
+        cfg = ctrl.get_config()
+        assert cfg.agent.auto_replan is False, (
+            "bool('false') is True in Python — _coerce_bool must catch this"
+        )
+        assert isinstance(cfg.agent.auto_replan, bool)
+
+    def test_agent_auto_replan_real_bool_passes_through(
+        self, client: TestClient, ctrl: AppController,
+    ) -> None:
+        """Real Python booleans must pass through unchanged."""
+        resp = client.put(
+            "/api/config/agent",
+            json={"auto_replan": True},
+        )
+        assert resp.status_code == 200
+        assert ctrl.get_config().agent.auto_replan is True
+
 
 # ---------------------------------------------------------------------------
 # Task API
@@ -307,25 +357,58 @@ class TestChatEndpoint:
         assert "answer" in body
         assert "Why Chrome?" in body["answer"]
 
-    def test_chat_no_pending_plan(
+    def test_chat_no_pending_plan_returns_409(
         self,
         client: TestClient,
         ctrl: AppController,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """Review I4 — chat_about_plan now raises NoPlanCachedError, which the
+        endpoint maps to 409 Conflict (user error, retry won't help).
+        Distinct from 503 (transient — LLM call failed)."""
+        from cyberraccoon.ui.exceptions import NoPlanCachedError
+
         # No plan cached
         assert ctrl._plan_discussion is None
-        # Stub controller to return None as if no cache
-        monkeypatch.setattr(
-            ctrl, "chat_about_plan", lambda question: None,
+        # Stub controller to raise NoPlanCachedError as production now does
+        def _raise_no_plan(question: str) -> str | None:
+            raise NoPlanCachedError("No plan is currently pending discussion")
+        monkeypatch.setattr(ctrl, "chat_about_plan", _raise_no_plan)
+        resp = client.post(
+            "/api/task/chat-about-plan",
+            json={"question": "Hi?"},
         )
+        assert resp.status_code == 409
+        body = resp.json()
+        assert body["status"] == "error"
+        assert "no plan" in body["message"].lower()
+
+    def test_chat_llm_failure_returns_503(
+        self,
+        client: TestClient,
+        ctrl: AppController,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Review I4 — when chat_about_plan returns None (LLM call failed
+        or planner build failed) the endpoint returns 503 Service Unavailable
+        (transient — retry might help)."""
+        # Plan IS cached but LLM call returns None
+        ctrl._on_step_bridge({
+            "type": "plan_ready",
+            "task_goal": "x",
+            "screenshot_base64": "b64",
+            "steps": [{
+                "number": 1, "goal": "x", "reboot_expected": False,
+                "expected_actions": 1, "expected_outcome": "ok",
+            }],
+        })
+        monkeypatch.setattr(ctrl, "chat_about_plan", lambda question: None)
         resp = client.post(
             "/api/task/chat-about-plan",
             json={"question": "Hi?"},
         )
         assert resp.status_code == 503
-        body = resp.json()
-        assert body["status"] == "error"
+        assert resp.json()["status"] == "error"
 
 
 # ---------------------------------------------------------------------------
@@ -561,3 +644,313 @@ class TestPauseResumeAPI:
         resp = client.post("/api/task/resume")
         assert resp.status_code == 409
         assert resp.json()["status"] == "error"
+
+
+# ===========================================================================
+# Phase 3 — Replan decision + Auto Re-plan + pending-dialogs endpoints
+# ===========================================================================
+
+try:
+    from cyberraccoon.ui.app_controller import AppController as _AC
+    _REPLAN_ENDPOINTS_AVAILABLE = all(
+        hasattr(_AC, name)
+        for name in ("submit_replan_decision", "set_auto_replan", "get_pending_dialogs")
+    )
+except ImportError:
+    _REPLAN_ENDPOINTS_AVAILABLE = False
+
+
+@pytest.mark.skipif(
+    not _REPLAN_ENDPOINTS_AVAILABLE,
+    reason="Replan endpoints not yet implemented (plan 03-03)",
+)
+class TestReplanDecisionEndpoint:
+    """POST /api/task/replan-decision (Phase 3 — REPLAN-01/02/03 + H5)."""
+
+    def test_forwards_choice_to_controller(
+        self, client, ctrl, monkeypatch,
+    ) -> None:
+        forwarded: dict = {}
+        monkeypatch.setattr(
+            ctrl, "submit_replan_decision",
+            lambda choice: forwarded.update({"choice": choice}),
+        )
+        resp = client.post(
+            "/api/task/replan-decision",
+            json={"choice": "replan"},
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+        assert forwarded["choice"] == "replan"
+
+    def test_accepts_all_valid_choices(
+        self, client, ctrl, monkeypatch,
+    ) -> None:
+        seen: list[str] = []
+        monkeypatch.setattr(
+            ctrl, "submit_replan_decision",
+            lambda choice: seen.append(choice),
+        )
+        for choice in ("replan", "continue", "retry", "abort", "resume"):
+            resp = client.post(
+                "/api/task/replan-decision",
+                json={"choice": choice},
+            )
+            assert resp.status_code == 200
+        assert seen == ["replan", "continue", "retry", "abort", "resume"]
+
+    def test_missing_choice_returns_422(self, client) -> None:
+        resp = client.post("/api/task/replan-decision", json={})
+        assert resp.status_code == 422
+
+    def test_invalid_choice_returns_422(self, client) -> None:
+        """H5 — Literal validation rejects unknown values."""
+        resp = client.post(
+            "/api/task/replan-decision",
+            json={"choice": "garbage"},
+        )
+        assert resp.status_code == 422
+
+    def test_uppercase_choice_returns_422(self, client) -> None:
+        """H5 — Literal is case-sensitive."""
+        resp = client.post(
+            "/api/task/replan-decision",
+            json={"choice": "Replan"},
+        )
+        assert resp.status_code == 422
+
+    def test_runner_rejection_returns_400(
+        self, client, ctrl, monkeypatch,
+    ) -> None:
+        """Runner per-gate allowlist violation → 400 (controller raises ValueError)."""
+        def rejecting_submit(choice: str) -> None:
+            raise ValueError(f"invalid choice {choice!r} for gate 'replan_A'")
+        monkeypatch.setattr(ctrl, "submit_replan_decision", rejecting_submit)
+        # retry is invalid for Path A — but Literal accepts it, runner rejects
+        resp = client.post(
+            "/api/task/replan-decision",
+            json={"choice": "retry"},
+        )
+        assert resp.status_code == 400
+
+    def test_no_active_gate_returns_409(
+        self, client, ctrl, monkeypatch,
+    ) -> None:
+        """Runner raises RuntimeError when no gate armed → 409."""
+        def no_gate_submit(choice: str) -> None:
+            raise RuntimeError("no active replan gate")
+        monkeypatch.setattr(ctrl, "submit_replan_decision", no_gate_submit)
+        resp = client.post(
+            "/api/task/replan-decision",
+            json={"choice": "replan"},
+        )
+        assert resp.status_code == 409
+
+
+@pytest.mark.skipif(
+    not _REPLAN_ENDPOINTS_AVAILABLE,
+    reason="Replan endpoints not yet implemented (plan 03-03)",
+)
+class TestAutoReplanEndpoint:
+    """POST /api/task/auto-replan (Phase 3 — REPLAN-06 + H5)."""
+
+    def test_enables_auto_replan(self, client, ctrl, monkeypatch) -> None:
+        seen: list[bool] = []
+        monkeypatch.setattr(
+            ctrl, "set_auto_replan",
+            lambda enabled: seen.append(enabled),
+        )
+        resp = client.post(
+            "/api/task/auto-replan",
+            json={"enabled": True},
+        )
+        assert resp.status_code == 200
+        assert seen == [True]
+
+    def test_disables_auto_replan(self, client, ctrl, monkeypatch) -> None:
+        seen: list[bool] = []
+        monkeypatch.setattr(
+            ctrl, "set_auto_replan",
+            lambda enabled: seen.append(enabled),
+        )
+        resp = client.post(
+            "/api/task/auto-replan",
+            json={"enabled": False},
+        )
+        assert resp.status_code == 200
+        assert seen == [False]
+
+    def test_string_enabled_rejected(self, client) -> None:
+        """H5 + Pitfall 7: StrictBool — strings must NOT be coerced."""
+        resp = client.post(
+            "/api/task/auto-replan",
+            json={"enabled": "true"},
+        )
+        assert resp.status_code == 422
+
+    def test_int_enabled_rejected(self, client) -> None:
+        """H5: StrictBool — ints must NOT be coerced."""
+        resp = client.post(
+            "/api/task/auto-replan",
+            json={"enabled": 1},
+        )
+        assert resp.status_code == 422
+
+    def test_missing_enabled_returns_422(self, client) -> None:
+        resp = client.post("/api/task/auto-replan", json={})
+        assert resp.status_code == 422
+
+    def test_persist_failure_returns_207(self, client, ctrl, monkeypatch) -> None:
+        """Review I4 — when set_auto_replan applies in-memory but the YAML
+        write fails, the endpoint returns 207 Multi-Status so the frontend
+        can flash the "config write failed — will not persist" toast."""
+        from cyberraccoon.ui.exceptions import ConfigPersistError
+
+        def _persist_fail(enabled: bool) -> None:
+            raise ConfigPersistError(
+                "Auto Re-plan applied in memory but YAML write failed: disk full"
+            )
+        monkeypatch.setattr(ctrl, "set_auto_replan", _persist_fail)
+        resp = client.post(
+            "/api/task/auto-replan",
+            json={"enabled": True},
+        )
+        assert resp.status_code == 207
+        body = resp.json()
+        assert body["status"] == "partial"
+        assert body["applied"] == "in_memory"
+        assert "yaml" in body["error"].lower() or "config" in body["error"].lower()
+
+
+@pytest.mark.skipif(
+    not _REPLAN_ENDPOINTS_AVAILABLE,
+    reason="Replan endpoints not yet implemented (plan 03-03)",
+)
+class TestPendingDialogsEndpoint:
+    """GET /api/task/pending-dialogs — supports reconnect replay (H7)."""
+
+    def test_empty_when_no_dialog(self, client) -> None:
+        resp = client.get("/api/task/pending-dialogs")
+        assert resp.status_code == 200
+        body = resp.json()
+        # H7 new shape — flat array
+        assert body == {"dialogs": []}
+
+    def test_returns_replan_dialog_after_event(
+        self, client, ctrl,
+    ) -> None:
+        ctrl._on_step_bridge({
+            "type": "replan_dialog",
+            "path": "A",
+            "step_number": 3,
+            "step_goal": "Click Save",
+            "expected": "Save dialog dismissed",
+            "observed": "Save dialog still visible",
+            "mismatch_reason": "User has not yet picked a folder",
+            "failure_reason": None,
+            "screenshot_base64": "fake_b64",
+        })
+        resp = client.get("/api/task/pending-dialogs")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["dialogs"]) == 1
+        assert body["dialogs"][0]["path"] == "A"
+        assert body["dialogs"][0]["step_number"] == 3
+        assert body["dialogs"][0]["_active_gate"] == "replan_A"
+
+    def test_returns_escalation_after_event(
+        self, client, ctrl,
+    ) -> None:
+        ctrl._on_step_bridge({
+            "type": "escalate",
+            "step_number": 2,
+            "reason": "Login required",
+        })
+        resp = client.get("/api/task/pending-dialogs")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["dialogs"]) == 1
+        assert body["dialogs"][0]["_active_gate"] == "escalation_C"
+
+    def test_replan_dialog_clears_after_replanned_event(
+        self, client, ctrl,
+    ) -> None:
+        ctrl._on_step_bridge({
+            "type": "replan_dialog", "path": "A", "step_number": 1,
+            "step_goal": "x",
+        })
+        assert len(client.get("/api/task/pending-dialogs").json()["dialogs"]) == 1
+        ctrl._on_step_bridge({
+            "type": "replanned", "old_step": 1, "new_steps": [],
+            "cancelled_step_numbers": [], "steps_completed": 0,
+            "screenshot_base64": "x",
+        })
+        assert client.get("/api/task/pending-dialogs").json()["dialogs"] == []
+
+    def test_replan_dialog_clears_on_resolved_event_h8(
+        self, client, ctrl,
+    ) -> None:
+        """H8 — replan_dialog_resolved clears the cache, regardless of choice."""
+        for choice in ("continue", "retry", "abort"):
+            ctrl._on_step_bridge({
+                "type": "replan_dialog", "path": "A", "step_number": 1,
+                "step_goal": "x",
+            })
+            assert len(client.get("/api/task/pending-dialogs").json()["dialogs"]) == 1
+            ctrl._on_step_bridge({
+                "type": "replan_dialog_resolved", "choice": choice,
+            })
+            assert client.get("/api/task/pending-dialogs").json()["dialogs"] == [], \
+                f"H8 violation: cache not cleared on choice={choice}"
+
+    def test_escalation_clears_after_escalation_resolved(
+        self, client, ctrl,
+    ) -> None:
+        ctrl._on_step_bridge({
+            "type": "escalate", "step_number": 1, "reason": "x",
+        })
+        assert len(client.get("/api/task/pending-dialogs").json()["dialogs"]) == 1
+        ctrl._on_step_bridge({
+            "type": "escalation_resolved",
+        })
+        assert client.get("/api/task/pending-dialogs").json()["dialogs"] == []
+
+    def test_escalation_clears_on_resolved_h8(
+        self, client, ctrl,
+    ) -> None:
+        """H8 — replan_dialog_resolved also clears escalation cache."""
+        ctrl._on_step_bridge({
+            "type": "escalate", "step_number": 1, "reason": "x",
+        })
+        assert len(client.get("/api/task/pending-dialogs").json()["dialogs"]) == 1
+        ctrl._on_step_bridge({
+            "type": "replan_dialog_resolved", "choice": "resume",
+        })
+        assert client.get("/api/task/pending-dialogs").json()["dialogs"] == []
+
+    def test_pending_caches_clear_on_task_finished(
+        self, client, ctrl,
+    ) -> None:
+        from cyberraccoon.ui.app_controller import AppEvent, AppEventType
+        ctrl._on_step_bridge({
+            "type": "replan_dialog", "path": "A", "step_number": 1,
+            "step_goal": "x",
+        })
+        ctrl._emit(AppEvent(type=AppEventType.TASK_FINISHED, data={}))
+        assert client.get("/api/task/pending-dialogs").json()["dialogs"] == []
+
+    def test_both_types_simultaneously(
+        self, client, ctrl,
+    ) -> None:
+        """In theory both caches can hold simultaneously (though the runner
+        only arms one gate at a time). The getter must return both."""
+        ctrl._on_step_bridge({
+            "type": "replan_dialog", "path": "B", "step_number": 1,
+            "step_goal": "x",
+        })
+        ctrl._on_step_bridge({
+            "type": "escalate", "step_number": 2, "reason": "y",
+        })
+        body = client.get("/api/task/pending-dialogs").json()
+        gates = sorted(d["_active_gate"] for d in body["dialogs"])
+        assert gates == ["escalation_C", "replan_B"]

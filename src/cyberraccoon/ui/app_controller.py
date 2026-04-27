@@ -48,8 +48,12 @@ from cyberraccoon.config import (
 )
 from cyberraccoon.executor.hid_executor import ActionExecutor
 from cyberraccoon.executor.bluetooth_executor import BluetoothExecutor
-from cyberraccoon.ui.config_store import ConfigStore
-from cyberraccoon.ui.exceptions import TaskError
+from cyberraccoon.ui.config_store import ConfigStore, _coerce_value
+from cyberraccoon.ui.exceptions import (
+    ConfigPersistError,
+    NoPlanCachedError,
+    TaskError,
+)
 from cyberraccoon.ui.wifi_manager import WiFiManager
 
 logger = logging.getLogger("M5.controller")
@@ -80,6 +84,7 @@ class AppEventType(Enum):
     CAPTURE_CLOSED = "capture_closed"
     EXECUTOR_READY = "executor_ready"
     EXECUTOR_CLOSED = "executor_closed"
+    EXECUTOR_INIT_FAILED = "executor_init_failed"
 
     # Logging
     LOG_MESSAGE = "log_message"
@@ -181,6 +186,7 @@ def _step_to_dict(step: PlanStep) -> dict[str, Any]:
         "reboot_expected": step.reboot_expected,
         "expected_actions": step.expected_actions,
         "expected_outcome": step.expected_outcome,
+        "status": step.status,
     }
 
 
@@ -339,6 +345,11 @@ class AppController:
         # Plan discussion state (Phase 4 — DISCUSS-02)
         self._plan_discussion: PlanDiscussionState | None = None
         self._current_skill_text: str | None = None
+
+        # Phase 3 — pending dialog state for reconnect replay
+        # (populated by plan 03-03 event router; cleared on TASK_STARTED/FINISHED)
+        self._pending_replan_dialog: dict[str, Any] | None = None
+        self._pending_escalation: dict[str, Any] | None = None
         # Optional test hook: override the factory that builds a TaskPlanner
         # for chat calls. When None, the real factory is used.
         self._chat_planner_factory: Callable[[], Any] | None = None
@@ -386,6 +397,11 @@ class AppController:
                         "PlanDiscussion: cleared on %s",
                         event.type.value,
                     )
+                # Phase 3 — clear any pending replan/escalation dialogs on
+                # task boundaries so stale state never survives into the
+                # next task (Pitfall 2).
+                self._pending_replan_dialog = None
+                self._pending_escalation = None
         with self._lock:
             listeners = list(self._listeners)
         for fn in listeners:
@@ -451,17 +467,36 @@ class AppController:
         ):
             kwargs.pop("llm.api_key")
 
+        # TC5 / review type-design — coerce values via the same vocabulary
+        # used by the YAML loader so the WRITE path is also protected from
+        # string drift (e.g. "false" should not become Python True via
+        # bool()). We look up the dataclass field type annotation and
+        # delegate to _coerce_value (which handles bool / int / float /
+        # Optional / list).
+        def _coerce_for_field(target: Any, field_name: str, value: Any) -> Any:
+            try:
+                from dataclasses import fields as _dc_fields
+                for f in _dc_fields(target):
+                    if f.name == field_name:
+                        return _coerce_value(value, f.type)
+            except (TypeError, ValueError):
+                # Not a dataclass or coercion failed — leave value as-is.
+                pass
+            return value
+
         for key, value in kwargs.items():
             if "." in key:
                 section, _, field_name = key.partition(".")
                 sub = getattr(config, section, None)
                 if sub is not None and hasattr(sub, field_name):
-                    setattr(sub, field_name, value)
+                    coerced = _coerce_for_field(sub, field_name, value)
+                    setattr(sub, field_name, coerced)
                 else:
                     logger.warning("Unknown config key: %s", key)
             else:
                 if hasattr(config, key):
-                    setattr(config, key, value)
+                    coerced = _coerce_for_field(config, key, value)
+                    setattr(config, key, coerced)
                 else:
                     logger.warning("Unknown config key: %s", key)
 
@@ -691,6 +726,10 @@ class AppController:
             with self._lock:
                 if self._executor is executor:
                     self._executor = None
+            self._emit(AppEvent(
+                type=AppEventType.EXECUTOR_INIT_FAILED,
+                data={"error": str(e)},
+            ))
             raise TaskError(f"Executor init failed: {e}") from e
 
         # Build a human-readable device name (describes the remote host)
@@ -1044,9 +1083,14 @@ class AppController:
     def chat_about_plan(self, question: str) -> str | None:
         """Answer a user question about the pending plan.
 
-        Returns None if no plan is currently pending or the LLM call fails.
-        Appends both the question and the answer to the cached chat_history
-        so follow-up questions have context. Stateless across tasks.
+        Raises:
+            NoPlanCachedError: If no plan is currently pending (HTTP boundary
+                should return 409 — user error, retry won't help).
+
+        Returns None if the LLM call fails or returns no answer (HTTP boundary
+        returns 503 — transient, retry might help). Appends both the question
+        and the answer to the cached chat_history so follow-up questions have
+        context. Stateless across tasks.
 
         Thread safety: the cached state reference is copied out of self._lock
         before the LLM call so the long-running network request does not hold
@@ -1065,8 +1109,8 @@ class AppController:
             state = self._plan_discussion
             chat_planner_factory = self._chat_planner_factory
         if state is None:
-            logger.debug("chat_about_plan: no plan cached, returning None")
-            return None
+            logger.debug("chat_about_plan: no plan cached")
+            raise NoPlanCachedError("No plan is currently pending discussion")
 
         # Build a planner for this chat call. In tests, a factory override
         # can inject a fake planner without importing TaskPlanner.
@@ -1497,6 +1541,86 @@ class AppController:
             agent._workflow_runner.resolve_escalation()
             logger.info("Workflow escalation resolved")
 
+    def submit_replan_decision(self, choice: str) -> None:
+        """Forward the user's replan dialog choice to the workflow runner.
+
+        Phase 3 — REPLAN-01/02/03. Choice is validated by the runner against
+        the per-gate allowlist (self._active_gate determines which choices
+        are valid). The controller does NO routing heuristic — the runner
+        owns the state machine.
+
+        Choice is one of: "continue", "retry", "replan", "resume", "abort"
+        (gate determines which subset is legal).
+        """
+        with self._lock:
+            agent = self._agent
+        if agent and hasattr(agent, '_workflow_runner') and agent._workflow_runner:
+            try:
+                agent._workflow_runner.submit_replan_decision(choice)
+                logger.info("Replan decision submitted: %s", choice)
+            except (ValueError, RuntimeError) as e:
+                # Runner rejected the choice — log and re-raise so the HTTP
+                # layer returns 400. (Plan 03-03's endpoint wraps this.)
+                logger.warning("Replan decision rejected: %s", e)
+                raise
+
+    def set_auto_replan(self, enabled: bool) -> None:
+        """Toggle the Auto Re-plan flag on the live runner AND persist it (Phase 3 — REPLAN-06).
+
+        Raises:
+            ConfigPersistError: In-memory state was updated, but the YAML
+                config write failed (disk full, permission denied, race).
+                Frontend's existing fallback toast ("config write failed —
+                will not persist across restart") fires when the endpoint
+                returns 207 in response (review I4).
+        """
+        with self._lock:
+            agent = self._agent
+        if agent and hasattr(agent, '_workflow_runner') and agent._workflow_runner:
+            agent._workflow_runner.set_auto_replan(enabled)
+        # Persist via existing config mechanism (dotted key)
+        try:
+            self.update_config(**{"agent.auto_replan": enabled})
+        except Exception as e:
+            logger.warning(
+                "set_auto_replan: config persist failed (%s) — "
+                "in-memory only", e,
+            )
+            logger.info("Auto Re-plan set to: %s (in-memory)", enabled)
+            raise ConfigPersistError(
+                f"Auto Re-plan applied in memory but YAML write failed: {e}"
+            ) from e
+        logger.info("Auto Re-plan set to: %s", enabled)
+
+    def get_pending_dialogs(self) -> dict[str, Any]:
+        """Return every currently-unresolved dialog for reconnect replay.
+
+        Phase 3 — H7. Returns {"dialogs": [...]} where each entry is the
+        original event payload with an "_active_gate" marker indicating
+        which gate armed it ('replan_A' | 'replan_B' | 'escalation_C').
+
+        At most one of each type can be pending at any time (the runner
+        only arms one gate at a time), so the array has 0 or 1 entries
+        in practice — but the shape is an array to leave room for future
+        multi-gate scenarios and to match the H7 spec verbatim.
+        """
+        dialogs: list[dict[str, Any]] = []
+        with self._lock:
+            if self._pending_replan_dialog:
+                entry = dict(self._pending_replan_dialog)
+                # Attach gate marker — replan_A or replan_B determined by path
+                path = entry.get("path")
+                if path == "A":
+                    entry["_active_gate"] = "replan_A"
+                elif path == "B":
+                    entry["_active_gate"] = "replan_B"
+                dialogs.append(entry)
+            if self._pending_escalation:
+                entry = dict(self._pending_escalation)
+                entry["_active_gate"] = "escalation_C"
+                dialogs.append(entry)
+        return {"dialogs": dialogs}
+
     def get_task_status(self) -> dict[str, Any]:
         """Return current task state as a dict.
 
@@ -1778,6 +1902,51 @@ class AppController:
                         "plan chat and modification will be unavailable", e,
                     )
                     step_info["discussion_unavailable"] = True
+
+            elif event_type == "replan_dialog":
+                with self._lock:
+                    self._pending_replan_dialog = dict(step_info)
+                logger.debug(
+                    "ReplanDialog: cached payload for path=%s, step_number=%s",
+                    step_info.get("path"), step_info.get("step_number"),
+                )
+
+            elif event_type == "escalate":
+                with self._lock:
+                    self._pending_escalation = dict(step_info)
+                logger.debug(
+                    "Escalation: cached payload for step_number=%s",
+                    step_info.get("step_number"),
+                )
+
+            elif event_type in (
+                "replanned",
+                "replan_auto",
+                "replan_dialog_resolved",
+            ):
+                # H8 — clear replan cache on EVERY resolved variant.
+                # "replanned" fires when user chose 'replan' and LLM ran.
+                # "replan_auto" fires when Auto Re-plan bypassed the dialog.
+                # "replan_dialog_resolved" fires for EVERY choice including
+                # 'continue', 'retry', 'abort' (plan 03-02 Task 3 emits it
+                # on every branch). This is the defensive final sweep —
+                # the HTTP endpoint (Task 1 Edit A) already succeeded, so
+                # the cache should already be clear, but this guards
+                # against reconnect-inflight races.
+                with self._lock:
+                    self._pending_replan_dialog = None
+                    # Also clear escalation cache — 'abort' and 'replan'
+                    # from Path C also emit replan_dialog_resolved, and
+                    # we want ONE code path that clears both caches.
+                    if event_type == "replan_dialog_resolved":
+                        self._pending_escalation = None
+
+            elif event_type == "escalation_resolved":
+                # Plan 03-02 Task 3 Edit E emits this after Path C "resume"
+                # routing AND after the Path C "replan" event. Clear the
+                # escalation cache.
+                with self._lock:
+                    self._pending_escalation = None
 
             self._emit(AppEvent(
                 type=AppEventType.WORKFLOW_EVENT,

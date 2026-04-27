@@ -66,6 +66,13 @@ function cyberRaccoon() {
         pauseRequested: false,    // true after Pause clicked, before task_paused received (optimistic UI only)
         escalationPending: false, // true when escalation needs user action
         escalationReason: '',     // why the agent escalated
+
+        // --- Replan Dialog (Phase 3) ---
+        replanDialog: null,                  // null | {path, step_number, step_goal, expected, observed, mismatch_reason, failure_reason, screenshot_base64}
+        replanDecisionPending: false,        // true between click and server ack
+        autoReplan: false,                   // synced from /api/config on init, persisted via /api/task/auto-replan
+        connectionLostDuringDialog: false,   // true when WebSocket drops while replanDialog !== null
+        _priorFocus: null,                   // saved focus target for restore on dialog close
         currentWorkflowStep: 0,  // which workflow step is currently executing
         selectedWorkflowStep: null, // which step the user clicked to filter actions (null = show all)
 
@@ -209,6 +216,10 @@ function cyberRaccoon() {
             if (this.config && this.config.agent && Array.isArray(this.config.agent.skills)) {
                 this.activeSkills = [...this.config.agent.skills];
             }
+            // Phase 3: sync Auto Re-plan toggle from persisted config
+            if (this.config && this.config.agent) {
+                this.autoReplan = this.config.agent.auto_replan === true;
+            }
             await this.refreshStatus();
             await this.loadLogs();
             this.connectWebSocket();
@@ -287,9 +298,40 @@ function cyberRaccoon() {
                 return;
             }
 
-            this.ws.onopen = () => {
+            this.ws.onopen = async () => {
                 this.wsConnected = true;
                 console.log('WebSocket connected');
+                // Phase 3 — H7: SINGLE reconnect replay mechanism.
+                // The server's /ws endpoint does NOT send pending dialog state
+                // on connect. We fetch it explicitly here and re-render.
+                // I5 — differentiate network failures (acceptable to swallow
+                // — reconnect happens) from server errors (worth surfacing).
+                try {
+                    const resp = await fetch('/api/task/pending-dialogs');
+                    if (!resp.ok) {
+                        console.warn('pending-dialogs returned', resp.status);
+                        this._flash(`Could not restore pending dialogs after reconnect (HTTP ${resp.status})`);
+                    } else {
+                        const data = await resp.json();
+                        // H7 new shape — {dialogs: [...]}
+                        const dialogs = data.dialogs || [];
+                        for (const d of dialogs) {
+                            if (d._active_gate === 'replan_A' || d._active_gate === 'replan_B') {
+                                // Re-open the modal
+                                this.openReplanDialog(d);
+                            } else if (d._active_gate === 'escalation_C') {
+                                if (!this.escalationPending) {
+                                    this.escalationPending = true;
+                                    this.escalationReason = d.reason || '';
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // True network failure (server unreachable). Reconnect
+                    // will retry; logging at warn level rather than silent.
+                    console.warn('pending-dialogs network error:', e);
+                }
                 // Keepalive ping every 15 seconds
                 this._wsPingTimer = setInterval(() => {
                     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -304,6 +346,10 @@ function cyberRaccoon() {
                     clearInterval(this._wsPingTimer);
                     this._wsPingTimer = null;
                 }
+                // Phase 3 — surface connection-lost warning if a modal is open
+                if (this.replanDialog) {
+                    this.connectionLostDuringDialog = true;
+                }
                 this._scheduleReconnect();
             };
 
@@ -311,12 +357,22 @@ function cyberRaccoon() {
                 this.wsConnected = false;
             };
 
+            // I5 — split JSON.parse failures (probably benign — non-JSON
+            // frame from a future server) from handleEvent failures (real
+            // bug — would leave UI desynced; flash so the user knows).
             this.ws.onmessage = (evt) => {
+                let msg;
                 try {
-                    const msg = JSON.parse(evt.data);
-                    this.handleEvent(msg);
+                    msg = JSON.parse(evt.data);
                 } catch (e) {
                     console.warn('WS message parse error:', e);
+                    return;
+                }
+                try {
+                    this.handleEvent(msg);
+                } catch (e) {
+                    console.error('WS handleEvent failed:', e, msg);
+                    this._flash('UI desync — refresh the page if state looks wrong');
                 }
             };
         },
@@ -376,6 +432,10 @@ function cyberRaccoon() {
                     this.editedStepNumbers = [];
                     this.planVersion = 0;
                     this._pendingAddFocus = false;
+                    // Phase 3: reset replan dialog state on new task (autoReplan is sticky — NOT reset)
+                    this.replanDialog = null;
+                    this.replanDecisionPending = false;
+                    this.connectionLostDuringDialog = false;
                     break;
 
                 case 'workflow_event':
@@ -459,6 +519,13 @@ function cyberRaccoon() {
                 case 'executor_closed':
                     this.executorReady = false;
                     this.executorDevice = '';
+                    break;
+
+                case 'executor_init_failed':
+                    this.executorReady = false;
+                    this.executorDevice = '';
+                    this.connectingExecutor = false;
+                    this.executorError = (data && data.error) || 'Executor init failed';
                     break;
 
                 case 'modules_ready':
@@ -569,21 +636,59 @@ function cyberRaccoon() {
                     }
                     break;
 
-                case 'replanned':
-                    if (this.workflowPlan) {
-                        const completedCount = data.steps_completed || 0;
-                        const kept = this.workflowPlan.steps.slice(0, completedCount);
-                        const newSteps = data.new_steps.map(s => ({
-                            number: s.number,
-                            goal: s.goal,
-                            reboot_expected: s.reboot_expected || false,
-                            expected_actions: s.expected_actions,
-                            expected_outcome: s.expected_outcome || '',
-                            status: 'pending',
-                        }));
-                        this.workflowPlan.steps = [...kept, ...newSteps];
+                case 'replanned': {
+                    if (!this.workflowPlan) break;
+                    // Mark cancelled steps in place (preserves numbers, lets template render red ✗)
+                    const cancelledNumbers = new Set(data.cancelled_step_numbers || []);
+                    for (const step of this.workflowPlan.steps) {
+                        if (cancelledNumbers.has(step.number)) {
+                            step.status = 'cancelled';
+                        }
+                    }
+                    // Append new steps with their backend-assigned numbers and pending status
+                    const newSteps = (data.new_steps || []).map(s => ({
+                        number: s.number,
+                        goal: s.goal,
+                        reboot_expected: s.reboot_expected || false,
+                        expected_actions: s.expected_actions,
+                        expected_outcome: s.expected_outcome || '',
+                        status: s.status || 'pending',
+                    }));
+                    this.workflowPlan.steps = [...this.workflowPlan.steps, ...newSteps];
+                    // H8 — DO NOT close modal here. The backend emits
+                    // replan_dialog_resolved separately, which closes it uniformly
+                    // for every choice. Closing here too would duplicate the
+                    // dialog-close logic across per-choice handlers.
+                    break;
+                }
+
+                case 'replan_dialog':
+                    this.openReplanDialog(data);
+                    break;
+
+                case 'replan_auto':
+                    this._flash(`Auto-replanning (path ${data.path})`);
+                    break;
+
+                case 'replan_failed':
+                    this._flash('Re-plan failed; the task now needs your attention.');
+                    break;
+
+                case 'replan_dialog_resolved': {
+                    // H8 — unconditional modal close. Fires for EVERY choice
+                    // (continue, retry, replan, resume, abort). The per-choice
+                    // modal-close logic elsewhere in this switch is redundant
+                    // and should NOT fire — closeReplanDialog is idempotent.
+                    if (this.replanDialog) {
+                        this.closeReplanDialog();
+                    }
+                    // Also announce via live region for screen-reader users
+                    const live = document.getElementById('replan-dialog-live');
+                    if (live) {
+                        live.textContent = `Decision submitted: ${data.choice || 'unknown'}`;
                     }
                     break;
+                }
 
                 case 'escalate':
                     this.escalationPending = true;
@@ -1368,6 +1473,112 @@ function cyberRaccoon() {
             } catch (e) {
                 console.error('Resolve escalation error:', e);
             }
+        },
+
+        // ================================================================
+        // Replan Dialog (Phase 3 — REPLAN-01/02/03, UI-02/03, H7, H8)
+        // ================================================================
+
+        openReplanDialog(payload) {
+            // Save the previously-focused element for restore-on-close
+            this._priorFocus = document.activeElement;
+            this.replanDialog = payload;
+            this.replanDecisionPending = false;
+            this.connectionLostDuringDialog = false;
+            // Live-region announcement
+            const liveRegion = document.getElementById('replan-dialog-live');
+            if (liveRegion) {
+                liveRegion.textContent = payload.path === 'A'
+                    ? `Verification failed on step ${payload.step_number}`
+                    : `Step ${payload.step_number} failed`;
+            }
+        },
+
+        closeReplanDialog() {
+            this.replanDialog = null;
+            this.replanDecisionPending = false;
+            this.connectionLostDuringDialog = false;
+            if (this._priorFocus && this._priorFocus.focus) {
+                try { this._priorFocus.focus(); } catch (_) {}
+            }
+            this._priorFocus = null;
+        },
+
+        async submitReplanDecision(choice) {
+            if (this.replanDecisionPending) return;
+            this.replanDecisionPending = true;
+            // I5 — fetch only throws on network errors; HTTP 4xx/5xx still
+            // resolve. Without an explicit resp.ok check the modal stays
+            // open forever when the server returns 400 (bad gate) or 409
+            // (no gate armed = server moved on). Close on 409 since the
+            // workflow has already advanced; flash the error otherwise.
+            try {
+                const resp = await fetch('/api/task/replan-decision', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ choice }),
+                });
+                if (!resp.ok) {
+                    const body = await resp.json().catch(() => ({}));
+                    const detail = body.error || body.detail || `HTTP ${resp.status}`;
+                    this._flash(`Decision rejected: ${detail}`);
+                    this.replanDecisionPending = false;
+                    if (resp.status === 409) {
+                        // Server already moved on — close the now-stale modal.
+                        this.closeReplanDialog();
+                    }
+                    return;
+                }
+                // Server will close the dialog via the next event
+                // (replan_dialog_resolved — H8 unconditional close)
+            } catch (e) {
+                console.error('replan-decision failed:', e);
+                this._flash(`Network error submitting decision: ${e.message || e}`);
+                this.replanDecisionPending = false;
+            }
+        },
+
+        async toggleAutoReplan() {
+            const newValue = !this.autoReplan;
+            this.autoReplan = newValue;  // optimistic
+            try {
+                const resp = await fetch('/api/task/auto-replan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: newValue }),
+                });
+                if (!resp.ok) throw new Error('config write failed');
+                this._flash(`Auto Re-plan ${newValue ? 'on' : 'off'}`);
+            } catch (e) {
+                this._flash(`Auto Re-plan ${newValue ? 'on' : 'off'} (config write failed — will not persist across restart)`);
+            }
+        },
+
+        trapFocus(containerEl) {
+            // Find focusable elements inside the modal
+            const focusables = containerEl.querySelectorAll(
+                'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+            );
+            if (focusables.length === 0) return;
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            // Initial focus on the primary action (rightmost button)
+            last.focus();
+            // Cycle Tab / Shift+Tab
+            containerEl.addEventListener('keydown', (e) => {
+                if (e.key !== 'Tab') return;
+                if (e.shiftKey && document.activeElement === first) {
+                    e.preventDefault();
+                    last.focus();
+                } else if (!e.shiftKey && document.activeElement === last) {
+                    e.preventDefault();
+                    first.focus();
+                }
+            });
+            // Listener auto-detaches when Alpine destroys the template subtree on close (x-if pattern).
+            // The modal lives inside <template x-if="replanDialog"> — when replanDialog becomes null,
+            // Alpine removes the DOM node and the keydown listener attached to it is garbage-collected
+            // along with the element. No manual removeEventListener needed.
         },
 
         // ================================================================

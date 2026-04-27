@@ -428,11 +428,7 @@ def _coerce_value(value: Any, type_hint: str | type) -> Any:
     if hint in ("float", "<class 'float'>"):
         return float(value)
     if hint in ("bool", "<class 'bool'>"):
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.lower() in ("true", "1", "yes")
-        return bool(value)
+        return _coerce_bool(value)
 
     if "list" in hint:
         if isinstance(value, list):
@@ -442,3 +438,44 @@ def _coerce_value(value: Any, type_hint: str | type) -> Any:
         return value
 
     return value
+
+
+# Review type-design — strict-ish bool coercion for YAML values.
+# Defense in depth for AgentConfig.auto_replan and other bool fields. The
+# HTTP boundary uses Pydantic StrictBool, but the YAML write path was
+# previously the unprotected door — a manually-edited config.yaml with
+# `auto_replan: "asdf"` would silently coerce to True/False via Python's
+# `bool("asdf") = True`. Now we recognise an explicit vocabulary and log
+# (rather than raise — config errors should never break startup).
+_TRUE_TOKENS = frozenset({"true", "1", "yes", "y", "on"})
+_FALSE_TOKENS = frozenset({"false", "0", "no", "n", "off", ""})
+
+
+def _coerce_bool(value: Any) -> bool:
+    """Coerce a YAML-loaded value to bool.
+
+    YAML `bool` and Python `bool` pass through unchanged. Strings are
+    matched against an explicit true/false vocabulary; unknown strings
+    log a warning and fall back to ``bool(value.strip())`` so the field
+    still has a sensible value but the operator can see what happened.
+
+    Other types (int, float, list, dict) fall back to ``bool(value)``
+    with the same caveat as before.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalised = value.strip().lower()
+        if normalised in _TRUE_TOKENS:
+            return True
+        if normalised in _FALSE_TOKENS:
+            return False
+        logger.warning(
+            "config: unrecognised bool value %r; "
+            "expected one of %s (true) or %s (false)",
+            value,
+            sorted(_TRUE_TOKENS),
+            sorted(t for t in _FALSE_TOKENS if t),
+        )
+        return bool(normalised)
+    return bool(value)

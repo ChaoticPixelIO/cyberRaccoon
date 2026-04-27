@@ -148,74 +148,60 @@ class BluetoothHIDConnection:
             )
 
     def _configure_adapter(self) -> None:
-        """Set Bluetooth adapter name, class, and discoverable mode.
+        """Set Bluetooth adapter name and discoverable/pairable mode via bluetoothctl.
 
-        BlueZ often overrides device class after profile registration,
-        so we set it here (called after _register_profile) and verify.
+        Device class is persisted by `scripts/setup/bluetooth.sh` into
+        `/etc/bluetooth/main.conf [General] Class = 0x002540`, so no runtime
+        class change is required. All privileged operations are routed
+        through `bluetoothctl` (D-Bus to bluetoothd, which already holds
+        CAP_NET_ADMIN) so the calling Python process does not need
+        capability propagation to subprocesses.
         """
         try:
-            class_hex = f"0x{self._device_class:06x}"
-
-            # Set device class (keyboard + mouse combo) — retry up to 3 times
-            for attempt in range(3):
-                subprocess.run(
-                    ["hciconfig", "hci0", "class", class_hex],
-                    check=True, capture_output=True, timeout=5,
-                )
-                # Verify the class was actually set
-                result = subprocess.run(
-                    ["hciconfig", "hci0", "class"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                if class_hex.lower() in result.stdout.lower():
-                    break
-                time.sleep(0.2)
-
-            # Set device name via hciconfig
-            subprocess.run(
-                ["hciconfig", "hci0", "name", self._device_name],
-                check=True, capture_output=True, timeout=5,
-            )
-
-            # Also set alias via bluetoothctl (more reliable for name)
+            # Set device alias (canonical name setter — bluetoothctl path)
             subprocess.run(
                 ["bluetoothctl", "system-alias", self._device_name],
-                capture_output=True, timeout=5,
-            )
-
-            # Make discoverable and pairable
-            subprocess.run(
-                ["hciconfig", "hci0", "piscan"],
                 check=True, capture_output=True, timeout=5,
             )
 
-            # Final class check
-            result = subprocess.run(
-                ["hciconfig", "hci0", "class"],
-                capture_output=True, text=True, timeout=5,
+            # Power adapter on (no-op if already powered; safe to repeat)
+            subprocess.run(
+                ["bluetoothctl", "power", "on"],
+                check=True, capture_output=True, timeout=5,
             )
+
+            # Make discoverable (Class is set via /etc/bluetooth/main.conf)
+            subprocess.run(
+                ["bluetoothctl", "discoverable", "on"],
+                check=True, capture_output=True, timeout=5,
+            )
+
+            # Make pairable
+            subprocess.run(
+                ["bluetoothctl", "pairable", "on"],
+                check=True, capture_output=True, timeout=5,
+            )
+
             logger.info(
-                "Adapter configured: name=%s class=%s (actual: %s)",
-                self._device_name, class_hex,
-                result.stdout.strip().split("Class: ")[-1].split()[0]
-                if "Class:" in result.stdout else "unknown",
+                "Adapter configured via bluetoothctl: name=%s class=0x%06x "
+                "(persisted in /etc/bluetooth/main.conf)",
+                self._device_name, self._device_class,
             )
         except FileNotFoundError:
             raise HIDDeviceError(
-                "hciconfig not found. Install with: sudo apt install bluez"
+                "bluetoothctl not found. Install with: sudo apt install bluez"
             )
         except subprocess.CalledProcessError as e:
-            stderr = e.stderr.decode()
+            stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else str(e.stderr or e)
             if "Operation not permitted" in stderr or "not permitted" in stderr.lower():
-                logger.warning(
-                    "Adapter config skipped (no CAP_NET_ADMIN): %s. "
-                    "Run 'sudo scripts/setup.sh --bt' once to pre-configure.",
-                    stderr.strip(),
-                )
-            else:
                 raise HIDDeviceError(
-                    f"Failed to configure Bluetooth adapter: {stderr}"
-                )
+                    "Adapter requires CAP_NET_ADMIN. Run "
+                    "'sudo scripts/setup.sh --bt' to grant it via setcap, "
+                    "or start the server with 'sudo -E'."
+                ) from e
+            raise HIDDeviceError(
+                f"Failed to configure Bluetooth adapter: {stderr}"
+            ) from e
 
     def _register_profile(self, dbus_module: Any) -> None:
         """Register HID profile with BlueZ ProfileManager1."""

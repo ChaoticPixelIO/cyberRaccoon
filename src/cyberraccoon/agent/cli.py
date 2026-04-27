@@ -69,8 +69,25 @@ def main() -> None:
         "--skill", dest="skills", action="append", default=[],
         help="Load application skill(s) (repeatable, e.g. --skill wechat --skill blender)",
     )
+    parser.add_argument(
+        "--fake-verification-fail",
+        action="store_true",
+        default=False,
+        help="TEST ONLY: force verify_step to return verified=False deterministically. "
+             "Used by Pi manual smoke test to exercise Path A without editing source. "
+             "Equivalent to setting CYBERRACCOON_FORCE_VERIFY_FAIL=1. "
+             "MUST NOT appear in production configs.",
+    )
 
     args = parser.parse_args()
+
+    if args.fake_verification_fail:
+        os.environ["CYBERRACCOON_FORCE_VERIFY_FAIL"] = "1"
+        print(
+            "TEST ONLY: --fake-verification-fail set; verify_step will return "
+            "verified=False deterministically.",
+            file=sys.stderr,
+        )
 
     # Resolve provider-scoped LLM defaults now that --provider is known.
     provider_defaults = LLM_PROVIDER_DEFAULTS.get(args.provider, {})

@@ -43,12 +43,12 @@ import queue
 from contextlib import asynccontextmanager
 from dataclasses import asdict, fields
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Literal
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
 from cyberraccoon.agent.skills import (
     SkillFormatError,
@@ -61,6 +61,7 @@ from cyberraccoon.agent.skills import (
     save_user_skill,
 )
 from cyberraccoon.ui.app_controller import AppController, AppEvent, AppEventType
+from cyberraccoon.ui.exceptions import ConfigPersistError, NoPlanCachedError
 from cyberraccoon.ui.setup_status import check_setup_status
 
 logger = logging.getLogger("M5.web")
@@ -108,6 +109,29 @@ class DeleteStepRequest(BaseModel):
     step_number: int
 
 
+class ReplanDecisionRequest(BaseModel):
+    """Body for POST /api/task/replan-decision (Phase 3 — H5).
+
+    Choice is strictly validated against the allowed enum. Any value
+    not in the Literal set yields 422 at the FastAPI boundary.
+    The runner performs a second validation against the per-gate
+    allowlist (see workflow_runner.submit_replan_decision).
+    """
+
+    choice: Literal["continue", "retry", "replan", "resume", "abort"]
+
+
+class AutoReplanRequest(BaseModel):
+    """Body for POST /api/task/auto-replan (Phase 3 — REPLAN-06 + H5).
+
+    StrictBool rejects string coercions like 'true'/'1'/1 — only
+    the literal Python booleans True/False are accepted. Prevents
+    Pitfall 7 (string truthiness surprising the persistence layer).
+    """
+
+    enabled: StrictBool
+
+
 # ---------------------------------------------------------------------------
 # WebSocket connection manager
 # ---------------------------------------------------------------------------
@@ -139,10 +163,19 @@ class ConnectionManager:
             connections = list(self._connections)
         dead: list[WebSocket] = []
         text = json.dumps(message, default=str)
+        # I7 — log unexpected send failures. WebSocketDisconnect is benign
+        # (client closed) and logged at DEBUG; anything else might indicate
+        # a server-side bug dropping critical events (replan_dialog).
         for ws in connections:
             try:
                 await ws.send_text(text)
-            except Exception:
+            except WebSocketDisconnect:
+                dead.append(ws)
+            except Exception as e:
+                logger.warning(
+                    "WebSocket send failed unexpectedly (%s); event=%s",
+                    e, message.get("event"),
+                )
                 dead.append(ws)
         # Clean up dead connections
         if dead:
@@ -189,7 +222,15 @@ def create_app(controller: AppController) -> FastAPI:
         try:
             _event_queue.put_nowait(msg)
         except queue.Full:
-            pass  # Drop oldest-style: caller is too fast
+            # I7 — log dropped events so silent loss is debuggable. Critical
+            # events (replan_dialog, escalate, executor_init_failed) being
+            # dropped strands the user. The H7 reconnect-replay GET endpoint
+            # mitigates the user-visible impact for replan/escalate events,
+            # but logging is still essential for diagnosing back-pressure.
+            logger.warning(
+                "Event queue full (size=%d), dropped event=%s",
+                _event_queue.maxsize, msg.get("event"),
+            )
 
     controller.add_listener(_event_bridge)
 
@@ -368,6 +409,67 @@ def create_app(controller: AppController) -> FastAPI:
         controller.resolve_escalation()
         return JSONResponse({"status": "ok"})
 
+    @app.post("/api/task/replan-decision")
+    async def replan_decision(req: ReplanDecisionRequest) -> JSONResponse:
+        """Forward the user's replan dialog choice to the workflow runner.
+
+        Phase 3 — REPLAN-01/02/03. Choice is strictly enum-validated by
+        Pydantic; the controller + runner perform a second per-gate
+        allowlist check (defense in depth).
+        """
+        try:
+            controller.submit_replan_decision(req.choice)
+        except ValueError as e:
+            # Runner rejected the choice (wrong gate)
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except RuntimeError as e:
+            # No active gate
+            return JSONResponse({"error": str(e)}, status_code=409)
+        return JSONResponse({"status": "ok"})
+
+    @app.post("/api/task/auto-replan")
+    async def auto_replan(req: AutoReplanRequest) -> JSONResponse:
+        """Toggle the Auto Re-plan flag and persist to config.yaml.
+
+        Phase 3 — REPLAN-06. Wraps blocking config write in to_thread
+        (Pitfall 1). StrictBool on the request model guarantees
+        req.enabled is a real Python bool.
+
+        Returns 207 Multi-Status when the in-memory toggle applied but the
+        YAML write failed (review I4) — frontend's existing fallback toast
+        handles this case ("config write failed — will not persist across
+        restart").
+        """
+        try:
+            await asyncio.to_thread(controller.set_auto_replan, req.enabled)
+        except ConfigPersistError as e:
+            return JSONResponse(
+                {
+                    "status": "partial",
+                    "applied": "in_memory",
+                    "error": str(e),
+                },
+                status_code=207,
+            )
+        return JSONResponse({"status": "ok"})
+
+    @app.get("/api/task/pending-dialogs")
+    async def get_pending_dialogs() -> JSONResponse:
+        """Return every currently-unresolved dialog for reconnect replay.
+
+        Phase 3 — H7. This is the SINGLE reconnect mechanism. The /ws
+        endpoint does NOT send pending state on connect. The client's
+        ws.onopen handler fetches this endpoint and re-renders any
+        modal from the payload.
+
+        Returns: {"dialogs": [dialog_payload, ...]}
+        Each entry is a dict with the original event payload plus
+        an "_active_gate" marker (so the frontend can tell path A/B/C).
+        Empty list when nothing pending.
+        """
+        pending = controller.get_pending_dialogs()
+        return JSONResponse(pending)
+
     # Phase 7 — Pause / Resume / Cancel (CRUISE-03, CRUISE-05)
     # State validation returns 409 for invalid transitions (review MEDIUM-3).
 
@@ -410,15 +512,24 @@ def create_app(controller: AppController) -> FastAPI:
                 {"status": "error", "message": "Question cannot be blank"},
                 status_code=422,
             )
-        # The controller call is sync and may block for 1-5s during the LLM call
-        answer = await asyncio.to_thread(
-            controller.chat_about_plan, req.question,
-        )
+        # The controller call is sync and may block for 1-5s during the LLM call.
+        # I4 — distinguish "no plan pending" (409 Conflict — user error,
+        # retry won't help) from "LLM call failed" (503 Service Unavailable
+        # — transient, retry might).
+        try:
+            answer = await asyncio.to_thread(
+                controller.chat_about_plan, req.question,
+            )
+        except NoPlanCachedError as e:
+            return JSONResponse(
+                {"status": "error", "message": str(e)},
+                status_code=409,
+            )
         if answer is None:
             return JSONResponse(
                 {
                     "status": "error",
-                    "message": "No plan pending or chat call failed",
+                    "message": "Chat call failed (planner build or LLM call)",
                 },
                 status_code=503,
             )
@@ -736,6 +847,10 @@ def create_app(controller: AppController) -> FastAPI:
 
     # ---- WebSocket ----
 
+    # Phase 3 — H7: WebSocket endpoint does NOT replay pending dialog state
+    # on connect. Reconnect replay is client-driven via GET /api/task/pending-dialogs
+    # (see static/app.js ws.onopen handler). Having both server-push and
+    # client-pull replay would duplicate dialog delivery.
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket) -> None:
         await manager.connect(ws)

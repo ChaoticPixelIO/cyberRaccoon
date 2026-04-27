@@ -230,18 +230,193 @@ EOF
 # and configuring the HCI adapter requires CAP_NET_ADMIN.
 # We apply these to the real Python binary so the server can run as a
 # normal user instead of root.
-echo "[INFO] Granting Bluetooth capabilities to Python..."
+echo "[INFO] Granting Bluetooth capabilities to Python venv interpreter..."
 
-# Resolve the real binary (setcap does not follow symlinks)
-PYTHON_BIN=$(readlink -f "$(which python3)")
+# Resolve $REPO_ROOT/venv/bin/python3 first (visible in logs); fall back to
+# system python3 if the venv is absent. Both resolve to the same inode
+# (/usr/bin/python3.13) on a normal Pi setup, so setcap operates on the same
+# file either way -- but the explicit venv path makes the script's intent clear.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+VENV_PYTHON="$REPO_ROOT/venv/bin/python3"
+
+if [ -e "$VENV_PYTHON" ]; then
+    PYTHON_BIN="$(readlink -f "$VENV_PYTHON")"
+    echo "[INFO] Resolved $VENV_PYTHON -> $PYTHON_BIN"
+else
+    echo "[WARN] $VENV_PYTHON not found (venv not yet created?). Falling back to system python3."
+    PYTHON_BIN="$(readlink -f "$(which python3)")"
+fi
 
 if [ -z "$PYTHON_BIN" ] || [ ! -f "$PYTHON_BIN" ]; then
     echo "[WARN] Could not locate Python binary; skipping setcap."
-    echo "       Run manually: sudo setcap 'cap_net_bind_service+eip cap_net_admin+eip' /usr/bin/python3.X"
+    echo "       After creating the venv, re-run: sudo scripts/setup.sh --bt"
 else
+    # KEEP BOTH CAPS -- cap_net_bind_service is required for L2CAP PSM 17/19
+    # bind (see bluetooth_device.py:381-386); setcap REPLACES rather than
+    # merges, so dropping one would silently break socket creation.
     setcap 'cap_net_bind_service+eip cap_net_admin+eip' "$PYTHON_BIN"
     echo "[OK] Capabilities set on $PYTHON_BIN"
-    echo "     (cap_net_bind_service: L2CAP PSM 17/19, cap_net_admin: hciconfig)"
+    echo "     cap_net_bind_service: L2CAP PSM 17/19 bind"
+    echo "     cap_net_admin:        hciconfig adapter config"
+    # Verify
+    ACTUAL=$(getcap "$PYTHON_BIN" 2>/dev/null || true)
+    echo "[VERIFY] $ACTUAL"
+    echo "[NOTE]   Capabilities live on the inode of $PYTHON_BIN."
+    echo "         Recreating the venv with the same Python version preserves them."
+    echo "         If you upgrade or reinstall system Python, re-run: sudo scripts/setup.sh --bt"
+    echo "[NOTE]   These caps apply to ALL Python processes using this interpreter."
+    echo "         On a single-purpose Pi this is acceptable; document if multi-tenant."
+fi
+
+# ---------------------------------------------------------------------------
+# Step 7: Disable PipeWire/wireplumber BlueZ monitor (persistent)
+# ---------------------------------------------------------------------------
+# Why: wireplumber's bluez monitor registers Audio Source/Sink/AVRCP/Handsfree
+# UUIDs on hci0 whenever it starts. macOS' SDP discovery during pair sees an
+# audio device and caches that -- no HID UUID 0x1124 in the bond record, so
+# macOS will never open PSM 17/19. Disable ONLY the bluez monitor; ALSA,
+# v4l2, and AirPlay (uxplay -> GStreamer -> ALSA) are unaffected.
+#
+# Targets wireplumber 0.5+ (Debian 13 default uses SPA-JSON drop-ins).
+echo "[INFO] Configuring wireplumber to disable BlueZ monitor at /etc/wireplumber/wireplumber.conf.d/51-disable-bluez.conf..."
+
+WP_CONF_DIR="/etc/wireplumber/wireplumber.conf.d"
+WP_CONF_FILE="$WP_CONF_DIR/51-disable-bluez.conf"
+WP_CONF_CONTENT='# Disable PipeWire BlueZ monitor to prevent audio UUIDs from competing with
+# our HID profile on hci0. Other monitors (alsa, v4l2) are unaffected, so
+# AirPlay audio (uxplay -> GStreamer -> ALSA) keeps working.
+#
+# Managed by scripts/setup/bluetooth.sh -- re-run to refresh.
+wireplumber.profiles = {
+  main = {
+    monitor.bluez = disabled
+    monitor.bluez-midi = disabled
+  }
+}
+'
+
+mkdir -p "$WP_CONF_DIR"
+# Idempotency via byte-exact compare (codex HIGH concern fix):
+# The previous form `[ "$(cat ...)" != "$WP_CONF_CONTENT" ]` was broken
+# because command substitution strips trailing newlines, so a byte-identical
+# file compared unequal and the script rewrote every run. Use `cmp -s`
+# against a `mktemp` tempfile and `install -m 644` for an atomic copy
+# that sets perms in one operation.
+TMP_CONF="$(mktemp)"
+printf '%s' "$WP_CONF_CONTENT" > "$TMP_CONF"
+if [ ! -f "$WP_CONF_FILE" ] || ! cmp -s "$TMP_CONF" "$WP_CONF_FILE"; then
+    install -m 644 "$TMP_CONF" "$WP_CONF_FILE"
+    echo "[OK] Wrote $WP_CONF_FILE"
+else
+    echo "[INFO] $WP_CONF_FILE already current"
+fi
+rm -f "$TMP_CONF"
+
+# Best-effort runtime apply (cold boot will load it cleanly anyway).
+# The setup script runs as root via sudo; wireplumber runs in the login
+# user's systemd-user instance. Use --machine=$LOGIN_USER@.host to target
+# the user bus from a root shell. Failure is non-fatal -- cold reboot picks
+# up the config file naturally on next user login.
+#
+# Codex MEDIUM concern fix: distinguish "transport unavailable" (no user
+# bus / systemd-machined missing) from "unit simply inactive" via a
+# `show-environment` probe before the is-active check.
+LOGIN_USER="${SUDO_USER:-$(logname 2>/dev/null || echo '')}"
+if [ -n "$LOGIN_USER" ]; then
+    # Probe transport first -- distinguishes "user bus missing" from "unit inactive"
+    if ! systemctl --user --machine="${LOGIN_USER}@.host" --no-pager show-environment >/dev/null 2>&1; then
+        echo "[WARN] Cannot reach user systemd for $LOGIN_USER (systemd-machined or user bus unavailable)."
+        echo "       Cold boot will load the wireplumber config naturally."
+    elif systemctl --user --machine="${LOGIN_USER}@.host" is-active wireplumber >/dev/null 2>&1; then
+        if systemctl --user --machine="${LOGIN_USER}@.host" restart wireplumber 2>/dev/null; then
+            echo "[OK] Restarted wireplumber for $LOGIN_USER (config applied to current session)"
+        else
+            echo "[WARN] Transport reachable but restart failed. Cold boot will apply."
+        fi
+    else
+        echo "[INFO] wireplumber not active for $LOGIN_USER (will load on next login)."
+    fi
+else
+    echo "[INFO] Could not determine login user; runtime restart skipped (cold boot will apply)."
+fi
+
+# ---------------------------------------------------------------------------
+# Step 8: Persist HID device class in /etc/bluetooth/main.conf
+# ---------------------------------------------------------------------------
+# Why: BTHID-01 originally relied on `setcap cap_net_admin+eip` on the venv
+# Python interpreter so `_configure_adapter` could call `hciconfig hci0 class
+# 0x002540` at runtime. That design failed on real hardware (cycle-9
+# checkpoint, see .planning/phases/04-harden-bluetooth-hid-setup/04-03-SUMMARY.md
+# Step 8): file caps DO NOT propagate to subprocess'd hciconfig because the
+# parent's CapInh=0 / CapAmb=0 zero out NewPermitted in the child. By
+# persisting the class in main.conf, bluetoothd applies it on its own start
+# (it already holds CAP_NET_ADMIN), so no runtime privileged op is required.
+#
+# Idempotency: mirror Step 7 (cmp -s + mktemp + install -m 644). Unlike
+# Step 7 (which owns the entire wireplumber drop-in), main.conf is shared
+# with stock BlueZ defaults. We must preserve other [General] keys
+# (Name, DiscoverableTimeout, etc.) — so we render the merged content
+# in a tempfile and only install if it differs byte-exact from the live file.
+BT_CONF_FILE="/etc/bluetooth/main.conf"
+TARGET_CLASS="0x002540"
+
+if [ ! -f "$BT_CONF_FILE" ]; then
+    echo "[WARN] $BT_CONF_FILE not found — skipping Class persistence (is bluez installed?)"
+else
+    echo "[INFO] Ensuring [General] Class = $TARGET_CLASS in $BT_CONF_FILE..."
+
+    TMP_CONF="$(mktemp)"
+    # awk merge:
+    #   - if a Class= line exists anywhere in [General], replace it in place
+    #   - otherwise insert `Class = 0x002540` at the end of [General]
+    #   - all other sections (e.g. [Policy], [GATT]) and keys are preserved
+    #   - if [General] does not exist, append it at EOF with the Class line
+    awk -v target="$TARGET_CLASS" '
+        BEGIN { in_general = 0; found_general = 0; class_set = 0 }
+        /^\[General\]/ {
+            in_general = 1; found_general = 1; print; next
+        }
+        /^\[/ && !/^\[General\]/ {
+            if (in_general && !class_set) {
+                print "Class = " target
+                class_set = 1
+            }
+            in_general = 0; print; next
+        }
+        in_general && /^[[:space:]]*Class[[:space:]]*=/ {
+            if (!class_set) {
+                print "Class = " target
+                class_set = 1
+            }
+            next
+        }
+        { print }
+        END {
+            if (found_general && !class_set) {
+                print "Class = " target
+            } else if (!found_general) {
+                print ""
+                print "[General]"
+                print "Class = " target
+            }
+        }
+    ' "$BT_CONF_FILE" > "$TMP_CONF"
+
+    if ! cmp -s "$TMP_CONF" "$BT_CONF_FILE"; then
+        install -m 644 "$TMP_CONF" "$BT_CONF_FILE"
+        echo "[OK] Wrote $BT_CONF_FILE (Class = $TARGET_CLASS)"
+        # Restart bluetoothd once so the new class takes effect immediately.
+        # Cold reboot would also pick it up; this avoids a reboot in the
+        # interactive setup flow.
+        if systemctl restart bluetooth 2>/dev/null; then
+            echo "[OK] Restarted bluetooth.service (class change applied)"
+        else
+            echo "[WARN] systemctl restart bluetooth failed; cold reboot will apply"
+        fi
+    else
+        echo "[INFO] $BT_CONF_FILE already current (Class = $TARGET_CLASS)"
+    fi
+    rm -f "$TMP_CONF"
 fi
 
 echo ""

@@ -25,3 +25,4 @@ env/
 .env
 .env.local
 .gstack/
+.claude/

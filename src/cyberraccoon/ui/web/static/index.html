@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CyberRaccoon</title>
-    <link rel="stylesheet" href="/static/style.css?v=12">
+    <link rel="stylesheet" href="/static/style.css?v=15">
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <script src="/static/app.js?v=15"></script>
 </head>
@@ -192,9 +192,106 @@
                 <div class="escalation-header">Action Required</div>
                 <p class="escalation-reason" x-text="escalationReason"></p>
                 <p class="muted">Resolve the issue on the target machine, then click Resume.</p>
-                <button class="btn btn-sm btn-start" @click="resolveEscalation()">Resume</button>
+                <div class="escalation-actions" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <button class="btn btn-sm btn-start"
+                            @click="submitReplanDecision('resume')"
+                            title="Discard the dialog and continue with the next step.">Resume</button>
+                    <button class="btn btn-sm btn-primary"
+                            @click="submitReplanDecision('replan')"
+                            title="Discard remaining steps and replan from the current screen.">Re-plan</button>
+                    <button class="btn btn-sm btn-danger"
+                            @click="submitReplanDecision('abort')"
+                            title="Stop the task entirely.">Abort</button>
+                </div>
             </div>
         </template>
+
+        <!-- Phase 3 — Replan dialog (paths A and B) -->
+        <template x-if="replanDialog">
+          <div class="replan-dialog-backdrop" @keydown.escape.window="submitReplanDecision(replanDialog.path === 'A' ? 'continue' : 'abort')">
+            <div class="replan-dialog"
+                 :class="replanDialog.path === 'A' ? 'replan-dialog-warning' : 'replan-dialog-error'"
+                 role="dialog"
+                 aria-modal="true"
+                 aria-labelledby="replan-dialog-title"
+                 aria-describedby="replan-dialog-preamble"
+                 x-init="$nextTick(() => trapFocus($el))">
+              <div class="replan-dialog-header">
+                <h3 id="replan-dialog-title"
+                    class="replan-dialog-title"
+                    x-text="replanDialog.path === 'A' ? 'Verification Failed' : 'Step Failed'"></h3>
+              </div>
+              <p id="replan-dialog-preamble" class="replan-dialog-preamble"
+                 x-text="replanDialog.path === 'A'
+                         ? 'The verifier flagged a possible mismatch. Review and choose how to proceed.'
+                         : 'The step failed after all retries. Choose how to recover.'"></p>
+              <div class="replan-dialog-fields">
+                <div class="replan-dialog-field">
+                  <div class="replan-dialog-field-label">Step</div>
+                  <div class="replan-dialog-field-value"
+                       x-text="'#' + replanDialog.step_number + ' — ' + replanDialog.step_goal"></div>
+                </div>
+                <template x-if="replanDialog.path === 'A'">
+                  <div>
+                    <div class="replan-dialog-field">
+                      <div class="replan-dialog-field-label">Expected</div>
+                      <div class="replan-dialog-field-value" x-text="replanDialog.expected"></div>
+                    </div>
+                    <div class="replan-dialog-field">
+                      <div class="replan-dialog-field-label">Observed</div>
+                      <div class="replan-dialog-field-value" x-text="replanDialog.observed"></div>
+                    </div>
+                    <div class="replan-dialog-field">
+                      <div class="replan-dialog-field-label">Mismatch</div>
+                      <div class="replan-dialog-field-value" x-text="replanDialog.mismatch_reason"></div>
+                    </div>
+                  </div>
+                </template>
+                <template x-if="replanDialog.path === 'B'">
+                  <div class="replan-dialog-field">
+                    <div class="replan-dialog-field-label">Reason</div>
+                    <div class="replan-dialog-field-value" x-text="replanDialog.failure_reason"></div>
+                  </div>
+                </template>
+                <template x-if="replanDialog.screenshot_base64">
+                  <div class="replan-dialog-screenshot">
+                    <div class="replan-dialog-field-label">Current screen</div>
+                    <a :href="'data:image/jpeg;base64,' + replanDialog.screenshot_base64" target="_blank" rel="noopener">
+                      <img :src="'data:image/jpeg;base64,' + replanDialog.screenshot_base64" alt="Current screen" />
+                    </a>
+                  </div>
+                </template>
+              </div>
+              <template x-if="connectionLostDuringDialog">
+                <div class="replan-dialog-connection-lost">Connection lost. Waiting to reconnect…</div>
+              </template>
+              <div class="replan-dialog-actions">
+                <template x-if="replanDialog.path === 'A'">
+                  <div style="display: contents;">
+                    <button class="btn" @click="submitReplanDecision('continue')" :disabled="replanDecisionPending">Continue Anyway</button>
+                    <button class="btn btn-primary" @click="submitReplanDecision('replan')" :disabled="replanDecisionPending">
+                      <span x-show="!replanDecisionPending">Re-plan</span>
+                      <span x-show="replanDecisionPending">Re-planning…</span>
+                    </button>
+                  </div>
+                </template>
+                <template x-if="replanDialog.path === 'B'">
+                  <div style="display: contents;">
+                    <button class="btn btn-danger" @click="submitReplanDecision('abort')" :disabled="replanDecisionPending">Abort Task</button>
+                    <button class="btn" @click="submitReplanDecision('retry')" :disabled="replanDecisionPending">Retry Once</button>
+                    <button class="btn btn-primary" @click="submitReplanDecision('replan')" :disabled="replanDecisionPending">
+                      <span x-show="!replanDecisionPending">Re-plan</span>
+                      <span x-show="replanDecisionPending">Re-planning…</span>
+                    </button>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- Phase 3 — Live region for screen reader announcements -->
+        <div aria-live="assertive" class="sr-only" id="replan-dialog-live"></div>
 
         <!-- ---- Split layout: step inspection area (D-09) ---- -->
         <div class="step-split" x-ref="splitContainer">
@@ -311,6 +408,12 @@
                                 </div>
                             </div>
                         </template>
+                        <!-- Phase 3 — Divider implementation: Branch B CSS fallback -->
+                        <!-- Decision made at plan execution time based on x-for shape inspection (M5). -->
+                        <!-- The x-for iterates `computedDiff` with only `diffEntry` (no index exposed), -->
+                        <!-- so predecessor-state access inside x-if is not feasible. The CSS -->
+                        <!-- `.workflow-step.ws-cancelled + .workflow-step:not(.ws-cancelled)::before` -->
+                        <!-- rule in style.css emits the "Re-planned steps" divider. -->
                         <template x-for="diffEntry in computedDiff" :key="diffEntry.key">
                             <div>
                                 <div class="workflow-step"
@@ -321,7 +424,7 @@
                                      @click="planPaused && diffEntry.status === 'done' ? null : selectWorkflowStep(diffEntry.number)"
                                      style="cursor: pointer;">
                                     <span class="ws-check"
-                                          x-text="diffEntry.status === 'done' ? '✓' : diffEntry.status === 'running' ? '▶' : diffEntry.status === 'rebooting' ? '⟳' : diffEntry.status === 'escalated' ? '!' : '○'"></span>
+                                          x-text="diffEntry.status === 'done' ? '✓' : diffEntry.status === 'running' ? '▶' : diffEntry.status === 'rebooting' ? '⟳' : diffEntry.status === 'escalated' ? '!' : diffEntry.status === 'cancelled' ? '✗' : '○'"></span>
                                     <span class="ws-num" x-text="diffEntry.number + '.'"></span>
 
                                     <!-- Manually-edited marker (persists outside preview) -->
@@ -515,22 +618,29 @@
                     </div>
                 </template>
 
-                <div class="follow-indicator"
-                     :class="{ following: autoFollow && selectedStep === null }">
+                <div class="follow-indicator">
                     <button type="button"
-                            class="plan-mode-pill"
-                            :class="{ 'plan-mode-pill-active': autoFollow }"
+                            class="toggle-switch"
+                            :class="{ 'toggle-switch-on': autoFollow }"
                             @click="autoFollow = !autoFollow"
                             role="switch"
                             :aria-checked="autoFollow"
                             aria-label="Auto-follow latest step"
-                            title="Toggle auto-follow">Auto-follow</button>
-                    <template x-if="autoFollow && selectedStep === null">
-                        <span>Following latest</span>
-                    </template>
-                    <template x-if="!autoFollow && selectedStep === null">
-                        <span>Paused</span>
-                    </template>
+                            data-tooltip="When on, the view auto-scrolls to the latest step as it runs.">
+                        <span class="toggle-switch-label">Auto-follow</span>
+                        <span class="toggle-switch-track"><span class="toggle-switch-thumb"></span></span>
+                    </button>
+                    <button type="button"
+                            class="toggle-switch"
+                            :class="{ 'toggle-switch-on': autoReplan }"
+                            @click="toggleAutoReplan()"
+                            role="switch"
+                            :aria-checked="autoReplan"
+                            aria-label="Toggle automatic re-plan on verification or step failure"
+                            data-tooltip="If a step's outcome doesn't match what was expected, the agent rewrites the remaining steps to keep the overall goal on track. Turn this on to skip the confirmation dialog and let re-planning happen automatically.">
+                        <span class="toggle-switch-label">Auto Re-plan</span>
+                        <span class="toggle-switch-track"><span class="toggle-switch-thumb"></span></span>
+                    </button>
                     <template x-if="selectedStep !== null">
                         <span x-text="'Viewing step #' + (activeStep ? activeStep.step : '')"></span>
                     </template>
