@@ -330,21 +330,81 @@ fi
 
 echo ""
 echo -e "${BOLD}==========================================${NC}"
-echo -e "${GREEN}${BOLD}  CyberRaccoon installed successfully!${NC}"
+echo -e "${GREEN}${BOLD}  CyberRaccoon software installed!${NC}"
 echo -e "${BOLD}==========================================${NC}"
 echo ""
 echo -e "  ${BOLD}Web UI:${NC} http://${PI_HOSTNAME}:${WEB_PORT}"
 echo ""
+
+# ---------------------------------------------------------------------------
+# Step 8: Offer hardware setup
+# ---------------------------------------------------------------------------
+
+SETUP_SCRIPT="$INSTALL_DIR/scripts/setup.sh"
+
+echo -e "${BOLD}─────────────────────────────────────────────────────────────${NC}"
+echo ""
+echo "CyberRaccoon needs TWO hardware paths to work:"
+echo ""
+echo "  1. CONTROL — how the Pi sends keyboard+mouse to the target"
+echo "       • Bluetooth — Pi pairs as a wireless keyboard+mouse, OR"
+echo "       • USB       — USB-C cable from Pi to target; Pi shows up"
+echo "                     as a plug-in keyboard+mouse"
+echo "     One of these must be configured before the agent can act."
+echo ""
+echo "  2. CAPTURE — how the Pi sees the target's screen"
+echo "       • CSI HDMI bridge (TC358743) — small board that takes"
+echo "         the target's HDMI output and feeds it into the Pi's"
+echo "         camera (CSI) port, so the Pi sees it as a camera feed"
+echo "       • AirPlay — mirror a Mac/iPhone screen to the Pi"
+echo "                   wirelessly (no cable needed)"
+echo "       • USB HDMI capture card — [work in progress, not yet"
+echo "                                  supported by this installer]"
+echo ""
+echo "The next step will let you pick which components to install."
+echo "It requires sudo and will modify /boot/firmware/config.txt,"
+echo "load kernel modules, and install system packages."
+echo ""
+echo "You can skip and run 'sudo $SETUP_SCRIPT' later, but the"
+echo "agent will not function until at least one CONTROL path and"
+echo "one CAPTURE path are configured."
+echo ""
+
+RUN_SETUP=""
+if [ ! -x "$SETUP_SCRIPT" ]; then
+    warn "Hardware setup script not found at $SETUP_SCRIPT — skipping."
+elif [ ! -t 0 ]; then
+    warn "Non-interactive shell detected — skipping hardware setup."
+    warn "Run later: sudo $SETUP_SCRIPT"
+else
+    read -r -p "Run hardware setup now? [Y/n] " RUN_SETUP
+    RUN_SETUP="${RUN_SETUP,,}"  # lowercase
+    if [ -z "$RUN_SETUP" ] || [ "$RUN_SETUP" = "y" ] || [ "$RUN_SETUP" = "yes" ]; then
+        echo ""
+        info "Launching hardware setup (sudo required)..."
+        echo ""
+        sudo "$SETUP_SCRIPT" || warn "Hardware setup exited with errors. Re-run later: sudo $SETUP_SCRIPT"
+    else
+        echo ""
+        info "Skipped. Run later: sudo $SETUP_SCRIPT"
+    fi
+fi
+
+echo ""
+echo -e "${BOLD}==========================================${NC}"
+echo -e "${GREEN}${BOLD}  All done!${NC}"
+echo -e "${BOLD}==========================================${NC}"
+echo ""
 echo "  Next steps:"
-echo "    1. Open the Web UI in your browser"
-echo "    2. Go to the Status tab — it shows what hardware setup is needed"
-echo "    3. Run the setup commands shown (e.g. sudo scripts/setup.sh --all)"
-echo "    4. Set your API key in the Config tab"
-echo "    5. Submit a task!"
+echo "    1. Open the Web UI: http://${PI_HOSTNAME}:${WEB_PORT}"
+echo "    2. Go to the Status tab — confirm hardware is detected"
+echo "    3. Set your API key in the Config tab"
+echo "    4. Submit a task!"
 echo ""
 echo "  Useful commands:"
 echo "    sudo systemctl status cyberraccoon    # check service"
 echo "    sudo journalctl -u cyberraccoon -f    # view logs"
 echo "    sudo systemctl restart cyberraccoon   # restart"
+echo "    sudo $SETUP_SCRIPT                    # (re)configure hardware"
 echo ""
 echo -e "${BOLD}==========================================${NC}"

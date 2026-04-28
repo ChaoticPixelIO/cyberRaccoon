@@ -136,11 +136,17 @@ if $DO_INTERACTIVE; then
     [ -f /proc/device-tree/model ] && MODEL=$(tr -d '\0' < /proc/device-tree/model)
     info "Detected: $MODEL"
     echo ""
-    echo "  Available components:"
-    echo "    [B] Bluetooth HID  — wireless keyboard/mouse to target"
-    echo "    [G] USB Gadget     — wired keyboard/mouse via USB OTG"
-    echo "    [A] AirPlay        — screen capture from Mac/iPhone"
-    echo "    [C] CSI HDMI       — screen capture via TC358743 bridge"
+    echo "  CyberRaccoon needs at least ONE control method AND at least ONE capture"
+    echo "  method to work. Pick from each group, or just type 'all' for everything."
+    echo ""
+    echo "    CONTROL  (pick at least one):  B = Bluetooth      G = USB Gadget"
+    echo "    CAPTURE  (pick at least one):  A = AirPlay        C = CSI HDMI"
+    echo ""
+    echo "  Combine letters in any order. Examples:"
+    echo "    BC      → Bluetooth + CSI HDMI    (recommended for wired-only setup)"
+    echo "    GA      → USB Gadget + AirPlay    (recommended for Mac/iPhone wireless capture)"
+    echo "    BGAC    → install everything (same as 'all')"
+    echo "    all     → everything applicable   (simplest)"
     if is_pi5; then
         echo ""
         echo "  Note: On Pi 5, single-cable USB-C OTG hits a known dwc2 kernel bug."
@@ -148,30 +154,89 @@ if $DO_INTERACTIVE; then
     fi
 
     echo ""
-    echo "  Enter letters for components to set up (e.g. 'BA' for Bluetooth + AirPlay)"
-    echo "  or 'all' for everything applicable."
+    echo "  (type 'q' to quit without configuring anything)"
     echo ""
-    read -rp "  Components: " CHOICES
 
-    CHOICES=$(echo "$CHOICES" | tr '[:lower:]' '[:upper:]')
+    # Loop until the user picks a valid combo or explicitly quits / confirms anyway.
+    while true; do
+        # Reset flags each iteration so re-picking starts clean.
+        DO_BT=false
+        DO_GADGET=false
+        DO_AIRPLAY=false
+        DO_CSI=false
 
-    if [ "$CHOICES" = "ALL" ]; then
-        DO_BT=true
-        DO_GADGET=true
-        DO_AIRPLAY=true
-        DO_CSI=true
-    else
-        [[ "$CHOICES" == *B* ]] && DO_BT=true
-        [[ "$CHOICES" == *G* ]] && DO_GADGET=true
-        [[ "$CHOICES" == *A* ]] && DO_AIRPLAY=true
-        [[ "$CHOICES" == *C* ]] && DO_CSI=true
-    fi
+        read -rp "  Components: " CHOICES
+        CHOICES=$(echo "$CHOICES" | tr '[:lower:]' '[:upper:]')
 
-    if ! $DO_BT && ! $DO_GADGET && ! $DO_AIRPLAY && ! $DO_CSI; then
+        if [ "$CHOICES" = "Q" ] || [ "$CHOICES" = "QUIT" ] || [ "$CHOICES" = "EXIT" ]; then
+            echo ""
+            info "Quit. To set up specific components later, see:"
+            info "  sudo $0 --help"
+            exit 0
+        fi
+
+        if [ "$CHOICES" = "ALL" ]; then
+            DO_BT=true
+            DO_GADGET=true
+            DO_AIRPLAY=true
+            DO_CSI=true
+        else
+            [[ "$CHOICES" == *B* ]] && DO_BT=true
+            [[ "$CHOICES" == *G* ]] && DO_GADGET=true
+            [[ "$CHOICES" == *A* ]] && DO_AIRPLAY=true
+            [[ "$CHOICES" == *C* ]] && DO_CSI=true
+        fi
+
+        if ! $DO_BT && ! $DO_GADGET && ! $DO_AIRPLAY && ! $DO_CSI; then
+            echo ""
+            warn "Nothing selected. Pick at least one letter (B, G, A, C) or 'all'. Type 'q' to quit."
+            echo ""
+            continue
+        fi
+
+        # Soft-validation: warn if user picked only CONTROL or only CAPTURE
+        HAS_CONTROL=false
+        HAS_CAPTURE=false
+        $DO_BT      && HAS_CONTROL=true
+        $DO_GADGET  && HAS_CONTROL=true
+        $DO_AIRPLAY && HAS_CAPTURE=true
+        $DO_CSI     && HAS_CAPTURE=true
+
+        if $HAS_CONTROL && $HAS_CAPTURE; then
+            break  # valid combo, proceed
+        fi
+
         echo ""
-        info "Nothing selected. Exiting."
-        exit 0
-    fi
+        if ! $HAS_CONTROL; then
+            warn "You picked CAPTURE but no CONTROL — the agent won't be able to send keyboard/mouse to the target."
+        fi
+        if ! $HAS_CAPTURE; then
+            warn "You picked CONTROL but no CAPTURE — the agent won't be able to see the target's screen."
+        fi
+        echo ""
+        echo "    y = yes, continue with this partial setup"
+        echo "    r = re-pick components  (default)"
+        echo "    q = quit setup"
+        read -rp "  Choice [y/R/q]: " CONFIRM
+        CONFIRM=$(echo "$CONFIRM" | tr '[:upper:]' '[:lower:]')
+        case "$CONFIRM" in
+            y|yes)
+                break  # user confirmed partial setup
+                ;;
+            q|quit|exit)
+                echo ""
+                info "Quit. To set up specific components later, see:"
+                info "  sudo $0 --help"
+                exit 0
+                ;;
+            *)
+                # blank, r, or anything else → loop back to the picker
+                echo ""
+                info "Let's pick again."
+                echo ""
+                ;;
+        esac
+    done
 fi
 
 # ---------------------------------------------------------------------------
@@ -223,6 +288,12 @@ if $DO_GADGET && is_pi5; then
     echo "      dwc2 kernel bug. If you are not already using a USB power/data"
     echo "      splitter cable, set one up: external power to the Pi, data"
     echo "      cable from Pi USB-C to the target."
+    echo ""
+fi
+
+if ! $DO_BT || ! $DO_GADGET || ! $DO_AIRPLAY || ! $DO_CSI; then
+    echo "  Some components weren't configured this run. To set up the rest later:"
+    echo "    sudo $0 --help"
     echo ""
 fi
 
