@@ -23,8 +23,8 @@ from cyberraccoon.capture.screen_capture import CaptureError
 
 def make_mock_camera(
     frame: np.ndarray,
-    width: int = 1280,
-    height: int = 720,
+    width: int = 1920,
+    height: int = 1080,
     quality: int = 80,
 ) -> CameraCapture:
     """Create a CameraCapture with a mocked Picamera2 backend.
@@ -76,9 +76,9 @@ class TestCaptureResult:
         """Output image size should match target resolution."""
         cam = make_mock_camera(_rgb_frame_1080p())
         result = cam.capture()
-        assert result.width == 1280
-        assert result.height == 720
-        assert result.image.size == (1280, 720)
+        assert result.width == 1920
+        assert result.height == 1080
+        assert result.image.size == (1920, 1080)
 
     def test_base64_is_valid_jpeg(self) -> None:
         """Base64 decoded content should be valid JPEG at target resolution."""
@@ -87,7 +87,7 @@ class TestCaptureResult:
         jpeg_bytes = base64.b64decode(result.base64_jpeg)
         image = Image.open(io.BytesIO(jpeg_bytes))
         assert image.format == "JPEG"
-        assert image.size == (1280, 720)
+        assert image.size == (1920, 1080)
 
     def test_size_bytes_matches_jpeg(self) -> None:
         """size_bytes should equal actual JPEG byte count."""
@@ -121,10 +121,10 @@ class TestCaptureResult:
 
     def test_no_resize_when_matching(self) -> None:
         """Should skip resize when frame already matches target resolution."""
-        cam = make_mock_camera(_rgb_frame_720p(), width=1280, height=720)
+        cam = make_mock_camera(_rgb_frame_1080p(), width=1920, height=1080)
         result = cam.capture()
-        assert result.width == 1280
-        assert result.height == 720
+        assert result.width == 1920
+        assert result.height == 1080
 
     def test_image_is_rgb(self) -> None:
         """Output PIL Image should be in RGB mode."""
@@ -138,7 +138,7 @@ class TestCaptureResult:
         result = cam.capture()
         jpeg_bytes = base64.b64decode(result.base64_jpeg)
         img = Image.open(io.BytesIO(jpeg_bytes))
-        assert img.size == (1280, 720)
+        assert img.size == (1920, 1080)
         assert img.mode == "RGB"
 
 
@@ -234,8 +234,8 @@ class TestInit:
         """Default constructor values should match design spec."""
         cam = CameraCapture()
         assert cam._camera_index == 0
-        assert cam._target_width == 1280
-        assert cam._target_height == 720
+        assert cam._target_width == 1920
+        assert cam._target_height == 1080
         assert cam._jpeg_quality == 80
         assert cam._picam is None
 

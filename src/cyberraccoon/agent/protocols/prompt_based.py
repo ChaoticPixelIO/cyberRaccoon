@@ -58,8 +58,8 @@ class PromptBasedProtocol(ComputerUseProtocol):
         max_tokens: int = 4096,
         temperature: float = 0.0,
         history_max_turns: int = 10,
-        display_width: int = 1280,
-        display_height: int = 720,
+        display_width: int = 1920,
+        display_height: int = 1080,
         enable_cache: bool = True,
         skill_text: str | None = None,
     ) -> None:

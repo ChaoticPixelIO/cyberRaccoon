@@ -67,8 +67,8 @@ class OpenAICUProtocol(ComputerUseProtocol):
         model: str,
         api_key: str,
         *,
-        display_width: int = 1280,
-        display_height: int = 720,
+        display_width: int = 1920,
+        display_height: int = 1080,
         skill_text: str | None = None,
     ) -> None:
         import openai

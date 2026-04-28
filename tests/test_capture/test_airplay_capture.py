@@ -86,8 +86,8 @@ def _bgr_frame_720p() -> np.ndarray:
 
 def make_mock_airplay(
     frame: np.ndarray | None = None,
-    width: int = 1280,
-    height: int = 720,
+    width: int = 1920,
+    height: int = 1080,
     quality: int = 80,
     rtp_port: int = 5004,
 ) -> AirPlayCapture:
@@ -135,8 +135,8 @@ def _make_test_jpeg(path: str | Path, width: int = 1920, height: int = 1080,
 
 def make_mock_airplay_file_mode(
     frame_dir: str | None = None,
-    width: int = 1280,
-    height: int = 720,
+    width: int = 1920,
+    height: int = 1080,
     quality: int = 80,
 ) -> AirPlayCapture:
     """Create an AirPlayCapture pre-configured for file mode testing.
@@ -179,9 +179,9 @@ class TestCaptureResult:
         cap = make_mock_airplay(_bgr_frame_1080p())
         with patch.dict(sys.modules, {"cv2": mock_cv2}):
             result = cap.capture()
-        assert result.width == 1280
-        assert result.height == 720
-        assert result.image.size == (1280, 720)
+        assert result.width == 1920
+        assert result.height == 1080
+        assert result.image.size == (1920, 1080)
 
     def test_base64_is_valid_jpeg(self) -> None:
         """Base64 decoded content should be valid JPEG."""
@@ -192,7 +192,7 @@ class TestCaptureResult:
         jpeg_bytes = base64.b64decode(result.base64_jpeg)
         image = Image.open(io.BytesIO(jpeg_bytes))
         assert image.format == "JPEG"
-        assert image.size == (1280, 720)
+        assert image.size == (1920, 1080)
 
     def test_size_bytes_matches_jpeg(self) -> None:
         """size_bytes should equal actual JPEG byte count."""
@@ -235,11 +235,11 @@ class TestCaptureResult:
     def test_no_resize_when_matching(self) -> None:
         """Should skip resize when frame already matches target resolution."""
         mock_cv2 = _make_mock_cv2()
-        cap = make_mock_airplay(_bgr_frame_720p(), width=1280, height=720)
+        cap = make_mock_airplay(_bgr_frame_1080p(), width=1920, height=1080)
         with patch.dict(sys.modules, {"cv2": mock_cv2}):
             result = cap.capture()
-        assert result.width == 1280
-        assert result.height == 720
+        assert result.width == 1920
+        assert result.height == 1080
 
     def test_image_is_rgb(self) -> None:
         """Output PIL Image should be in RGB mode."""
@@ -257,7 +257,7 @@ class TestCaptureResult:
             result = cap.capture()
         jpeg_bytes = base64.b64decode(result.base64_jpeg)
         img = Image.open(io.BytesIO(jpeg_bytes))
-        assert img.size == (1280, 720)
+        assert img.size == (1920, 1080)
         assert img.mode == "RGB"
 
 
@@ -562,8 +562,8 @@ class TestInit:
 
     def test_default_fields(self) -> None:
         cap = AirPlayCapture()
-        assert cap._target_width == 1280
-        assert cap._target_height == 720
+        assert cap._target_width == 1920
+        assert cap._target_height == 1080
         assert cap._jpeg_quality == 80
         assert cap._rtp_port == 5004
         assert cap._uxplay_name == "CyberRaccoon"
@@ -1073,9 +1073,9 @@ class TestFileModeCapture:
         cap = make_mock_airplay_file_mode(frame_dir=frame_dir)
         result = cap.capture()
 
-        assert result.width == 1280
-        assert result.height == 720
-        assert result.image.size == (1280, 720)
+        assert result.width == 1920
+        assert result.height == 1080
+        assert result.image.size == (1920, 1080)
         assert result.image.mode == "RGB"
         assert result.size_bytes > 0
 

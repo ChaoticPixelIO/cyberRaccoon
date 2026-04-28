@@ -43,43 +43,89 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 1: Disable BlueZ input plugin
+# Step 1: Disable BlueZ plugins that pollute the HID SDP record
 # ---------------------------------------------------------------------------
-# The BlueZ "input" plugin hijacks HID Profile registration, preventing
-# our custom L2CAP socket server from binding to PSM 17/19.
-# We need to disable it so our code can manage HID connections directly.
+# We need bluetoothd to advertise ONLY HID + base profiles. Without this,
+# disabling just the "input" plugin is not enough -- BlueZ's audio plugins
+# still register Audio Source/Sink + AVRCP UUIDs, and macOS sees a
+# multi-profile device and prioritizes audio over HID, then aborts before
+# opening the HID L2CAP channels. (Concrete failure: Mac sends
+# AuthorizeService for AVRCP UUID 0x110e, link is torn down before the HID
+# handshake; kernel logs "ACL packet for unknown connection handle".)
+#
+# Plugins disabled:
+#   input         BlueZ's HID host plugin would claim HID profile
+#                 registration and block our L2CAP server on PSM 17/19.
+#   a2dp,avrcp    Audio profiles -- the source of the SDP pollution
+#                 described above. Removing them lets macOS go straight
+#                 to HID.
+#   sap           SIM Access Profile -- irrelevant on a Pi.
+#   network,health  PAN and Health Device -- also irrelevant for HID-only.
+#   gap           Generic Access Profile plugin -- the GAP UUID (0x1800)
+#                 is still exposed by core BlueZ even with this plugin off.
+#
+# We use a systemd drop-in so package upgrades don't revert the override.
+# The empty `ExecStart=` clears whatever the package shipped, then the
+# second `ExecStart=` sets ours.
 
-BTSERVICE="/lib/systemd/system/bluetooth.service"
+DISABLE_PLUGINS="input,a2dp,avrcp,sap,network,health,gap"
 
-if [ -f "$BTSERVICE" ]; then
-    # Check if already patched
-    if grep -q "\-P input" "$BTSERVICE" 2>/dev/null; then
-        echo "[INFO] BlueZ input plugin already disabled."
-    else
-        echo "[INFO] Disabling BlueZ input plugin..."
-        # Add -P input flag to ExecStart line
-        sed -i 's|ExecStart=.*/bluetoothd.*|& -P input|' "$BTSERVICE"
-        systemctl daemon-reload
-        echo "[OK] BlueZ input plugin disabled."
-    fi
-else
-    echo "[WARN] bluetooth.service not found at $BTSERVICE"
-    echo "       Trying alternative path..."
+# Resolve bluetoothd path from whichever unit file the package shipped.
+PKG_BT_UNIT=""
+for candidate in /lib/systemd/system/bluetooth.service /usr/lib/systemd/system/bluetooth.service; do
+    [ -f "$candidate" ] && PKG_BT_UNIT="$candidate" && break
+done
 
-    # Try alternative location
-    BTSERVICE="/usr/lib/systemd/system/bluetooth.service"
-    if [ -f "$BTSERVICE" ]; then
-        if ! grep -q "\-P input" "$BTSERVICE" 2>/dev/null; then
-            sed -i 's|ExecStart=.*/bluetoothd.*|& -P input|' "$BTSERVICE"
-            systemctl daemon-reload
-            echo "[OK] BlueZ input plugin disabled (alternative path)."
-        fi
-    else
-        echo "[ERROR] Cannot find bluetooth.service. Manual setup needed."
-        echo "        Add '-P input' to the bluetoothd ExecStart line."
-        exit 1
-    fi
+if [ -z "$PKG_BT_UNIT" ]; then
+    echo "[ERROR] Cannot find bluetooth.service. Is bluez installed?"
+    exit 1
 fi
+
+# Extract the bluetoothd binary path from the package's ExecStart line.
+# Strip any prior `-P ...` argument (legacy in-place edits added "-P input").
+BLUETOOTHD_BIN=$(grep -E '^ExecStart=' "$PKG_BT_UNIT" \
+    | head -1 | sed 's|^ExecStart=||' | awk '{print $1}')
+
+if [ -z "$BLUETOOTHD_BIN" ] || [ ! -x "$BLUETOOTHD_BIN" ]; then
+    echo "[ERROR] Could not resolve bluetoothd binary from $PKG_BT_UNIT"
+    exit 1
+fi
+
+BT_DROPIN_DIR="/etc/systemd/system/bluetooth.service.d"
+BT_DROPIN_FILE="$BT_DROPIN_DIR/10-cyberraccoon-disable-plugins.conf"
+BT_DROPIN_CONTENT="# Managed by scripts/setup/bluetooth.sh -- re-run to refresh.
+# Disables BlueZ plugins that pollute the SDP record with non-HID UUIDs.
+# See script comments for the full rationale.
+[Service]
+ExecStart=
+ExecStart=$BLUETOOTHD_BIN -P $DISABLE_PLUGINS
+"
+
+mkdir -p "$BT_DROPIN_DIR"
+TMP_DROPIN="$(mktemp)"
+printf '%s' "$BT_DROPIN_CONTENT" > "$TMP_DROPIN"
+if [ ! -f "$BT_DROPIN_FILE" ] || ! cmp -s "$TMP_DROPIN" "$BT_DROPIN_FILE"; then
+    install -m 644 "$TMP_DROPIN" "$BT_DROPIN_FILE"
+    systemctl daemon-reload
+    echo "[OK] Wrote $BT_DROPIN_FILE"
+    echo "     Plugins disabled: $DISABLE_PLUGINS"
+else
+    echo "[INFO] $BT_DROPIN_FILE already current"
+fi
+rm -f "$TMP_DROPIN"
+
+# Revert any legacy in-place edits of the package unit file. Earlier
+# versions of this script appended `-P input` directly to the package's
+# ExecStart line. The drop-in above supersedes that, but we revert the
+# in-place edit so the package file matches upstream and won't fight
+# package upgrades.
+for legacy in /lib/systemd/system/bluetooth.service /usr/lib/systemd/system/bluetooth.service; do
+    if [ -f "$legacy" ] && grep -qE '^ExecStart=.* -P input *$' "$legacy" 2>/dev/null; then
+        sed -i 's| -P input *$||' "$legacy"
+        systemctl daemon-reload
+        echo "[OK] Reverted legacy in-place '-P input' edit in $legacy"
+    fi
+done
 
 # ---------------------------------------------------------------------------
 # Step 2: Restart Bluetooth service

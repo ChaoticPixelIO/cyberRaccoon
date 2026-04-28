@@ -33,8 +33,8 @@ def fake_frame_720p() -> np.ndarray:
 
 def make_mock_capture(
     frame: np.ndarray,
-    width: int = 1280,
-    height: int = 720,
+    width: int = 1920,
+    height: int = 1080,
     quality: int = 80,
 ) -> ScreenCapture:
     """Create a ScreenCapture with a mocked cv2.VideoCapture backend.

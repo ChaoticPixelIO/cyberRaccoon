@@ -104,7 +104,7 @@ What it does:
 3. Creates a USB Gadget at `/sys/kernel/config/usb_gadget/cyber_raccoon`
 4. Configures a combined HID function with Report ID descriptors:
    - Report ID 1: Keyboard (modifier + 6 keycodes)
-   - Report ID 2: Absolute-coordinate mouse (1280x720 coordinate space)
+   - Report ID 2: Absolute-coordinate mouse (1920x1080 coordinate space)
 5. Binds the gadget to the USB Device Controller
 
 Verify the device exists after running:
@@ -177,8 +177,8 @@ target_os: ""                  # auto-detect; or: windows, macos, linux
 
 capture:
   device_index: 0
-  target_width: 1280
-  target_height: 720
+  target_width: 1920
+  target_height: 1080
   jpeg_quality: 80
 
 llm:
@@ -208,8 +208,8 @@ agent:
 
 executor:
   device: /dev/hidg0              # combined keyboard+mouse HID device
-  screen_width: 1280
-  screen_height: 720
+  screen_width: 1920
+  screen_height: 1080
 
 network:
   web_host: 0.0.0.0

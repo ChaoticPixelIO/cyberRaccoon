@@ -263,7 +263,7 @@ behavior for the specific scenarios they describe.
 
 
 def build_prompt_based_system_prompt(
-    display_width: int = 1280, display_height: int = 720,
+    display_width: int = 1920, display_height: int = 1080,
 ) -> str:
     """Return the system prompt for prompt-based fallback protocol."""
     return _PROMPT_BASED_TEMPLATE.format(

@@ -18,8 +18,8 @@ from typing import Any
 @dataclass
 class CaptureConfig:
     device_index: int = 0
-    target_width: int = 1280
-    target_height: int = 720
+    target_width: int = 1920
+    target_height: int = 1080
     jpeg_quality: int = 80
     source_width: int = 1920
     source_height: int = 1080
@@ -103,8 +103,8 @@ class AgentConfig:
 @dataclass
 class ExecutorConfig:
     device: str = "/dev/hidg0"
-    screen_width: int = 1280
-    screen_height: int = 720
+    screen_width: int = 1920
+    screen_height: int = 1080
 
 
 # ---------------------------------------------------------------------------

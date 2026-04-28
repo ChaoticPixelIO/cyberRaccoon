@@ -144,6 +144,9 @@ CFG
         echo ""
         echo "                  Run:  sudo reboot"
         echo "                  Then re-run: sudo scripts/setup.sh --gadget"
+        # Signal to setup.sh / install.sh that a reboot is required.
+        # World-writable so the unprivileged installer can clean it up later.
+        touch /tmp/cyberraccoon-needs-reboot 2>/dev/null && chmod 666 /tmp/cyberraccoon-needs-reboot 2>/dev/null || true
         exit 0
         ;;
     *)

@@ -72,8 +72,8 @@ class AirPlayCapture:
 
     def __init__(
         self,
-        target_width: int = 1280,
-        target_height: int = 720,
+        target_width: int = 1920,
+        target_height: int = 1080,
         jpeg_quality: int = 80,
         rtp_port: int = 5004,
         uxplay_name: str = "CyberRaccoon",

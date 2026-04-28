@@ -38,16 +38,16 @@ class TestFrameToCaptureResult:
 
     def test_output_dimensions_match_target(self) -> None:
         image = _make_rgb_image(1920, 1080)
-        result = frame_to_capture_result(image, 1280, 720)
-        assert result.width == 1280
-        assert result.height == 720
-        assert result.image.size == (1280, 720)
+        result = frame_to_capture_result(image)  # use new 1920x1080 defaults
+        assert result.width == 1920
+        assert result.height == 1080
+        assert result.image.size == (1920, 1080)
 
     def test_no_resize_when_matching(self) -> None:
-        image = _make_rgb_image(1280, 720)
-        result = frame_to_capture_result(image, 1280, 720)
-        assert result.width == 1280
-        assert result.height == 720
+        image = _make_rgb_image(1920, 1080)
+        result = frame_to_capture_result(image)  # defaults match input -> no resize
+        assert result.width == 1920
+        assert result.height == 1080
 
     def test_custom_resolution(self) -> None:
         image = _make_rgb_image(1920, 1080)

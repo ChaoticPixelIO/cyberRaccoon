@@ -118,13 +118,21 @@ class TestUsbGadgetRebootRequired:
     Status tab must tell the user to reboot, not to re-run setup.
     """
 
-    def _path_exists_factory(self, missing: set[str]):
-        """Build a Path.exists side_effect that returns False for paths in ``missing``."""
+    def _path_exists_factory(self, missing: set[str], extra_present: set[str] = frozenset()):
+        """Build a Path.exists side_effect with controlled answers.
+
+        ``missing`` paths return False even if they exist on the dev box.
+        ``extra_present`` paths return True even if they don't exist on
+        the dev box (useful for /sys/class/udc on macOS).
+        """
         real_exists = Path.exists
 
         def fake_exists(self_path: Path) -> bool:
-            if str(self_path) in missing:
+            s = str(self_path)
+            if s in missing:
                 return False
+            if s in extra_present:
+                return True
             return real_exists(self_path)
 
         return fake_exists
@@ -135,7 +143,9 @@ class TestUsbGadgetRebootRequired:
             "dr_mode": "peripheral",
             "config_path": "/boot/firmware/config.txt",
         }
-        missing = {"/sys/module/dwc2", "/dev/hidg0"}
+        # `/sys/class/udc` is also missing here: post-setup-pre-reboot the
+        # dwc2 driver hasn't started yet, so no UDC entries exist either.
+        missing = {"/sys/module/dwc2", "/sys/class/udc", "/dev/hidg0"}
 
         with patch(
             "cyberraccoon.ui.setup_status._is_raspberry_pi", return_value=True
@@ -159,7 +169,7 @@ class TestUsbGadgetRebootRequired:
             "dr_mode": "peripheral",
             "config_path": "/boot/firmware/config.txt",
         }
-        missing = {"/sys/module/dwc2", "/dev/hidg0"}
+        missing = {"/sys/module/dwc2", "/sys/class/udc", "/dev/hidg0"}
 
         with patch(
             "cyberraccoon.ui.setup_status._is_raspberry_pi", return_value=True
@@ -176,6 +186,51 @@ class TestUsbGadgetRebootRequired:
 
         assert result["status"] == REBOOT_REQUIRED, result
         assert "reboot" in result["detail"].lower()
+
+    def test_pi5_ready_when_module_path_absent_but_udc_registered(self) -> None:
+        """Pi 5 sometimes runs dwc2 without populating /sys/module/dwc2.
+
+        Concrete real-world scenario: dwc2 loads via dtoverlay and the
+        gadget stack is fully wired (/sys/class/udc/<ctrl> present,
+        /dev/hidg0 created), but /sys/module/dwc2 is absent. The check
+        must NOT report REBOOT_REQUIRED — that would mislead the user
+        into rebooting a working setup.
+        """
+        overlay = {
+            "present": True,
+            "dr_mode": "peripheral",
+            "config_path": "/boot/firmware/config.txt",
+        }
+        # /sys/module/dwc2 absent; UDC dir + hidg0 present (real-world Pi 5
+        # scenario). On macOS the latter two don't exist on disk, so we need
+        # extra_present to force them True.
+        missing = {"/sys/module/dwc2"}
+        extra_present = {"/sys/class/udc", "/dev/hidg0"}
+
+        # Patch iterdir on /sys/class/udc to return a fake UDC entry.
+        def fake_iterdir(self_path: Path):
+            if str(self_path) == "/sys/class/udc":
+                return iter([Path("/sys/class/udc/1000480000.usb")])
+            return iter(())
+
+        with patch(
+            "cyberraccoon.ui.setup_status._is_raspberry_pi", return_value=True
+        ), patch(
+            "cyberraccoon.ui.setup_status.Path.read_text",
+            return_value="Raspberry Pi 5 Model B",
+        ), patch(
+            "cyberraccoon.ui.setup_status._read_dwc2_overlay", return_value=overlay
+        ), patch(
+            "cyberraccoon.ui.setup_status.Path.exists",
+            new=self._path_exists_factory(missing, extra_present),
+        ), patch(
+            "cyberraccoon.ui.setup_status.Path.iterdir",
+            new=fake_iterdir,
+        ):
+            result = _check_usb_gadget()
+
+        assert result["status"] == READY, result
+        assert "/dev/hidg0" in result["detail"]
 
 
 class TestUsbGadgetSystemdUnit:

@@ -137,12 +137,12 @@ def main() -> None:
         help="Number of frames to capture (default: 1)",
     )
     parser.add_argument(
-        "--width", type=int, default=1280,
-        help="Output image width (default: 1280)",
+        "--width", type=int, default=1920,
+        help="Output image width (default: 1920)",
     )
     parser.add_argument(
-        "--height", type=int, default=720,
-        help="Output image height (default: 720)",
+        "--height", type=int, default=1080,
+        help="Output image height (default: 1080)",
     )
     parser.add_argument(
         "--quality", type=int, default=80,

@@ -1,6 +1,6 @@
 """M1 Screen Capture — captures target computer screen via HDMI capture card.
 
-Uses OpenCV to read from V4L2 device, resizes to 1280x720, outputs JPEG Base64.
+Uses OpenCV to read from V4L2 device, resizes to 1920x1080, outputs JPEG Base64.
 """
 
 from __future__ import annotations
@@ -104,8 +104,8 @@ class ScreenCapture:
     def __init__(
         self,
         device_index: int = 0,
-        target_width: int = 1280,
-        target_height: int = 720,
+        target_width: int = 1920,
+        target_height: int = 1080,
         jpeg_quality: int = 80,
     ) -> None:
         self._device_index = device_index

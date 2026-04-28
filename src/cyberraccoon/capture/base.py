@@ -45,8 +45,8 @@ class CaptureResult:
     Attributes:
         image:       PIL Image in RGB mode at target resolution.
         base64_jpeg: JPEG-compressed, Base64-encoded string (for LLM API).
-        width:       Image width in pixels (default 1280).
-        height:      Image height in pixels (default 720).
+        width:       Image width in pixels (default 1920).
+        height:      Image height in pixels (default 1080).
         timestamp:   Capture time (``time.monotonic``).
         size_bytes:  JPEG byte count (for cost / bandwidth monitoring).
     """
@@ -110,8 +110,8 @@ class CaptureSource(Protocol):
 
 def frame_to_capture_result(
     frame_rgb: Image.Image,
-    target_width: int = 1280,
-    target_height: int = 720,
+    target_width: int = 1920,
+    target_height: int = 1080,
     jpeg_quality: int = 80,
 ) -> CaptureResult:
     """Convert a PIL RGB image into a :class:`CaptureResult`.
@@ -122,8 +122,8 @@ def frame_to_capture_result(
 
     Args:
         frame_rgb:    PIL Image (must be RGB mode).
-        target_width: Desired output width (default 1280).
-        target_height: Desired output height (default 720).
+        target_width: Desired output width (default 1920).
+        target_height: Desired output height (default 1080).
         jpeg_quality: JPEG compression quality 1-100 (default 80).
 
     Returns:

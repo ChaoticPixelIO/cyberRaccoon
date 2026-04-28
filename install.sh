@@ -383,11 +383,23 @@ else
         echo ""
         info "Launching hardware setup (sudo required)..."
         echo ""
-        sudo "$SETUP_SCRIPT" || warn "Hardware setup exited with errors. Re-run later: sudo $SETUP_SCRIPT"
+        # Pass CYBERRACCOON_FROM_INSTALLER through sudo so setup.sh suppresses
+        # its own "Setup complete!" banner and Next steps — install.sh prints
+        # the unified version below.
+        sudo CYBERRACCOON_FROM_INSTALLER=1 "$SETUP_SCRIPT" || warn "Hardware setup exited with errors. Re-run later: sudo $SETUP_SCRIPT"
     else
         echo ""
         info "Skipped. Run later: sudo $SETUP_SCRIPT"
     fi
+fi
+
+# Did setup.sh signal that a reboot is required? csi.sh / gadget.sh touch
+# this marker when they install a kernel overlay that won't take effect
+# until reboot. Clean up after reading so a future run starts fresh.
+NEEDS_REBOOT=false
+if [ -f /tmp/cyberraccoon-needs-reboot ]; then
+    NEEDS_REBOOT=true
+    sudo rm -f /tmp/cyberraccoon-needs-reboot 2>/dev/null || true
 fi
 
 echo ""
@@ -396,10 +408,20 @@ echo -e "${GREEN}${BOLD}  All done!${NC}"
 echo -e "${BOLD}==========================================${NC}"
 echo ""
 echo "  Next steps:"
-echo "    1. Open the Web UI: http://${PI_HOSTNAME}:${WEB_PORT}"
-echo "    2. Go to the Status tab — confirm hardware is detected"
-echo "    3. Set your API key in the Config tab"
-echo "    4. Submit a task!"
+if $NEEDS_REBOOT; then
+    echo "    1. Reboot first: sudo reboot"
+    echo "       (Required to load the kernel overlay just installed —"
+    echo "        without this, the Web UI won't see the new hardware.)"
+    echo "    2. Open the Web UI: http://${PI_HOSTNAME}:${WEB_PORT}"
+    echo "    3. Go to the Status tab — confirm hardware is detected"
+    echo "    4. Set your API key in the Config tab"
+    echo "    5. Submit a task!"
+else
+    echo "    1. Open the Web UI: http://${PI_HOSTNAME}:${WEB_PORT}"
+    echo "    2. Go to the Status tab — confirm hardware is detected"
+    echo "    3. Set your API key in the Config tab"
+    echo "    4. Submit a task!"
+fi
 echo ""
 echo "  Useful commands:"
 echo "    sudo systemctl status cyberraccoon    # check service"

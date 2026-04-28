@@ -87,12 +87,67 @@ def _is_raspberry_pi() -> bool:
 # Individual checks
 # ---------------------------------------------------------------------------
 
+def _bluez_input_plugin_disabled() -> bool:
+    """Return True if bluetoothd is configured to disable the input plugin.
+
+    Two install patterns are accepted:
+
+    1. **Drop-in (current setup)** — any file under
+       ``/etc/systemd/system/bluetooth.service.d/`` containing an
+       ``ExecStart=`` line with ``-P`` followed by a plugin list that
+       includes ``input``. The current setup script also disables
+       ``a2dp,avrcp,sap,network,health,gap`` to keep the SDP record
+       HID-only, so the substring check ``"-P "`` + ``"input"`` is
+       sufficient.
+
+    2. **Legacy in-place edit** — older versions of the setup script
+       appended ``-P input`` directly to the package unit file at
+       ``/lib/systemd/system/bluetooth.service``. The current setup
+       script reverts that edit, but pre-existing installs may still
+       have it.
+
+    Either pattern is functionally equivalent: systemd merges drop-ins
+    over the package unit and bluetoothd ends up with the right ``-P``
+    flag. We just need to confirm one of them is in place.
+    """
+    dropin_dir = Path("/etc/systemd/system/bluetooth.service.d")
+    if dropin_dir.is_dir():
+        for conf in dropin_dir.glob("*.conf"):
+            try:
+                for line in conf.read_text().splitlines():
+                    stripped = line.lstrip()
+                    if not stripped.startswith("ExecStart="):
+                        continue
+                    # Look for `-P <list>` where <list> contains `input`
+                    parts = stripped.split()
+                    for i, part in enumerate(parts):
+                        if part == "-P" and i + 1 < len(parts):
+                            if "input" in parts[i + 1].split(","):
+                                return True
+                        elif part.startswith("-P") and "input" in part[2:].split(","):
+                            return True
+            except (FileNotFoundError, PermissionError):
+                continue
+
+    for path in [
+        "/lib/systemd/system/bluetooth.service",
+        "/usr/lib/systemd/system/bluetooth.service",
+    ]:
+        try:
+            if "-P input" in Path(path).read_text():
+                return True
+        except (FileNotFoundError, PermissionError):
+            continue
+
+    return False
+
+
 def _check_bluetooth() -> dict[str, str]:
     """Check Bluetooth HID setup status.
 
     Checks:
     1. bluetooth.service is active
-    2. BlueZ input plugin is disabled (-P input)
+    2. BlueZ input plugin is disabled (via drop-in or legacy in-place edit)
     3. Pairing agent service is running
     4. Python has CAP_NET_BIND_SERVICE capability
     """
@@ -106,21 +161,11 @@ def _check_bluetooth() -> dict[str, str]:
             "detail": "Bluetooth service not running",
         }
 
-    # 2. BlueZ input plugin disabled
-    input_disabled = False
-    for path in [
-        "/lib/systemd/system/bluetooth.service",
-        "/usr/lib/systemd/system/bluetooth.service",
-    ]:
-        try:
-            content = Path(path).read_text()
-            if "-P input" in content:
-                input_disabled = True
-                break
-        except (FileNotFoundError, PermissionError):
-            continue
-
-    if not input_disabled:
+    # 2. BlueZ input plugin disabled. Modern setup writes a drop-in at
+    #    /etc/systemd/system/bluetooth.service.d/*.conf overriding ExecStart
+    #    with `-P input,...` (and other plugins). Legacy installs added
+    #    `-P input` in-place to the package unit file. Accept either.
+    if not _bluez_input_plugin_disabled():
         issues.append("BlueZ input plugin not disabled")
 
     # 3. Pairing agent service
@@ -201,14 +246,30 @@ def _read_dwc2_overlay(config_paths: list[str], model_filter: str) -> dict[str, 
 
 
 def _dwc2_module_loaded() -> bool:
-    """True if the running kernel has the dwc2 module loaded.
+    """True if dwc2 is providing a USB Device Controller in the running kernel.
 
-    ``/sys/module/<name>`` exists when the module is present in the
-    kernel, regardless of whether it's a loadable module or built-in
-    for that subsystem. On a freshly-booted Pi with the dwc2 overlay
-    applied, this directory appears.
+    Two signals, either is sufficient:
+
+    1. ``/sys/module/dwc2`` exists — the conventional signal for "module
+       loaded". Works when dwc2 is loaded as a module (the typical Pi
+       4B / pre-Pi-5 case).
+
+    2. ``/sys/class/udc/`` has at least one entry — the dwc2 driver has
+       registered a USB Device Controller. This is the more reliable
+       signal on Pi 5, where the dtoverlay-driven dwc2 path can leave
+       ``/sys/module/dwc2`` absent even when the gadget stack is fully
+       functional and ``/dev/hidg0`` is present.
     """
-    return Path("/sys/module/dwc2").exists()
+    if Path("/sys/module/dwc2").exists():
+        return True
+    udc_dir = Path("/sys/class/udc")
+    if udc_dir.exists():
+        try:
+            if any(udc_dir.iterdir()):
+                return True
+        except OSError:
+            pass
+    return False
 
 
 def _gadget_runtime_status(pi5_cable_note: str | None) -> dict[str, str]:

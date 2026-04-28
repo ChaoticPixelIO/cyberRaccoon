@@ -41,8 +41,8 @@ class CameraCapture:
     def __init__(
         self,
         camera_index: int = 0,
-        target_width: int = 1280,
-        target_height: int = 720,
+        target_width: int = 1920,
+        target_height: int = 1080,
         jpeg_quality: int = 80,
     ) -> None:
         self._camera_index = camera_index

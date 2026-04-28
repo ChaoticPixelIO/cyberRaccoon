@@ -3,7 +3,7 @@
 Builds 8-byte HID reports with Report ID prefix:
   report_id(1B=0x02) | buttons(1B) | X(2B LE) | Y(2B LE) | wheel(1B signed) | padding(1B)
 
-Coordinates are absolute (0–32767) mapped from screen resolution (1280×720).
+Coordinates are absolute (0–32767) mapped from screen resolution (1920×1080).
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ from cyberraccoon.executor.hid_device import HIDDevice
 logger = logging.getLogger("M4.mouse")
 
 # Screen-to-HID coordinate mapping
-SCREEN_WIDTH = 1280
-SCREEN_HEIGHT = 720
+SCREEN_WIDTH = 1920
+SCREEN_HEIGHT = 1080
 HID_MAX = 32767
 
 # Mouse button bit masks
@@ -34,7 +34,7 @@ BUTTON_MAP: dict[str, int] = {
 
 
 def _screen_to_hid(x: int, y: int) -> tuple[int, int]:
-    """Convert screen coordinates (1280×720) to HID absolute (0–32767)."""
+    """Convert screen coordinates (1920×1080) to HID absolute (0–32767)."""
     hid_x = int(x * HID_MAX / SCREEN_WIDTH)
     hid_y = int(y * HID_MAX / SCREEN_HEIGHT)
     hid_x = max(0, min(HID_MAX, hid_x))

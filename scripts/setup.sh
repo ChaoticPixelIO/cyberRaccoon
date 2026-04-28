@@ -120,6 +120,11 @@ fi
 
 check_root
 
+# Clear any stale reboot signal from a previous run so the marker only ever
+# reflects this invocation. Component scripts (csi.sh, gadget.sh) touch this
+# file when they actually require a reboot; setup.sh and install.sh read it.
+rm -f /tmp/cyberraccoon-needs-reboot 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # Interactive mode
 # ---------------------------------------------------------------------------
@@ -264,20 +269,27 @@ fi
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
+#
+# When invoked from install.sh (CYBERRACCOON_FROM_INSTALLER=1), the installer
+# prints the unified "All done!" banner and Next steps, so we suppress ours
+# to avoid the duplicate banners. Hardware-specific notes (USB-C cable, etc.)
+# still print since they're context the user needs regardless.
 
-echo ""
-echo -e "${BOLD}==========================================${NC}"
-if [ $FAILED -eq 0 ]; then
-    echo -e "${GREEN}${BOLD}  Setup complete!${NC}"
-else
-    echo -e "${YELLOW}${BOLD}  Setup finished with $FAILED error(s)${NC}"
-fi
-echo -e "${BOLD}==========================================${NC}"
-echo ""
+NEEDS_REBOOT=false
+[ -f /tmp/cyberraccoon-needs-reboot ] && NEEDS_REBOOT=true
 
-if $DO_CSI; then
-    warn "CSI HDMI requires a reboot to load the device tree overlay."
-    echo "  Run: sudo reboot"
+FROM_INSTALLER=false
+[ "${CYBERRACCOON_FROM_INSTALLER:-}" = "1" ] && FROM_INSTALLER=true
+
+if ! $FROM_INSTALLER; then
+    echo ""
+    echo -e "${BOLD}==========================================${NC}"
+    if [ $FAILED -eq 0 ]; then
+        echo -e "${GREEN}${BOLD}  Setup complete!${NC}"
+    else
+        echo -e "${YELLOW}${BOLD}  Setup finished with $FAILED error(s)${NC}"
+    fi
+    echo -e "${BOLD}==========================================${NC}"
     echo ""
 fi
 
@@ -297,8 +309,18 @@ if ! $DO_BT || ! $DO_GADGET || ! $DO_AIRPLAY || ! $DO_CSI; then
     echo ""
 fi
 
-echo "  Next steps:"
-echo "    Return to the CyberRaccoon Web UI to configure your API key,"
-echo "    pick a screen capture source, and run a task."
-echo "    (If the Web UI isn't running yet: python -m cyberraccoon --web)"
-echo ""
+if ! $FROM_INSTALLER; then
+    echo "  Next steps:"
+    if $NEEDS_REBOOT; then
+        echo "    1. Reboot first: sudo reboot"
+        echo "       (Required to load the kernel overlay just installed.)"
+        echo "    2. Return to the CyberRaccoon Web UI to configure your API key,"
+        echo "       pick a screen capture source, and run a task."
+        echo "       (If the Web UI isn't running yet: python -m cyberraccoon --web)"
+    else
+        echo "    Return to the CyberRaccoon Web UI to configure your API key,"
+        echo "    pick a screen capture source, and run a task."
+        echo "    (If the Web UI isn't running yet: python -m cyberraccoon --web)"
+    fi
+    echo ""
+fi

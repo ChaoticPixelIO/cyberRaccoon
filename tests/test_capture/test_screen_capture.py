@@ -23,9 +23,9 @@ class TestCaptureResult:
         """Output image size should match target resolution."""
         cap = make_mock_capture(fake_frame_1080p)
         result = cap.capture()
-        assert result.width == 1280
-        assert result.height == 720
-        assert result.image.size == (1280, 720)
+        assert result.width == 1920
+        assert result.height == 1080
+        assert result.image.size == (1920, 1080)
 
     def test_base64_is_valid_jpeg(self, fake_frame_1080p: np.ndarray) -> None:
         """Base64 decoded content should be valid JPEG at target resolution."""
@@ -34,7 +34,7 @@ class TestCaptureResult:
         jpeg_bytes = base64.b64decode(result.base64_jpeg)
         image = Image.open(io.BytesIO(jpeg_bytes))
         assert image.format == "JPEG"
-        assert image.size == (1280, 720)
+        assert image.size == (1920, 1080)
 
     def test_size_bytes_matches_jpeg(self, fake_frame_1080p: np.ndarray) -> None:
         """size_bytes should equal actual JPEG byte count."""
@@ -67,12 +67,12 @@ class TestCaptureResult:
         assert result.height == 480
         assert result.image.size == (640, 480)
 
-    def test_no_resize_when_matching(self, fake_frame_720p: np.ndarray) -> None:
+    def test_no_resize_when_matching(self, fake_frame_1080p: np.ndarray) -> None:
         """Should skip resize when frame already matches target resolution."""
-        cap = make_mock_capture(fake_frame_720p, width=1280, height=720)
+        cap = make_mock_capture(fake_frame_1080p, width=1920, height=1080)
         result = cap.capture()
-        assert result.width == 1280
-        assert result.height == 720
+        assert result.width == 1920
+        assert result.height == 1080
 
     def test_image_is_rgb(self, fake_frame_1080p: np.ndarray) -> None:
         """Output PIL Image should be in RGB mode."""
@@ -87,7 +87,7 @@ class TestCaptureResult:
         jpeg_bytes = base64.b64decode(result.base64_jpeg)
         img = Image.open(io.BytesIO(jpeg_bytes))
         # JPEG is lossy, so just check size and mode
-        assert img.size == (1280, 720)
+        assert img.size == (1920, 1080)
         assert img.mode == "RGB"
 
 
@@ -195,8 +195,8 @@ class TestInit:
         """Default constructor values should match design spec."""
         cap = ScreenCapture()
         assert cap._device_index == 0
-        assert cap._target_width == 1280
-        assert cap._target_height == 720
+        assert cap._target_width == 1920
+        assert cap._target_height == 1080
         assert cap._jpeg_quality == 80
         assert cap._cap is None
 

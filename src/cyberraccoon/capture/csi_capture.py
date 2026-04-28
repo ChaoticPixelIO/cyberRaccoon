@@ -238,6 +238,10 @@ class CsiHdmiCapture:
         cap.close()
     """
 
+    # NOTE: target_width/target_height default to 1280x720 — NOT 1920x1080 like
+    # the other capture sources. The TC358743 on 2-lane CAM0 is bandwidth-limited
+    # to 720p (see _detect_lane_count / _max_capture_height below). 4-lane CAM1
+    # users can pass target_width=1920, target_height=1080 to the constructor.
     def __init__(
         self,
         target_width: int = 1280,
