@@ -49,6 +49,12 @@ _NEVER_PERSIST: set[str] = {"wifi_password"}
 # Fields excluded from YAML by default (can be overridden)
 _SECRET_FIELDS: set[str] = {"api_key"}
 
+# Legacy LLM snapshot fields that are no longer used. Stripped from per-provider
+# snapshots on save so old YAML configs converge to the new shape on first save
+# without breaking the load path. ``temperature`` was removed in 2026-04 — the
+# protocol layer hardcodes 0.0 and skips the kwarg for models that reject it.
+_DEPRECATED_LLM_SNAPSHOT_FIELDS: set[str] = {"temperature"}
+
 # Environment variable → config path mapping
 _ENV_MAP: dict[str, tuple[str, str]] = {
     "CYBERRACCOON_SOURCE": ("", "capture_source"),
@@ -232,6 +238,8 @@ class ConfigStore:
             config.executor_transport = str(yaml_data["executor_transport"])
         if "target_os" in yaml_data:
             config.target_os = str(yaml_data["target_os"])
+        if "detected_target_os" in yaml_data:
+            config.detected_target_os = str(yaml_data["detected_target_os"])
 
         # Also accept capture.source and executor.transport as aliases
         capture_data = yaml_data.get("capture", {})
@@ -261,7 +269,6 @@ class ConfigStore:
                 "api_key": config.llm.api_key,
                 "base_url": config.llm.base_url,
                 "max_tokens": config.llm.max_tokens,
-                "temperature": config.llm.temperature,
             }
 
         return config
@@ -318,7 +325,7 @@ class ConfigStore:
         # the values the user last saved under this provider.
         active_snap = config.llm.providers.get(config.llm.provider)
         if active_snap:
-            for fname in ("model", "api_key", "base_url", "max_tokens", "temperature"):
+            for fname in ("model", "api_key", "base_url", "max_tokens"):
                 if fname in active_snap:
                     setattr(config.llm, fname, active_snap[fname])
 
@@ -344,6 +351,7 @@ class ConfigStore:
         data["capture_source"] = config.capture_source
         data["executor_transport"] = config.executor_transport
         data["target_os"] = config.target_os
+        data["detected_target_os"] = config.detected_target_os
 
         # Each section
         for section_name in _SECTION_TYPES:
@@ -369,6 +377,7 @@ class ConfigStore:
                         pruned = {
                             k: v for k, v in snap.items()
                             if k not in _NEVER_PERSIST
+                            and k not in _DEPRECATED_LLM_SNAPSHOT_FIELDS
                             and (k not in _SECRET_FIELDS or include_secrets)
                             and v is not None
                         }

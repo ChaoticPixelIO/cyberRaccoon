@@ -31,6 +31,37 @@ OPENAI_CU_MODEL_PREFIXES: list[str] = [
     "gpt-5.4",
 ]
 
+# Models that reject the `temperature` request parameter. Anthropic deprecated
+# it starting with claude-opus-4-7 (returns 400 invalid_request_error). Add new
+# prefixes here as they are encountered. We always pass temperature=0.0 for
+# models that still accept it (deterministic agent behavior).
+TEMPERATURE_DEPRECATED_PREFIXES: tuple[str, ...] = (
+    "claude-opus-4-7",
+    "claude-sonnet-4-7",
+)
+
+
+def model_supports_temperature(model: str) -> bool:
+    """Return False for models whose API rejects the `temperature` parameter."""
+    model_lower = model.lower()
+    return not any(model_lower.startswith(p) for p in TEMPERATURE_DEPRECATED_PREFIXES)
+
+
+def is_fatal_status_code(code: int | None) -> bool:
+    """Return True for HTTP status codes that indicate a fatal API error.
+
+    Fatal here means: the request itself is wrong (auth / contract /
+    deprecated parameter / wrong endpoint) so retrying with the same
+    payload will not help. The agent must surface these to the operator
+    immediately rather than burning retries.
+
+    Boundary: any 4xx *except* 429 (rate limit). 5xx and network errors
+    are treated as transient and stay on the existing retry path.
+    """
+    if code is None:
+        return False
+    return 400 <= code < 500 and code != 429
+
 
 @dataclass
 class StepResult:
@@ -52,6 +83,13 @@ class StepResult:
     commands: list[dict[str, Any]] = field(default_factory=list)
     completion_status: str = "success"  # "success", "gave_up", "stuck", or "escalate"
     response_id: str | None = None  # Correlates queued-action steps from one LLM response (UAT gap 5)
+    # Fatal-error fields populated when the API returned a non-retryable
+    # error (4xx-non-429). When fatal=True, VisionAgent short-circuits the
+    # retry loop and WorkflowRunner pauses the task pending operator
+    # resolution (Retry / Cancel from the web UI).
+    fatal: bool = False
+    error_status_code: int | None = None
+    error_request_id: str | None = None
 
     def get_commands(self) -> list[dict[str, Any]]:
         """Return the list of commands to execute.
@@ -162,13 +200,13 @@ def create_protocol(
     *,
     base_url: str | None = None,
     max_tokens: int = 4096,
-    temperature: float = 0.0,
     history_max_turns: int = 10,
     display_width: int = 1920,
     display_height: int = 1080,
     protocol_override: str = "auto",
     enable_cache: bool = True,
     skill_text: str | None = None,
+    target_os: str = "",
 ) -> ComputerUseProtocol:
     """Create the appropriate protocol for the given provider/model.
 
@@ -178,12 +216,14 @@ def create_protocol(
         api_key: API key.
         base_url: Optional custom API base URL.
         max_tokens: Max tokens for LLM response.
-        temperature: Sampling temperature.
         history_max_turns: Max conversation turns to retain.
         display_width: Screen width in pixels.
         display_height: Screen height in pixels.
         protocol_override: "auto" (default), "native", or "prompt".
         enable_cache: Enable Anthropic prompt caching.
+        target_os: Target OS string ("windows" / "macos" / "linux"; "" =
+            unknown). Forwarded to the system prompt builder so the LLM
+            picks platform-appropriate shortcuts and app names.
     """
     valid_overrides = {"auto", "native", "prompt"}
     if protocol_override not in valid_overrides:
@@ -230,12 +270,12 @@ def create_protocol(
             model=model,
             api_key=api_key,
             max_tokens=max_tokens,
-            temperature=temperature,
             history_max_turns=history_max_turns,
             display_width=display_width,
             display_height=display_height,
             enable_cache=enable_cache,
             skill_text=skill_text,
+            target_os=target_os,
         )
 
     if use_openai_native:
@@ -248,6 +288,7 @@ def create_protocol(
             display_width=display_width,
             display_height=display_height,
             skill_text=skill_text,
+            target_os=target_os,
         )
 
     from cyberraccoon.agent.protocols.prompt_based import PromptBasedProtocol
@@ -259,10 +300,10 @@ def create_protocol(
         api_key=api_key,
         base_url=base_url,
         max_tokens=max_tokens,
-        temperature=temperature,
         history_max_turns=history_max_turns,
         display_width=display_width,
         display_height=display_height,
         enable_cache=enable_cache,
         skill_text=skill_text,
+        target_os=target_os,
     )

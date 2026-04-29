@@ -673,7 +673,9 @@ class TestReplanDecisionEndpoint:
         forwarded: dict = {}
         monkeypatch.setattr(
             ctrl, "submit_replan_decision",
-            lambda choice: forwarded.update({"choice": choice}),
+            lambda choice, hint="": forwarded.update(
+                {"choice": choice, "hint": hint}
+            ),
         )
         resp = client.post(
             "/api/task/replan-decision",
@@ -682,6 +684,7 @@ class TestReplanDecisionEndpoint:
         assert resp.status_code == 200
         assert resp.json() == {"status": "ok"}
         assert forwarded["choice"] == "replan"
+        assert forwarded["hint"] == ""  # 260429-zl4: default empty
 
     def test_accepts_all_valid_choices(
         self, client, ctrl, monkeypatch,
@@ -689,7 +692,7 @@ class TestReplanDecisionEndpoint:
         seen: list[str] = []
         monkeypatch.setattr(
             ctrl, "submit_replan_decision",
-            lambda choice: seen.append(choice),
+            lambda choice, hint="": seen.append(choice),
         )
         for choice in ("replan", "continue", "retry", "abort", "resume"):
             resp = client.post(
@@ -723,7 +726,7 @@ class TestReplanDecisionEndpoint:
         self, client, ctrl, monkeypatch,
     ) -> None:
         """Runner per-gate allowlist violation → 400 (controller raises ValueError)."""
-        def rejecting_submit(choice: str) -> None:
+        def rejecting_submit(choice: str, hint: str = "") -> None:
             raise ValueError(f"invalid choice {choice!r} for gate 'replan_A'")
         monkeypatch.setattr(ctrl, "submit_replan_decision", rejecting_submit)
         # retry is invalid for Path A — but Literal accepts it, runner rejects
@@ -737,7 +740,7 @@ class TestReplanDecisionEndpoint:
         self, client, ctrl, monkeypatch,
     ) -> None:
         """Runner raises RuntimeError when no gate armed → 409."""
-        def no_gate_submit(choice: str) -> None:
+        def no_gate_submit(choice: str, hint: str = "") -> None:
             raise RuntimeError("no active replan gate")
         monkeypatch.setattr(ctrl, "submit_replan_decision", no_gate_submit)
         resp = client.post(
@@ -745,6 +748,47 @@ class TestReplanDecisionEndpoint:
             json={"choice": "replan"},
         )
         assert resp.status_code == 409
+
+    # 260429-zl4 — operator hint forwarding
+    def test_hint_forwarded_to_controller(
+        self, client, ctrl, monkeypatch,
+    ) -> None:
+        forwarded: dict = {}
+        monkeypatch.setattr(
+            ctrl, "submit_replan_decision",
+            lambda choice, hint="": forwarded.update(
+                {"choice": choice, "hint": hint}
+            ),
+        )
+        resp = client.post(
+            "/api/task/replan-decision",
+            json={"choice": "replan", "hint": "the password is hunter2"},
+        )
+        assert resp.status_code == 200
+        assert forwarded["hint"] == "the password is hunter2"
+
+    def test_hint_oversized_returns_422(self, client) -> None:
+        """Pydantic max_length=2000 enforces the cap at the boundary."""
+        resp = client.post(
+            "/api/task/replan-decision",
+            json={"choice": "replan", "hint": "x" * 2001},
+        )
+        assert resp.status_code == 422
+
+    def test_hint_at_max_accepted(
+        self, client, ctrl, monkeypatch,
+    ) -> None:
+        forwarded: dict = {}
+        monkeypatch.setattr(
+            ctrl, "submit_replan_decision",
+            lambda choice, hint="": forwarded.update({"hint_len": len(hint)}),
+        )
+        resp = client.post(
+            "/api/task/replan-decision",
+            json={"choice": "replan", "hint": "x" * 2000},
+        )
+        assert resp.status_code == 200
+        assert forwarded["hint_len"] == 2000
 
 
 @pytest.mark.skipif(
@@ -954,3 +998,67 @@ class TestPendingDialogsEndpoint:
         body = client.get("/api/task/pending-dialogs").json()
         gates = sorted(d["_active_gate"] for d in body["dialogs"])
         assert gates == ["escalation_C", "replan_B"]
+
+
+class TestFatalErrorAPI:
+    """260429-xe5 — endpoints for the fatal-error pause + retry/cancel flow."""
+
+    def test_get_fatal_error_empty(self, client: TestClient) -> None:
+        resp = client.get("/api/task/fatal-error")
+        assert resp.status_code == 200
+        assert resp.json() == {"error": None}
+
+    def test_get_fatal_error_populated(
+        self, client: TestClient, ctrl: AppController,
+    ) -> None:
+        ctrl._on_step_bridge({
+            "type": "fatal_error",
+            "status_code": 400,
+            "request_id": "req_011XYZ",
+            "message": "`temperature` is deprecated for this model",
+            "step_number": 1,
+        })
+        body = client.get("/api/task/fatal-error").json()
+        assert body["error"] is not None
+        assert body["error"]["status_code"] == 400
+        assert body["error"]["request_id"] == "req_011XYZ"
+
+    def test_post_retry_calls_resolve_retry(
+        self, client: TestClient, ctrl: AppController,
+    ) -> None:
+        called = {"count": 0}
+        def fake_retry() -> None:
+            called["count"] += 1
+        ctrl.resolve_fatal_error_retry = fake_retry  # type: ignore[assignment]
+        resp = client.post("/api/task/fatal-error/retry")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+        assert called["count"] == 1
+
+    def test_post_cancel_calls_resolve_cancel(
+        self, client: TestClient, ctrl: AppController,
+    ) -> None:
+        called = {"count": 0}
+        def fake_cancel() -> None:
+            called["count"] += 1
+        ctrl.resolve_fatal_error_cancel = fake_cancel  # type: ignore[assignment]
+        resp = client.post("/api/task/fatal-error/cancel")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+        assert called["count"] == 1
+
+
+class TestRedetectTargetOSAPI:
+    """260429-ucg — POST /api/config/redetect-target-os clears the cache."""
+
+    def test_post_calls_invalidate(
+        self, client: TestClient, ctrl: AppController,
+    ) -> None:
+        called = {"count": 0}
+        def fake_invalidate() -> None:
+            called["count"] += 1
+        ctrl.invalidate_detected_target_os = fake_invalidate  # type: ignore[assignment]
+        resp = client.post("/api/config/redetect-target-os")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+        assert called["count"] == 1

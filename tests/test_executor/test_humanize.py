@@ -30,9 +30,13 @@ from cyberraccoon.executor.humanize import (
     generate_overshoot_path,
 )
 from cyberraccoon.executor.keyboard import KeyboardController
-from cyberraccoon.executor.mouse import MouseController, SCREEN_WIDTH, SCREEN_HEIGHT
+from cyberraccoon.executor.mouse import MouseController
 
 from tests.test_executor.conftest import MockHIDDevice
+
+# LLM coordinate space used across these tests (the historical hardcoded values).
+SCREEN_WIDTH = 1920
+SCREEN_HEIGHT = 1080
 
 
 # =========================================================================
@@ -42,44 +46,62 @@ from tests.test_executor.conftest import MockHIDDevice
 
 class TestGenerateBezierPath:
     def test_starts_at_start(self) -> None:
-        path = generate_bezier_path((100, 200), (500, 400), 20)
+        path = generate_bezier_path(
+            (100, 200), (500, 400), 20, SCREEN_WIDTH, SCREEN_HEIGHT,
+        )
         assert path[0] == (100, 200)
 
     def test_ends_at_end(self) -> None:
-        path = generate_bezier_path((100, 200), (500, 400), 20)
+        path = generate_bezier_path(
+            (100, 200), (500, 400), 20, SCREEN_WIDTH, SCREEN_HEIGHT,
+        )
         assert path[-1] == (500, 400)
 
     def test_length_matches_num_points(self) -> None:
-        path = generate_bezier_path((0, 0), (640, 360), 30)
+        path = generate_bezier_path(
+            (0, 0), (640, 360), 30, SCREEN_WIDTH, SCREEN_HEIGHT,
+        )
         assert len(path) == 30
 
     def test_stays_within_screen_bounds(self) -> None:
         random.seed(42)
-        path = generate_bezier_path((0, 0), (1279, 719), 50, noise=2.0)
+        path = generate_bezier_path(
+            (0, 0), (1279, 719), 50, SCREEN_WIDTH, SCREEN_HEIGHT, noise=2.0,
+        )
         for x, y in path:
             assert 0 <= x <= SCREEN_WIDTH - 1
             assert 0 <= y <= SCREEN_HEIGHT - 1
 
     def test_zero_noise_straight_line(self) -> None:
-        path = generate_bezier_path((0, 0), (100, 0), 10, noise=0.0)
+        path = generate_bezier_path(
+            (0, 0), (100, 0), 10, SCREEN_WIDTH, SCREEN_HEIGHT, noise=0.0,
+        )
         for _, y in path:
             assert y == 0  # no perpendicular deviation
 
     def test_deterministic_with_seed(self) -> None:
         random.seed(42)
-        path1 = generate_bezier_path((0, 0), (200, 200), 20)
+        path1 = generate_bezier_path(
+            (0, 0), (200, 200), 20, SCREEN_WIDTH, SCREEN_HEIGHT,
+        )
         random.seed(42)
-        path2 = generate_bezier_path((0, 0), (200, 200), 20)
+        path2 = generate_bezier_path(
+            (0, 0), (200, 200), 20, SCREEN_WIDTH, SCREEN_HEIGHT,
+        )
         assert path1 == path2
 
     def test_short_distance_returns_at_least_endpoints(self) -> None:
-        path = generate_bezier_path((100, 100), (101, 100), 2)
+        path = generate_bezier_path(
+            (100, 100), (101, 100), 2, SCREEN_WIDTH, SCREEN_HEIGHT,
+        )
         assert len(path) >= 2
         assert path[0] == (100, 100)
         assert path[-1] == (101, 100)
 
     def test_zero_distance(self) -> None:
-        path = generate_bezier_path((100, 100), (100, 100), 10)
+        path = generate_bezier_path(
+            (100, 100), (100, 100), 10, SCREEN_WIDTH, SCREEN_HEIGHT,
+        )
         assert path[0] == (100, 100)
         assert path[-1] == (100, 100)
 
@@ -139,49 +161,59 @@ class TestApplyJitter:
     def test_within_bounds(self) -> None:
         random.seed(42)
         for _ in range(100):
-            x, y = apply_jitter(640, 360, max_offset_px=3)
+            x, y = apply_jitter(640, 360, SCREEN_WIDTH, SCREEN_HEIGHT, max_offset_px=3)
             assert abs(x - 640) <= 3
             assert abs(y - 360) <= 3
 
     def test_clamps_at_screen_edges(self) -> None:
         random.seed(42)
         for _ in range(50):
-            x, y = apply_jitter(0, 0, max_offset_px=5)
+            x, y = apply_jitter(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, max_offset_px=5)
             assert x >= 0
             assert y >= 0
-            x, y = apply_jitter(SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1, max_offset_px=5)
+            x, y = apply_jitter(
+                SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1,
+                SCREEN_WIDTH, SCREEN_HEIGHT, max_offset_px=5,
+            )
             assert x <= SCREEN_WIDTH - 1
             assert y <= SCREEN_HEIGHT - 1
 
     def test_zero_jitter_identity(self) -> None:
-        x, y = apply_jitter(640, 360, max_offset_px=0)
+        x, y = apply_jitter(640, 360, SCREEN_WIDTH, SCREEN_HEIGHT, max_offset_px=0)
         assert (x, y) == (640, 360)
 
 
 class TestGenerateOvershootPath:
     def test_returns_to_target(self) -> None:
-        path = generate_overshoot_path((640, 360), (100, 50), overshoot_px=15)
+        path = generate_overshoot_path(
+            (640, 360), (100, 50), SCREEN_WIDTH, SCREEN_HEIGHT, overshoot_px=15,
+        )
         assert path[-1] == (640, 360)
 
     def test_first_point_extends_past_target(self) -> None:
         random.seed(42)
         target = (640, 360)
         direction = (200, 0)  # moving right
-        path = generate_overshoot_path(target, direction, overshoot_px=20)
+        path = generate_overshoot_path(
+            target, direction, SCREEN_WIDTH, SCREEN_HEIGHT, overshoot_px=20,
+        )
         # First point should be to the right of target
         assert path[0][0] > target[0]
 
     def test_stays_within_screen(self) -> None:
         random.seed(42)
         path = generate_overshoot_path(
-            (SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1), (100, 100), overshoot_px=50
+            (SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1), (100, 100),
+            SCREEN_WIDTH, SCREEN_HEIGHT, overshoot_px=50,
         )
         for x, y in path:
             assert 0 <= x <= SCREEN_WIDTH - 1
             assert 0 <= y <= SCREEN_HEIGHT - 1
 
     def test_zero_direction_returns_target(self) -> None:
-        path = generate_overshoot_path((640, 360), (0, 0))
+        path = generate_overshoot_path(
+            (640, 360), (0, 0), SCREEN_WIDTH, SCREEN_HEIGHT,
+        )
         assert path == [(640, 360)]
 
 
@@ -189,20 +221,29 @@ class TestGenerateMicroMovements:
     def test_within_amplitude(self) -> None:
         random.seed(42)
         center = (640, 360)
-        points = generate_micro_movements(center, num_frames=10, amplitude_px=2.0)
+        points = generate_micro_movements(
+            center, SCREEN_WIDTH, SCREEN_HEIGHT,
+            num_frames=10, amplitude_px=2.0,
+        )
         for x, y in points:
             dist = math.hypot(x - center[0], y - center[1])
             assert dist <= 3.0  # amplitude + rounding tolerance
 
     def test_correct_count(self) -> None:
-        points = generate_micro_movements((640, 360), num_frames=5)
+        points = generate_micro_movements(
+            (640, 360), SCREEN_WIDTH, SCREEN_HEIGHT, num_frames=5,
+        )
         assert len(points) == 5
 
     def test_zero_frames(self) -> None:
-        assert generate_micro_movements((640, 360), num_frames=0) == []
+        assert generate_micro_movements(
+            (640, 360), SCREEN_WIDTH, SCREEN_HEIGHT, num_frames=0,
+        ) == []
 
     def test_zero_amplitude(self) -> None:
-        assert generate_micro_movements((640, 360), amplitude_px=0) == []
+        assert generate_micro_movements(
+            (640, 360), SCREEN_WIDTH, SCREEN_HEIGHT, amplitude_px=0,
+        ) == []
 
 
 # =========================================================================
@@ -228,7 +269,9 @@ def _make_humanized_mouse(
 
     device = MockHIDDevice()
     device.open()
-    inner = MouseController(device)
+    inner = MouseController(
+        device, screen_width=SCREEN_WIDTH, screen_height=SCREEN_HEIGHT,
+    )
     mouse = HumanizedMouseController(inner, config)
     return mouse, device
 
@@ -723,7 +766,9 @@ class TestConfigEdgeCases:
         config = HumanizeConfig(enabled=False)
         device = MockHIDDevice()
         device.open()
-        mouse = MouseController(device)
+        mouse = MouseController(
+            device, screen_width=SCREEN_WIDTH, screen_height=SCREEN_HEIGHT,
+        )
         keyboard = KeyboardController(device)
 
         # Use a concrete BaseExecutor subclass for testing
@@ -733,7 +778,10 @@ class TestConfigEdgeCases:
             def close(self) -> None:
                 pass
 
-        executor = _TestExecutor(humanize_config=config)
+        executor = _TestExecutor(
+            humanize_config=config,
+            screen_width=SCREEN_WIDTH, screen_height=SCREEN_HEIGHT,
+        )
         wrapped_mouse = executor._wrap_mouse_if_humanized(mouse)
         wrapped_kb = executor._wrap_keyboard_if_humanized(keyboard)
 
@@ -747,7 +795,9 @@ class TestConfigEdgeCases:
         config = HumanizeConfig(enabled=True)
         device = MockHIDDevice()
         device.open()
-        mouse = MouseController(device)
+        mouse = MouseController(
+            device, screen_width=SCREEN_WIDTH, screen_height=SCREEN_HEIGHT,
+        )
         keyboard = KeyboardController(device)
 
         class _TestExecutor(BaseExecutor):
@@ -756,7 +806,10 @@ class TestConfigEdgeCases:
             def close(self) -> None:
                 pass
 
-        executor = _TestExecutor(humanize_config=config)
+        executor = _TestExecutor(
+            humanize_config=config,
+            screen_width=SCREEN_WIDTH, screen_height=SCREEN_HEIGHT,
+        )
         wrapped_mouse = executor._wrap_mouse_if_humanized(mouse)
         wrapped_kb = executor._wrap_keyboard_if_humanized(keyboard)
 
@@ -922,7 +975,9 @@ class TestExecuteBeforeOpen:
             def close(self) -> None:
                 pass
 
-        executor = _TestExecutor()
+        executor = _TestExecutor(
+            screen_width=SCREEN_WIDTH, screen_height=SCREEN_HEIGHT,
+        )
         result = executor.execute({"id": "x1", "action": "click", "x": 100, "y": 100})
         assert result["status"] == "error"
         assert result["id"] == "x1"
@@ -939,11 +994,17 @@ class TestExecuteBeforeOpen:
                 device = MockHIDDevice()
                 device.open()
                 self._keyboard = KeyboardController(device)
-                self._mouse = MouseController(device)
+                self._mouse = MouseController(
+                    device,
+                    screen_width=self._screen_width,
+                    screen_height=self._screen_height,
+                )
             def close(self) -> None:
                 pass
 
-        executor = _TestExecutor()
+        executor = _TestExecutor(
+            screen_width=SCREEN_WIDTH, screen_height=SCREEN_HEIGHT,
+        )
         executor.open()
         result = executor.execute({"id": "x2", "action": "click"})  # missing x, y
         assert result["status"] == "error"
@@ -1000,7 +1061,9 @@ class TestBaseExecutorCacheEviction:
             def close(self) -> None:
                 pass
 
-        return _TestExecutor()
+        return _TestExecutor(
+            screen_width=SCREEN_WIDTH, screen_height=SCREEN_HEIGHT,
+        )
 
     def test_deque_evicts_oldest_on_overflow(self) -> None:
         """When the deque reaches maxlen, oldest IDs are evicted automatically."""

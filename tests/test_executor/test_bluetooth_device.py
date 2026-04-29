@@ -30,6 +30,7 @@ def make_mock_connection() -> BluetoothHIDConnection:
     conn._ctrl_client = MagicMock()
     conn._intr_client = MagicMock()
     conn._dbus_profile = None
+    conn._agent_path = "/cyberraccoon/hid/agent_test1234"
     conn._connected = True
     return conn
 
@@ -47,6 +48,8 @@ def make_mock_bt_executor() -> BluetoothExecutor:
     executor._connection = conn
     executor._humanize_config = None
     executor._target_os = None
+    executor._screen_width = 1920
+    executor._screen_height = 1080
     from collections import deque
     executor._executed_ids = deque(maxlen=1000)
 
@@ -59,7 +62,9 @@ def make_mock_bt_executor() -> BluetoothExecutor:
     from cyberraccoon.executor.mouse import MouseController
 
     executor._keyboard = KeyboardController(kb_dev)
-    executor._mouse = MouseController(ms_dev)
+    executor._mouse = MouseController(
+        ms_dev, screen_width=1920, screen_height=1080,
+    )
 
     return executor
 
@@ -184,6 +189,131 @@ class TestBluetoothHIDConnection:
         conn = make_mock_connection()
         conn.disconnect()
         conn.disconnect()  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# Tests: disconnect() tears down D-Bus state (regression for "already a
+# handler" recurring BT bug — see fix(bt) commit 00fc93b on 2026-04-30)
+# ---------------------------------------------------------------------------
+
+class TestDisconnectClearsDBusState:
+    """Every D-Bus / BlueZ registration created in setup() must be reversed
+    in disconnect(), or the second open() collides with the leaked path
+    and pairing breaks until the process restarts.
+    """
+
+    def _patched_disconnect(self, conn, dbus_mock):
+        """Run conn.disconnect() with `dbus` import patched to dbus_mock."""
+        import sys
+        original = sys.modules.get("dbus")
+        sys.modules["dbus"] = dbus_mock
+        try:
+            conn.disconnect()
+        finally:
+            if original is not None:
+                sys.modules["dbus"] = original
+            else:
+                sys.modules.pop("dbus", None)
+
+    def test_disconnect_unregisters_pairing_agent(self) -> None:
+        """disconnect() must call UnregisterAgent + remove_from_connection +
+        unregister_object_path so re-registering the agent on next open
+        doesn't hit "already a handler" or "Already Exists"."""
+        conn = make_mock_connection()
+        agent = MagicMock()
+        conn._dbus_agent = agent
+
+        dbus_mock = MagicMock()
+        agent_manager = MagicMock()
+        profile_manager = MagicMock()
+        bus = MagicMock()
+        # AgentManager1 vs ProfileManager1 selected by the iface name
+        def make_iface(_obj, iface_name):
+            if iface_name == "org.bluez.AgentManager1":
+                return agent_manager
+            if iface_name == "org.bluez.ProfileManager1":
+                return profile_manager
+            return MagicMock()
+        dbus_mock.SystemBus.return_value = bus
+        dbus_mock.Interface.side_effect = make_iface
+
+        self._patched_disconnect(conn, dbus_mock)
+
+        agent_manager.UnregisterAgent.assert_called_once_with(
+            conn._agent_path,
+        )
+        agent.remove_from_connection.assert_called_once()
+        assert conn._dbus_agent is None
+
+    def test_disconnect_unregisters_profile(self) -> None:
+        """disconnect() must also call UnregisterProfile so the BlueZ side
+        of the HID profile registration is released."""
+        conn = make_mock_connection()
+        # Profile is BlueZ-side only — no python-dbus Object kept on conn
+        dbus_mock = MagicMock()
+        profile_manager = MagicMock()
+        agent_manager = MagicMock()
+        def make_iface(_obj, iface_name):
+            if iface_name == "org.bluez.ProfileManager1":
+                return profile_manager
+            if iface_name == "org.bluez.AgentManager1":
+                return agent_manager
+            return MagicMock()
+        dbus_mock.SystemBus.return_value = MagicMock()
+        dbus_mock.Interface.side_effect = make_iface
+
+        self._patched_disconnect(conn, dbus_mock)
+
+        profile_manager.UnregisterProfile.assert_called_once_with(
+            "/cyberraccoon/hid/profile",
+        )
+        assert conn._dbus_profile is None
+
+    def test_disconnect_swallows_dbus_errors(self) -> None:
+        """A failing UnregisterAgent / UnregisterProfile must NOT raise out
+        of disconnect() — D-Bus may be down, BlueZ may have already
+        garbage-collected the registration, etc. Cleanup is best-effort."""
+        conn = make_mock_connection()
+        conn._dbus_agent = MagicMock()
+        conn._dbus_agent.remove_from_connection.side_effect = RuntimeError(
+            "no connection"
+        )
+
+        dbus_mock = MagicMock()
+        broken_iface = MagicMock()
+        broken_iface.UnregisterAgent.side_effect = RuntimeError("no bluez")
+        broken_iface.UnregisterProfile.side_effect = RuntimeError("no bluez")
+        dbus_mock.Interface.return_value = broken_iface
+        dbus_mock.SystemBus.return_value = MagicMock()
+
+        # Must not raise
+        self._patched_disconnect(conn, dbus_mock)
+
+        # State still cleared even if D-Bus calls failed
+        assert conn._dbus_agent is None
+        assert conn._dbus_profile is None
+        # Sockets still closed despite D-Bus errors
+        assert conn.is_connected() is False
+
+    def test_disconnect_tolerates_dbus_unavailable(self) -> None:
+        """When dbus-python is not installed (e.g. on macOS dev), disconnect
+        must still complete without raising. Achieved by the bare
+        try/except blocks around the dbus imports."""
+        # Force `import dbus` to fail by removing it AND blocking re-import
+        import sys
+        saved = sys.modules.pop("dbus", None)
+        sys.modules["dbus"] = None  # subsequent `import dbus` raises ImportError
+        try:
+            conn = make_mock_connection()
+            conn._dbus_agent = MagicMock()
+            conn.disconnect()  # must not raise
+            assert conn._dbus_agent is None
+            assert conn.is_connected() is False
+        finally:
+            if saved is not None:
+                sys.modules["dbus"] = saved
+            else:
+                sys.modules.pop("dbus", None)
 
 
 # ---------------------------------------------------------------------------

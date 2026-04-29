@@ -18,7 +18,9 @@ class MockActionExecutor(ActionExecutor):
     """
 
     def __init__(self, target_os: str | None = None) -> None:
-        super().__init__(target_os=target_os)
+        super().__init__(
+            target_os=target_os, screen_width=1920, screen_height=1080,
+        )
         self._mock_dev = MockHIDDevice("/dev/hidg0")
 
     def open(self) -> None:
@@ -29,7 +31,11 @@ class MockActionExecutor(ActionExecutor):
 
         self._hid_dev = self._mock_dev  # type: ignore[assignment]
         self._keyboard = KeyboardController(self._mock_dev)  # type: ignore[arg-type]
-        self._mouse = MouseController(self._mock_dev)  # type: ignore[arg-type]
+        self._mouse = MouseController(  # type: ignore[arg-type]
+            self._mock_dev,
+            screen_width=self._screen_width,
+            screen_height=self._screen_height,
+        )
 
 
 @pytest.fixture

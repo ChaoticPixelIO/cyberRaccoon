@@ -61,8 +61,18 @@ def mock_keyboard_device() -> MockHIDDevice:
 
 @pytest.fixture
 def mock_mouse(mock_mouse_device: MockHIDDevice) -> MouseController:
-    """MouseController wired to a MockHIDDevice."""
-    return MouseController(mock_mouse_device)
+    """MouseController wired to a MockHIDDevice (1920x1080 LLM coordinate space)."""
+    return MouseController(
+        mock_mouse_device, screen_width=1920, screen_height=1080,
+    )
+
+
+@pytest.fixture
+def mock_mouse_720(mock_mouse_device: MockHIDDevice) -> MouseController:
+    """MouseController wired to a MockHIDDevice (1280x720 LLM coordinate space)."""
+    return MouseController(
+        mock_mouse_device, screen_width=1280, screen_height=720,
+    )
 
 
 @pytest.fixture

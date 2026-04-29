@@ -12,7 +12,12 @@ import time
 from typing import Any
 
 from cyberraccoon.agent.prompts import build_anthropic_cu_system_prompt
-from cyberraccoon.agent.protocols.base import ComputerUseProtocol, StepResult
+from cyberraccoon.agent.protocols.base import (
+    ComputerUseProtocol,
+    StepResult,
+    is_fatal_status_code,
+    model_supports_temperature,
+)
 from cyberraccoon.agent.protocols.parsing import extract_completion_status
 
 logger = logging.getLogger("M3.anthropic_cu")
@@ -55,19 +60,18 @@ class AnthropicCUProtocol(ComputerUseProtocol):
         model: str,
         api_key: str,
         max_tokens: int = 4096,
-        temperature: float = 0.0,
         history_max_turns: int = 10,
         display_width: int = 1920,
         display_height: int = 1080,
         display_number: int = 1,
         enable_cache: bool = True,
         skill_text: str | None = None,
+        target_os: str = "",
     ) -> None:
         import anthropic
 
         self._model = model
         self._max_tokens = max_tokens
-        self._temperature = temperature
         self._history_max_turns = history_max_turns
         self._display_width = display_width
         self._display_height = display_height
@@ -88,7 +92,7 @@ class AnthropicCUProtocol(ComputerUseProtocol):
             "display_height_px": tool_h,
             "display_number": display_number,
         }
-        self._system_prompt = build_anthropic_cu_system_prompt()
+        self._system_prompt = build_anthropic_cu_system_prompt(target_os=target_os)
         if skill_text:
             self._system_prompt += "\n\n## Application Skill\n\n" + skill_text
 
@@ -116,7 +120,14 @@ class AnthropicCUProtocol(ComputerUseProtocol):
             # Roll back the message we just appended
             self._messages.pop()
             latency_ms = int((time.monotonic() - start) * 1000)
-            logger.error("Anthropic CU API call failed: %s", e)
+            status_code = getattr(e, "status_code", None)
+            request_id = getattr(e, "request_id", None)
+            fatal = is_fatal_status_code(status_code)
+            log_fn = logger.error if fatal else logger.warning
+            log_fn(
+                "Anthropic CU API call failed (status=%s, request_id=%s, fatal=%s): %s",
+                status_code, request_id, fatal, e,
+            )
             return StepResult(
                 command=None,
                 is_done=False,
@@ -128,6 +139,9 @@ class AnthropicCUProtocol(ComputerUseProtocol):
                 latency_ms=latency_ms,
                 success=False,
                 error=str(e),
+                fatal=fatal,
+                error_status_code=status_code,
+                error_request_id=request_id,
             )
 
         latency_ms = int((time.monotonic() - start) * 1000)
@@ -392,12 +406,13 @@ class AnthropicCUProtocol(ComputerUseProtocol):
         kwargs: dict[str, Any] = {
             "model": self._model,
             "max_tokens": self._max_tokens,
-            "temperature": self._temperature,
             "system": self._system_prompt,
             "tools": [self._tool_def],
             "messages": self._messages,
             "betas": ["computer-use-2025-11-24"],
         }
+        if model_supports_temperature(self._model):
+            kwargs["temperature"] = 0.0
         if self._enable_cache:
             kwargs["cache_control"] = {"type": "ephemeral"}
         return self._client.beta.messages.create(**kwargs)

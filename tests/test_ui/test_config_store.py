@@ -157,7 +157,7 @@ class TestPartialYAML:
 
         assert config.llm.model == "custom-model"
         # Other fields should still be defaults
-        assert config.llm.temperature == 0.0
+        assert config.llm.max_tokens == 1024
         assert config.capture_source == "uvc"
 
     def test_unknown_keys_ignored(self, tmp_config_path: Path) -> None:
@@ -190,7 +190,7 @@ class TestLLMProviderSnapshots:
                     "provider": "anthropic",
                     "model": "claude-opus-4-7",
                     "base_url": "https://api.example.com",
-                    "temperature": 0.2,
+                    "max_tokens": 2048,
                 },
             }),
             encoding="utf-8",
@@ -203,7 +203,7 @@ class TestLLMProviderSnapshots:
         snap = config.llm.providers["anthropic"]
         assert snap["model"] == "claude-opus-4-7"
         assert snap["base_url"] == "https://api.example.com"
-        assert snap["temperature"] == 0.2
+        assert snap["max_tokens"] == 2048
 
     def test_providers_dict_round_trips(self, tmp_config_path: Path) -> None:
         store = ConfigStore(str(tmp_config_path))
@@ -216,14 +216,12 @@ class TestLLMProviderSnapshots:
                 "api_key": "sk-ant-xxx",
                 "base_url": None,
                 "max_tokens": 1024,
-                "temperature": 0.0,
             },
             "openai": {
                 "model": "gpt-4o",
                 "api_key": "sk-openai-xxx",
                 "base_url": None,
                 "max_tokens": 2048,
-                "temperature": 0.5,
             },
         }
         store.save(cfg)
@@ -231,7 +229,7 @@ class TestLLMProviderSnapshots:
         loaded = store.load()
         assert set(loaded.llm.providers) == {"anthropic", "openai"}
         assert loaded.llm.providers["openai"]["model"] == "gpt-4o"
-        assert loaded.llm.providers["openai"]["temperature"] == 0.5
+        assert loaded.llm.providers["openai"]["max_tokens"] == 2048
 
     def test_api_key_persisted_in_provider_snapshots(
         self, tmp_config_path: Path
@@ -263,6 +261,29 @@ class TestLLMProviderSnapshots:
         raw = yaml.safe_load(tmp_config_path.read_text())
         providers = raw["llm"]["providers"]
         assert "api_key" not in providers["anthropic"]
+
+    def test_legacy_temperature_field_dropped_on_save(
+        self, tmp_config_path: Path
+    ) -> None:
+        """Old YAML configs with ``temperature`` in provider snapshots converge
+        to the new shape on first save. The field is no longer user-configurable
+        — the protocol layer hardcodes 0.0 and skips it for models that reject it.
+        """
+        store = ConfigStore(str(tmp_config_path))
+        cfg = AppConfig()
+        cfg.llm.providers = {
+            "anthropic": {
+                "model": "claude-opus-4-7",
+                "api_key": "sk-x",
+                "temperature": 0.7,  # legacy field carried in from old YAML
+            },
+        }
+        store.save(cfg)
+
+        raw = yaml.safe_load(tmp_config_path.read_text())
+        snap = raw["llm"]["providers"]["anthropic"]
+        assert "temperature" not in snap
+        assert snap["model"] == "claude-opus-4-7"
 
 
 class TestInvalidYAML:
@@ -368,3 +389,77 @@ class TestConfigPath:
 
         store = ConfigStore(str(explicit))
         assert store.path == explicit
+
+
+class TestDetectedTargetOSRoundtrip:
+    """260429-ucg — detected_target_os is a top-level persisted scalar
+    that round-trips through the YAML save/load cycle alongside the
+    existing target_os manual-override field."""
+
+    def test_default_empty(self, tmp_path: Path) -> None:
+        store = ConfigStore(str(tmp_path / "cfg.yaml"))
+        config = store.load()
+        assert config.detected_target_os == ""
+
+    def test_round_trips(self, tmp_path: Path) -> None:
+        store = ConfigStore(str(tmp_path / "cfg.yaml"))
+        cfg = AppConfig()
+        cfg.detected_target_os = "windows"
+        store.save(cfg)
+
+        loaded = store.load()
+        assert loaded.detected_target_os == "windows"
+
+    def test_loads_from_existing_yaml(self, tmp_path: Path) -> None:
+        cfg_path = tmp_path / "cfg.yaml"
+        cfg_path.write_text(
+            yaml.dump({"detected_target_os": "macos"}),
+            encoding="utf-8",
+        )
+        store = ConfigStore(str(cfg_path))
+        loaded = store.load()
+        assert loaded.detected_target_os == "macos"
+
+    def test_does_not_collide_with_target_os(self, tmp_path: Path) -> None:
+        # Both fields persist independently — manual override and cache
+        # are separate concerns.
+        store = ConfigStore(str(tmp_path / "cfg.yaml"))
+        cfg = AppConfig()
+        cfg.target_os = "linux"           # user override
+        cfg.detected_target_os = "windows"  # auto-cache from a prior task
+        store.save(cfg)
+
+        loaded = store.load()
+        assert loaded.target_os == "linux"
+        assert loaded.detected_target_os == "windows"
+
+
+class TestResolveEffectiveTargetOS:
+    """260429-ucg — resolve_effective_target_os(config) priority:
+    manual override (target_os) wins over auto-detection cache
+    (detected_target_os); empty string when neither is set."""
+
+    def test_empty_when_neither_set(self) -> None:
+        from cyberraccoon.config import resolve_effective_target_os
+        cfg = AppConfig()
+        assert resolve_effective_target_os(cfg) == ""
+
+    def test_manual_override_wins(self) -> None:
+        from cyberraccoon.config import resolve_effective_target_os
+        cfg = AppConfig()
+        cfg.target_os = "linux"
+        cfg.detected_target_os = "windows"  # cache set but ignored
+        assert resolve_effective_target_os(cfg) == "linux"
+
+    def test_falls_back_to_cache(self) -> None:
+        from cyberraccoon.config import resolve_effective_target_os
+        cfg = AppConfig()
+        cfg.detected_target_os = "macos"
+        assert resolve_effective_target_os(cfg) == "macos"
+
+    def test_empty_strings_treated_as_unset(self) -> None:
+        from cyberraccoon.config import resolve_effective_target_os
+        cfg = AppConfig()
+        cfg.target_os = ""
+        cfg.detected_target_os = ""
+        assert resolve_effective_target_os(cfg) == ""

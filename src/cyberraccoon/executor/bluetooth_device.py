@@ -37,7 +37,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from cyberraccoon.executor.hid_device import HIDDeviceError
+from cyberraccoon.executor.hid_device import HIDDeviceError, StaleBondError
 
 logger = logging.getLogger("M4.bluetooth")
 
@@ -129,6 +129,13 @@ class BluetoothHIDConnection:
         self._intr_client: socket.socket | None = None
         self._dbus_profile: Any = None
         self._dbus_agent: Any = None
+        # Unique agent path per instance — avoids "already a handler"
+        # collisions when a previous instance leaked its registration
+        # (e.g. open() raised before disconnect() ran). Each instance
+        # claims its own path; stale paths from prior instances stay
+        # leaked but don't conflict.
+        import uuid
+        self._agent_path: str = f"/cyberraccoon/hid/agent_{uuid.uuid4().hex[:8]}"
         self._glib_loop: Any = None
         self._glib_thread: threading.Thread | None = None
         self._connected = False
@@ -306,7 +313,9 @@ class BluetoothHIDConnection:
 
         bus = dbus_module.SystemBus()
 
-        agent_path = "/cyberraccoon/hid/agent"
+        # Unique per-instance path (set in __init__) so we never collide
+        # with a leaked registration from a previous BluetoothExecutor.
+        agent_path = self._agent_path
 
         # Define agent class inline to keep D-Bus dependency contained
         class PairingAgent(dbus.service.Object):
@@ -356,13 +365,15 @@ class BluetoothHIDConnection:
             def Cancel(self):
                 logger.debug("Agent pairing cancelled")
 
-        try:
-            self._dbus_agent = PairingAgent(bus, agent_path)
+        agent_manager = dbus_module.Interface(
+            bus.get_object("org.bluez", "/org/bluez"),
+            "org.bluez.AgentManager1",
+        )
 
-            agent_manager = dbus_module.Interface(
-                bus.get_object("org.bluez", "/org/bluez"),
-                "org.bluez.AgentManager1",
-            )
+        try:
+            # agent_path is unique per-instance (UUID-suffixed in __init__)
+            # so we should never see "already a handler" here.
+            self._dbus_agent = PairingAgent(bus, agent_path)
 
             try:
                 agent_manager.RegisterAgent(agent_path, "NoInputNoOutput")
@@ -500,60 +511,154 @@ class BluetoothHIDConnection:
             "Waiting for Bluetooth HID connection (timeout=%ds)...", timeout
         )
 
-        # Try outbound connection to paired devices first
-        paired_addrs = self._get_paired_device_addresses()
-        if paired_addrs:
-            logger.info(
-                "Found paired device(s): %s — trying outbound connection",
-                ", ".join(paired_addrs),
-            )
-            for addr in paired_addrs:
-                if self._try_outbound_connect(addr):
-                    return
-        else:
-            logger.info(
-                "No paired devices. Pair '%s' from the target computer.",
-                self._device_name,
-            )
+        # Capture wall-clock start so we can scan kernel logs for the
+        # stale-bond signature (see _detect_stale_bond) if all attempts
+        # fail. Using time.time() rather than monotonic so it matches
+        # journalctl --since.
+        wait_start_wall = time.time()
+        paired_addrs: list[str] = []
 
-        # Fall back to inbound accept with periodic outbound retries
-        deadline = time.monotonic() + timeout
-        poll_interval = 5.0  # seconds between outbound retries
-
-        self._ctrl_sock.settimeout(poll_interval)
-        self._intr_sock.settimeout(poll_interval)
-
-        while time.monotonic() < deadline:
-            # Try inbound accept
-            try:
-                self._ctrl_client, ctrl_info = self._ctrl_sock.accept()
-                logger.info("Control channel connected from %s", ctrl_info)
-
-                self._intr_sock.settimeout(10.0)
-                self._intr_client, intr_info = self._intr_sock.accept()
-                logger.info("Interrupt channel connected from %s", intr_info)
-
-                self._connected = True
-                self._remote_addr = ctrl_info[0] if ctrl_info else ""
-                logger.info("Bluetooth HID connection established (inbound from %s)!", self._remote_addr)
-                self._handle_hidp_handshake()
-                return
-
-            except socket.timeout:
-                pass
-            except OSError as e:
-                logger.debug("Inbound accept error: %s", e)
-
-            # Retry outbound to paired devices
+        try:
+            # Try outbound connection to paired devices first
             paired_addrs = self._get_paired_device_addresses()
-            for addr in paired_addrs:
-                if self._try_outbound_connect(addr):
+            if paired_addrs:
+                # (1) Auto-trust every paired peer. Idempotent — running on
+                # an already-trusted device is a no-op. Catches the common
+                # case where the user pairs from the Mac but never runs
+                # `bluetoothctl trust <addr>` on the Pi, leading to
+                # half-bonded reconnect failures.
+                self._trust_paired_devices(paired_addrs)
+                logger.info(
+                    "Found paired device(s): %s — trying outbound connection",
+                    ", ".join(paired_addrs),
+                )
+                for addr in paired_addrs:
+                    if self._try_outbound_connect(addr):
+                        return
+            else:
+                logger.info(
+                    "No paired devices. Pair '%s' from the target computer.",
+                    self._device_name,
+                )
+
+            # Fall back to inbound accept with periodic outbound retries
+            deadline = time.monotonic() + timeout
+            poll_interval = 5.0  # seconds between outbound retries
+
+            self._ctrl_sock.settimeout(poll_interval)
+            self._intr_sock.settimeout(poll_interval)
+
+            while time.monotonic() < deadline:
+                # Try inbound accept
+                try:
+                    self._ctrl_client, ctrl_info = self._ctrl_sock.accept()
+                    logger.info("Control channel connected from %s", ctrl_info)
+
+                    self._intr_sock.settimeout(10.0)
+                    self._intr_client, intr_info = self._intr_sock.accept()
+                    logger.info("Interrupt channel connected from %s", intr_info)
+
+                    self._connected = True
+                    self._remote_addr = ctrl_info[0] if ctrl_info else ""
+                    logger.info("Bluetooth HID connection established (inbound from %s)!", self._remote_addr)
+                    self._handle_hidp_handshake()
                     return
 
-        raise HIDDeviceError(
-            f"Bluetooth connection timed out after {timeout}s. "
-            f"Ensure the target computer is pairing with '{self._device_name}'."
-        )
+                except socket.timeout:
+                    pass
+                except OSError as e:
+                    logger.debug("Inbound accept error: %s", e)
+
+                # Retry outbound to paired devices
+                paired_addrs = self._get_paired_device_addresses()
+                for addr in paired_addrs:
+                    if self._try_outbound_connect(addr):
+                        return
+
+            # Timeout reached — fall through to stale-bond check below
+            timeout_raised = HIDDeviceError(
+                f"Bluetooth connection timed out after {timeout}s. "
+                f"Ensure the target computer is pairing with '{self._device_name}'."
+            )
+        except (HIDDeviceError, StaleBondError):
+            raise  # already-categorized errors propagate as-is
+        except Exception as e:
+            # Any unexpected exception — let stale-bond detector evaluate
+            # before falling back to the raw exception. Log the original
+            # so it's never silently swallowed.
+            logger.exception("Unexpected error during wait_for_connection: %s", e)
+            timeout_raised = HIDDeviceError(
+                f"Bluetooth connection failed: {e}"
+            )
+
+        # (2) Stale-bond detection runs on EVERY failure path (timeout
+        # or unexpected exception). Scan kernel logs from the start of
+        # the wait window for the unmistakable "ACL packet for unknown
+        # connection handle" signature. When present, raise
+        # StaleBondError with a clearer message; the UI surfaces a
+        # one-click "Reset Pairing" button when it sees this exception.
+        if self._detect_stale_bond(wait_start_wall):
+            raise StaleBondError(
+                "Bluetooth pairing keys are out of sync between the Pi "
+                "and the target computer. The Pi accepts the link but "
+                "the kernel rejects subsequent packets ('ACL packet for "
+                "unknown connection handle' in dmesg). To fix: "
+                "remove pairing on BOTH sides, then pair fresh.\n"
+                "  1. Pi: bluetoothctl remove " + (paired_addrs[0] if paired_addrs else "<mac>") + "\n"
+                "  2. Mac: System Settings → Bluetooth → Forget '" + self._device_name + "'\n"
+                "  3. Pair again from the Mac.\n"
+                "  4. Click Connect."
+            )
+
+        raise timeout_raised
+
+    def _trust_paired_devices(self, addrs: list[str]) -> None:
+        """Idempotently mark each paired device as Trusted.
+
+        Without ``Trusted: yes`` BlueZ requires manual confirmation of
+        incoming connections, which breaks the unattended HID flow on
+        every Mac-initiated reconnect. Calling this on every connect
+        attempt is cheap (one ``bluetoothctl trust`` per device) and
+        eliminates a class of recurring half-bonded states.
+        """
+        for addr in addrs:
+            try:
+                subprocess.run(
+                    ["bluetoothctl", "trust", addr],
+                    check=False, capture_output=True, timeout=3,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                logger.debug("auto-trust %s failed: %s", addr, e)
+
+    def _detect_stale_bond(self, since_wall_ts: float) -> bool:
+        """Return True if recent kernel logs show the signature of
+        mismatched SMP pairing keys.
+
+        We look for ``ACL packet for unknown connection handle`` from
+        the bluetooth subsystem in the journal — that string is the
+        kernel's way of saying "the remote side sent a packet on a
+        connection handle the host stack doesn't recognize", which is
+        exactly what happens when one side dropped the bond while the
+        other kept it.
+
+        We extend the lookback by 30s before the supplied timestamp so
+        that errors from a *previous* attempt in the same session
+        (rapid Connect → fail → retry) still trigger the diagnosis.
+        """
+        try:
+            since_iso = time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(since_wall_ts - 30),
+            )
+            result = subprocess.run(
+                ["journalctl", "-k", "--since", since_iso, "--no-pager"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                return False
+            return "ACL packet for unknown connection handle" in result.stdout
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            logger.debug("stale-bond detection skipped: %s", e)
+            return False
 
     def _try_outbound_connect(self, host_addr: str) -> bool:
         """Try to initiate L2CAP HID connections to a paired host.
@@ -752,7 +857,13 @@ class BluetoothHIDConnection:
             )
 
     def disconnect(self) -> None:
-        """Close all sockets, stop GLib loop, and clean up."""
+        """Close all sockets, stop GLib loop, and clean up.
+
+        Reverses everything :meth:`setup` registered on the system bus —
+        otherwise stale D-Bus handlers and BlueZ profile/agent
+        registrations leak across reconnects and break later attempts
+        with "already a handler" / "Already Exists" errors.
+        """
         self._connected = False
 
         # Stop GLib main loop (may not exist if setup() was never called)
@@ -761,6 +872,48 @@ class BluetoothHIDConnection:
             glib_loop.quit()
         self._glib_loop = None
         self._glib_thread = None
+
+        # Unregister D-Bus pairing agent (BlueZ side + python-dbus side).
+        # Best-effort: errors here are non-fatal (the agent may already be
+        # gone, or D-Bus may be down) but we log them at debug level.
+        agent = getattr(self, "_dbus_agent", None)
+        if agent is not None:
+            agent_path = getattr(self, "_agent_path", "")
+            try:
+                import dbus
+                bus = dbus.SystemBus()
+                try:
+                    agent_manager = dbus.Interface(
+                        bus.get_object("org.bluez", "/org/bluez"),
+                        "org.bluez.AgentManager1",
+                    )
+                    if agent_path:
+                        agent_manager.UnregisterAgent(agent_path)
+                except Exception as e:
+                    logger.debug("UnregisterAgent failed: %s", e)
+                try:
+                    agent.remove_from_connection()
+                except Exception as e:
+                    logger.debug("agent.remove_from_connection failed: %s", e)
+            except Exception as e:
+                logger.warning("Pairing agent teardown error: %s", e)
+            self._dbus_agent = None
+
+        # Unregister HID profile from BlueZ ProfileManager. The profile
+        # path holder isn't a python-dbus Object (we don't claim a path
+        # for it) so only the BlueZ-side registration needs clearing.
+        try:
+            import dbus
+            bus = dbus.SystemBus()
+            profile_manager = dbus.Interface(
+                bus.get_object("org.bluez", "/org/bluez"),
+                "org.bluez.ProfileManager1",
+            )
+            profile_manager.UnregisterProfile("/cyberraccoon/hid/profile")
+        except Exception as e:
+            # Expected when no profile was registered, or BlueZ is down.
+            logger.debug("UnregisterProfile failed (non-fatal): %s", e)
+        self._dbus_profile = None
 
         for name, sock in [
             ("intr_client", self._intr_client),

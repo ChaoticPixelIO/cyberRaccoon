@@ -198,6 +198,25 @@ class WorkflowRunner:
         self._max_consecutive_verifier_failures = 3
         self._consecutive_verifier_failures = 0
 
+        # Fatal-API-error gate (260429-xe5). When VisionAgent returns
+        # FAILED_FATAL, the runner stores the error info on
+        # ``_pending_fatal_error`` and blocks on ``_fatal_error_resolved``
+        # waiting for ``resolve_fatal_error_retry`` or
+        # ``resolve_fatal_error_cancel`` from AppController (which the
+        # web UI's Retry / Cancel buttons drive).
+        self._fatal_error_resolved = threading.Event()
+        self._fatal_resolution: str | None = None  # "retry" | "cancel"
+        self._pending_fatal_error: dict[str, Any] | None = None
+        self._on_fatal_error_callback: Callable[[dict[str, Any]], None] | None = None
+
+        # 260429-zl4 — operator hint, supplied via the textarea on the
+        # replan / escalation dialogs. One-shot: applied to the next
+        # step_goal that runs and then cleared. Empty string means no
+        # hint pending. Capped at 2000 characters server-side
+        # (Pydantic enforces the same on the HTTP boundary).
+        self._pending_hint: str = ""
+        self._MAX_HINT_LEN = 2000
+
     def approve_plan(self) -> None:
         """Signal that the user approved the plan. Unblocks execution."""
         self._plan_rejected = False
@@ -240,7 +259,130 @@ class WorkflowRunner:
         via set_current_plan()."""
         self._resume_event.set()
 
-    def submit_replan_decision(self, choice: str) -> None:
+    def get_pending_fatal_error(self) -> dict[str, Any] | None:
+        """Return the current pending fatal-error payload, or ``None``.
+
+        Populated when the runner is blocked on
+        ``_fatal_error_resolved`` after ``VisionAgent`` returned
+        ``FAILED_FATAL``. Cleared as soon as the user resolves it
+        (Retry or Cancel).
+        """
+        return self._pending_fatal_error
+
+    def resolve_fatal_error_retry(self) -> None:
+        """Signal that the user clicked Retry on a fatal-error banner.
+
+        The runner re-runs the same step with a fresh attempt budget,
+        keeping the protocol's conversation history intact (so the LLM
+        picks up where the failed call left off).
+        """
+        self._fatal_resolution = "retry"
+        self._fatal_error_resolved.set()
+
+    def resolve_fatal_error_cancel(self) -> None:
+        """Signal that the user clicked Cancel on a fatal-error banner.
+
+        The runner returns ``WorkflowResult(status='cancelled')`` and
+        the task moves to FAILED.
+        """
+        self._fatal_resolution = "cancel"
+        self._fatal_error_resolved.set()
+
+    def set_on_fatal_error_callback(
+        self, callback: Callable[[dict[str, Any]], None] | None,
+    ) -> None:
+        """Register the callback fired when a fatal API error is hit.
+
+        AppController uses this to push the error info onto the
+        WebSocket fan-out so the web UI can render the banner.
+        """
+        self._on_fatal_error_callback = callback
+
+    def _await_fatal_error_resolution(
+        self,
+        fatal_info: dict[str, Any],
+        step_number: int,
+        on_progress: Callable[[dict], None] | None = None,
+    ) -> str:
+        """Block until the user resolves a fatal-error pause.
+
+        Returns ``"retry"`` or ``"cancel"``. Polls with a short timeout
+        so a workflow-level abort (``_agent._abort_event``) can also
+        unblock the wait — in that case ``"cancel"`` is returned.
+        """
+        # Snapshot for the UI (banner reads via get_pending_fatal_error).
+        self._pending_fatal_error = {
+            "status_code": fatal_info.get("status_code"),
+            "request_id": fatal_info.get("request_id"),
+            "message": fatal_info.get("message", "API request failed"),
+            "step_number": step_number,
+        }
+        self._fatal_error_resolved.clear()
+        self._fatal_resolution = None
+
+        # Notify the UI via the workflow on_progress event channel —
+        # AppController's bridge converts this into an AppEventType.FATAL_ERROR
+        # which fans out to all connected WebSocket clients.
+        if on_progress is not None:
+            try:
+                on_progress({
+                    "type": "fatal_error",
+                    **self._pending_fatal_error,
+                })
+            except Exception as cb_err:
+                logger.warning(
+                    "Workflow: fatal_error on_progress emit raised: %s", cb_err,
+                )
+
+        # Legacy callback path (retained for direct registration; T3 tests
+        # use this, AppController uses the on_progress event channel above).
+        if self._on_fatal_error_callback is not None:
+            try:
+                self._on_fatal_error_callback(self._pending_fatal_error)
+            except Exception as cb_err:
+                logger.warning(
+                    "Workflow: on_fatal_error callback raised: %s", cb_err,
+                )
+
+        logger.warning(
+            "Workflow: paused on fatal API error (status=%s, request_id=%s) "
+            "— awaiting Retry / Cancel from operator",
+            self._pending_fatal_error["status_code"],
+            self._pending_fatal_error["request_id"],
+        )
+
+        # Poll-with-timeout so abort can unwedge us.
+        while not self._fatal_error_resolved.wait(timeout=0.5):
+            if self._agent._abort_event.is_set():
+                self._pending_fatal_error = None
+                if on_progress is not None:
+                    try:
+                        on_progress({
+                            "type": "fatal_error_resolved",
+                            "choice": "abort",
+                        })
+                    except Exception:
+                        pass
+                return "cancel"
+
+        resolution = self._fatal_resolution or "cancel"
+        self._pending_fatal_error = None
+        logger.info(
+            "Workflow: fatal-error resolution received: %s", resolution,
+        )
+        if on_progress is not None:
+            try:
+                on_progress({
+                    "type": "fatal_error_resolved",
+                    "choice": resolution,
+                })
+            except Exception as cb_err:
+                logger.warning(
+                    "Workflow: fatal_error_resolved emit raised: %s", cb_err,
+                )
+        return resolution
+
+    def submit_replan_decision(self, choice: str, hint: str = "") -> None:
         """H5 — single authoritative decision entry point for all three paths.
 
         Validates ``choice`` against the per-gate allowlist driven by
@@ -252,7 +394,18 @@ class WorkflowRunner:
             gate "replan_A"      -> {"continue", "replan", "abort"}
             gate "replan_B"      -> {"retry", "replan", "abort"}
             gate "escalation_C"  -> {"resume", "replan", "abort"}
+
+        Args:
+            choice: One of the gate-specific allowed strings above.
+            hint:   Optional operator-supplied hint (260429-zl4). When
+                non-empty, applied one-shot to the next step's task_goal
+                so the LLM sees it as part of the user's instruction.
+                Capped at 2000 characters; longer values raise ValueError.
         """
+        if hint and len(hint) > self._MAX_HINT_LEN:
+            raise ValueError(
+                f"hint too long: {len(hint)} chars (max {self._MAX_HINT_LEN})"
+            )
         # I10 — atomic read/validate/store under _gate_lock so a concurrent
         # gate swap on the workflow thread cannot wedge a now-invalid choice
         # into _replan_choice. The Event.set() at the end is intentionally
@@ -272,6 +425,7 @@ class WorkflowRunner:
                     f"allowed: {sorted(allowed) if allowed else []}"
                 )
             self._replan_choice = choice
+            self._pending_hint = hint or ""
         self._replan_decision.set()
 
     def set_auto_replan(self, enabled: bool) -> None:
@@ -969,6 +1123,22 @@ class WorkflowRunner:
                 completed=completed_goals if completed_goals else None,
             )
 
+            # 260429-zl4 — apply operator hint one-shot. The textarea on
+            # the replan/escalation dialog feeds into self._pending_hint
+            # via submit_replan_decision; we splice it into the goal so
+            # the LLM sees it as part of the user's instruction, then
+            # clear so it does not bleed into later steps. Operator-
+            # trusted: no DATA_START tags, plain append.
+            if self._pending_hint:
+                step_goal = (
+                    f"{step_goal}\n\nOperator hint: {self._pending_hint}"
+                )
+                logger.info(
+                    "Workflow: applied operator hint (length=%d) to step %d",
+                    len(self._pending_hint), step.number,
+                )
+                self._pending_hint = ""
+
             success = False
             failure_reason = ""
             paused = False
@@ -1034,6 +1204,35 @@ class WorkflowRunner:
                     # fresh screenshot. D-03: interrupted step is partially
                     # completed. D-09: resume continues from next incomplete
                     # step. The LLM sees a fresh screenshot and adapts.
+                    paused = True
+                    break  # break out of retry loop
+                elif result.status == TaskStatus.FAILED_FATAL:
+                    # Fatal API error (4xx-non-429). Pause the task and
+                    # wait for operator resolution (Retry / Cancel) instead
+                    # of burning the per-step retry budget on a request that
+                    # cannot succeed without external action.
+                    fatal_info = result.fatal_error or {
+                        "message": result.reason,
+                    }
+                    resolution = self._await_fatal_error_resolution(
+                        fatal_info, step.number, on_progress=on_progress,
+                    )
+                    if resolution == "cancel":
+                        return WorkflowResult(
+                            status="cancelled",
+                            reason=(
+                                f"Fatal API error cancelled by operator: "
+                                f"{fatal_info.get('message', result.reason)}"
+                            ),
+                            steps_completed=len(completed_goals),
+                            steps_total=len(current_steps),
+                            step_results=step_results,
+                            total_duration_s=time.monotonic() - start_time,
+                        )
+                    # Retry: drop out of the inner for-loop and re-enter the
+                    # outer while loop with a fresh attempt budget — same as
+                    # the PAUSED path. Protocol history is intact, so the
+                    # LLM picks up where the failed call left off.
                     paused = True
                     break  # break out of retry loop
                 else:

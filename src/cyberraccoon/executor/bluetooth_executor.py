@@ -58,8 +58,16 @@ class BluetoothExecutor(BaseExecutor):
         connection_timeout: float = 60.0,
         humanize_config: HumanizeConfig | None = None,
         target_os: str | None = None,
+        *,
+        screen_width: int,
+        screen_height: int,
     ) -> None:
-        super().__init__(humanize_config=humanize_config, target_os=target_os)
+        super().__init__(
+            humanize_config=humanize_config,
+            target_os=target_os,
+            screen_width=screen_width,
+            screen_height=screen_height,
+        )
         self._device_name = device_name
         self._connection_timeout = connection_timeout
         self._connection: BluetoothHIDConnection | None = None
@@ -88,7 +96,11 @@ class BluetoothExecutor(BaseExecutor):
             KeyboardController(kb_dev)
         )
         self._mouse = self._wrap_mouse_if_humanized(
-            MouseController(ms_dev)
+            MouseController(
+                ms_dev,
+                screen_width=self._screen_width,
+                screen_height=self._screen_height,
+            )
         )
 
         logger.info(

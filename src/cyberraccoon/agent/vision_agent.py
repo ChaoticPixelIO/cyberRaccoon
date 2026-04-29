@@ -41,6 +41,11 @@ class TaskStatus(Enum):
     FAILED = "failed"
     ABORTED = "aborted"
     PAUSED = "paused"
+    # Fatal API error (4xx-non-429): the request itself is wrong, retrying
+    # would not help. Distinct from FAILED so the workflow runner can pause
+    # the task pending operator resolution (Retry / Cancel from the UI)
+    # rather than counting toward the per-step retry budget.
+    FAILED_FATAL = "failed_fatal"
 
 
 @dataclass
@@ -57,6 +62,10 @@ class TaskResult:
     total_cache_creation_tokens: int = 0
     step_log: list[dict[str, Any]] = field(default_factory=list)
     completion_status: str = "success"  # "success", "gave_up", "stuck", or "escalate"
+    # Populated only when ``status == FAILED_FATAL``. Carries the raw API
+    # error context (status_code, request_id, message) up to the workflow
+    # runner, which routes it to the UI banner and the pause-on-error gate.
+    fatal_error: dict[str, Any] | None = None
 
 
 class VisionAgent:
@@ -81,6 +90,8 @@ class VisionAgent:
         stability_threshold: float = 2.0,
         stability_interval_s: float = 0.5,
         stability_max_wait_s: float = 5.0,
+        cached_target_os: str | None = None,
+        on_os_detected: Callable[[str], None] | None = None,
     ) -> None:
         self._capture = capture
         self._protocol = protocol
@@ -96,6 +107,15 @@ class VisionAgent:
         self._abort_event = threading.Event()
         self._pause_event = threading.Event()
         self._step_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="M2-step")
+
+        # 260429-ucg — target-OS cache + persistence callback. When
+        # ``cached_target_os`` is set (resolved from
+        # ``AppConfig.target_os | detected_target_os``), the agent skips
+        # the 8-second detection LLM call entirely. When it's empty, the
+        # agent runs detection inline and invokes ``on_os_detected`` so
+        # AppController can persist the result to yaml for the next task.
+        self._cached_target_os = cached_target_os or None
+        self._on_os_detected = on_os_detected
 
         # BIOS reboot transition state
         self._in_bios_mode = False
@@ -230,16 +250,68 @@ class VisionAgent:
                         total_cache_read_tokens, total_cache_creation_tokens,
                     )
 
-            # Auto-detect target OS if not set
+            # Resolve target OS: prefer cached value (zero LLM cost), fall
+            # back to inline detection if no cache yet (260429-ucg).
             if hasattr(self._executor, '_target_os') and self._executor._target_os is None:
-                detected = self._protocol.detect_os(cap_result.base64_jpeg)
-                if detected:
+                from cyberraccoon.executor.clipboard_bridge import TargetOS
+                if self._cached_target_os:
                     try:
-                        from cyberraccoon.executor.clipboard_bridge import TargetOS
-                        self._executor._target_os = TargetOS(detected)
-                        logger.info("Auto-detected target OS: %s", detected)
+                        self._executor._target_os = TargetOS(self._cached_target_os)
+                        logger.info(
+                            "Using cached target OS: %s (no detection call)",
+                            self._cached_target_os,
+                        )
+                        if on_step:
+                            try:
+                                on_step({
+                                    "type": "target_os_cached",
+                                    "os": self._cached_target_os,
+                                })
+                            except Exception as cb_err:
+                                logger.warning(
+                                    "target_os_cached callback raised: %s", cb_err,
+                                )
                     except ValueError:
-                        logger.warning("OS detection returned unknown value: %s", detected)
+                        logger.warning(
+                            "Cached target OS has unknown value, falling back "
+                            "to detection: %s", self._cached_target_os,
+                        )
+                        self._cached_target_os = None
+                if self._executor._target_os is None:
+                    # Either no cache, or the cached value was invalid.
+                    if on_step:
+                        try:
+                            on_step({"type": "detecting_target_os"})
+                        except Exception as cb_err:
+                            logger.warning(
+                                "detecting_target_os callback raised: %s", cb_err,
+                            )
+                    detected = self._protocol.detect_os(cap_result.base64_jpeg)
+                    if detected:
+                        try:
+                            self._executor._target_os = TargetOS(detected)
+                            logger.info("Auto-detected target OS: %s", detected)
+                            if on_step:
+                                try:
+                                    on_step({
+                                        "type": "target_os_detected",
+                                        "os": detected,
+                                    })
+                                except Exception as cb_err:
+                                    logger.warning(
+                                        "target_os_detected callback raised: %s",
+                                        cb_err,
+                                    )
+                            # Persist via callback so the next task uses the cache.
+                            if self._on_os_detected:
+                                try:
+                                    self._on_os_detected(detected)
+                                except Exception as cb_err:
+                                    logger.warning(
+                                        "on_os_detected callback raised: %s", cb_err,
+                                    )
+                        except ValueError:
+                            logger.warning("OS detection returned unknown value: %s", detected)
 
             # Emit initial screenshot so UI shows it immediately
             if on_step:
@@ -345,6 +417,32 @@ class VisionAgent:
                 total_output_tokens += step_result.output_tokens
                 total_cache_read_tokens += step_result.cache_read_tokens
                 total_cache_creation_tokens += step_result.cache_creation_tokens
+
+                # Fatal API error short-circuit: the request itself is wrong
+                # (deprecated param, bad auth, etc.) — no point burning more
+                # retries. Return FAILED_FATAL with the error context so the
+                # workflow runner can pause the task pending operator action.
+                if step_result.fatal:
+                    fatal_info = {
+                        "status_code": step_result.error_status_code,
+                        "request_id": step_result.error_request_id,
+                        "message": step_result.error or "API request failed",
+                    }
+                    logger.error(
+                        "Step %d: Fatal API error — short-circuiting retry "
+                        "loop (status=%s, request_id=%s)",
+                        step_count, fatal_info["status_code"],
+                        fatal_info["request_id"],
+                    )
+                    return self._build_result(
+                        TaskStatus.FAILED_FATAL,
+                        fatal_info["message"],
+                        step_count, total_input_tokens, total_output_tokens,
+                        start_time, step_log,
+                        total_cache_read_tokens,
+                        total_cache_creation_tokens,
+                        fatal_error=fatal_info,
+                    )
 
                 if not step_result.success:
                     logger.warning(
@@ -971,6 +1069,7 @@ class VisionAgent:
         cache_read_tokens: int = 0,
         cache_creation_tokens: int = 0,
         completion_status: str = "success",
+        fatal_error: dict[str, Any] | None = None,
     ) -> TaskResult:
         """Construct a TaskResult with computed duration."""
         duration = time.monotonic() - start_time
@@ -985,6 +1084,7 @@ class VisionAgent:
             total_cache_creation_tokens=cache_creation_tokens,
             step_log=step_log,
             completion_status=completion_status,
+            fatal_error=fatal_error,
         )
         logger.info(
             "Task finished: status=%s, steps=%d, tokens=%d+%d, "

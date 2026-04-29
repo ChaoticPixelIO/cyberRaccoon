@@ -27,9 +27,6 @@ from cyberraccoon.executor.keyboard import (
 from cyberraccoon.executor.mouse import (
     BUTTON_LEFT,
     MouseController,
-    _screen_to_hid,
-    SCREEN_WIDTH,
-    SCREEN_HEIGHT,
 )
 
 logger = logging.getLogger("M4.humanize")
@@ -61,6 +58,8 @@ def generate_bezier_path(
     start: tuple[int, int],
     end: tuple[int, int],
     num_points: int,
+    screen_width: int,
+    screen_height: int,
     noise: float = 1.0,
 ) -> list[tuple[int, int]]:
     """Generate a cubic Bezier curve path between two screen coordinates.
@@ -97,8 +96,8 @@ def generate_bezier_path(
         bx = u**3 * sx + 3 * u**2 * t * c1x + 3 * u * t**2 * c2x + t**3 * ex
         by = u**3 * sy + 3 * u**2 * t * c1y + 3 * u * t**2 * c2y + t**3 * ey
 
-        px = max(0, min(SCREEN_WIDTH - 1, round(bx)))
-        py = max(0, min(SCREEN_HEIGHT - 1, round(by)))
+        px = max(0, min(screen_width - 1, round(bx)))
+        py = max(0, min(screen_height - 1, round(by)))
         path.append((px, py))
 
     # Guarantee exact endpoints
@@ -152,6 +151,8 @@ def compute_step_delays(
 def apply_jitter(
     x: int,
     y: int,
+    screen_width: int,
+    screen_height: int,
     max_offset_px: int = 2,
 ) -> tuple[int, int]:
     """Add small random offset to click target within a circle.
@@ -166,14 +167,16 @@ def apply_jitter(
     jx = round(x + radius * math.cos(angle))
     jy = round(y + radius * math.sin(angle))
 
-    jx = max(0, min(SCREEN_WIDTH - 1, jx))
-    jy = max(0, min(SCREEN_HEIGHT - 1, jy))
+    jx = max(0, min(screen_width - 1, jx))
+    jy = max(0, min(screen_height - 1, jy))
     return (jx, jy)
 
 
 def generate_overshoot_path(
     target: tuple[int, int],
     approach_direction: tuple[float, float],
+    screen_width: int,
+    screen_height: int,
     overshoot_px: int = 15,
 ) -> list[tuple[int, int]]:
     """Generate a short path that overshoots the target then corrects back.
@@ -194,20 +197,22 @@ def generate_overshoot_path(
     overshoot_amount = random.uniform(0.4, 1.0) * overshoot_px
     ox = round(tx + nx * overshoot_amount)
     oy = round(ty + ny * overshoot_amount)
-    ox = max(0, min(SCREEN_WIDTH - 1, ox))
-    oy = max(0, min(SCREEN_HEIGHT - 1, oy))
+    ox = max(0, min(screen_width - 1, ox))
+    oy = max(0, min(screen_height - 1, oy))
 
     # Midpoint correction (between overshoot and target, slight offset)
     mx = round((ox + tx) / 2 + random.gauss(0, 1))
     my = round((oy + ty) / 2 + random.gauss(0, 1))
-    mx = max(0, min(SCREEN_WIDTH - 1, mx))
-    my = max(0, min(SCREEN_HEIGHT - 1, my))
+    mx = max(0, min(screen_width - 1, mx))
+    my = max(0, min(screen_height - 1, my))
 
     return [(ox, oy), (mx, my), target]
 
 
 def generate_micro_movements(
     center: tuple[int, int],
+    screen_width: int,
+    screen_height: int,
     num_frames: int = 3,
     amplitude_px: float = 0.8,
 ) -> list[tuple[int, int]]:
@@ -223,8 +228,8 @@ def generate_micro_movements(
     for _ in range(num_frames):
         angle = random.uniform(0, 2 * math.pi)
         r = random.uniform(0, amplitude_px)
-        px = max(0, min(SCREEN_WIDTH - 1, round(cx + r * math.cos(angle))))
-        py = max(0, min(SCREEN_HEIGHT - 1, round(cy + r * math.sin(angle))))
+        px = max(0, min(screen_width - 1, round(cx + r * math.cos(angle))))
+        py = max(0, min(screen_height - 1, round(cy + r * math.sin(angle))))
         points.append((px, py))
     return points
 
@@ -369,6 +374,8 @@ class HumanizedMouseController:
             (self._last_x, self._last_y),
             (target_x, target_y),
             step_count,
+            self._inner._screen_width,
+            self._inner._screen_height,
             self._config.curve_noise,
         )
         delays = compute_step_delays(
@@ -385,6 +392,8 @@ class HumanizedMouseController:
             overshoot = generate_overshoot_path(
                 (target_x, target_y),
                 direction,
+                self._inner._screen_width,
+                self._inner._screen_height,
                 self._config.overshoot_distance_px,
             )
             path.extend(overshoot)
@@ -407,6 +416,8 @@ class HumanizedMouseController:
             return
         tremors = generate_micro_movements(
             (x, y),
+            self._inner._screen_width,
+            self._inner._screen_height,
             num_frames=random.randint(2, 4),
             amplitude_px=self._config.micro_movement_amplitude_px,
         )
@@ -429,7 +440,12 @@ class HumanizedMouseController:
 
     def click(self, x: int, y: int, button: str = "left") -> None:
         """Click with natural approach, jitter, and optional tremor."""
-        jx, jy = apply_jitter(x, y, self._config.click_jitter_px)
+        jx, jy = apply_jitter(
+            x, y,
+            self._inner._screen_width,
+            self._inner._screen_height,
+            self._config.click_jitter_px,
+        )
         self._move_naturally(jx, jy)
         self._do_micro_movements(jx, jy)
         self._inner.click(jx, jy, button)
@@ -438,7 +454,12 @@ class HumanizedMouseController:
 
     def double_click(self, x: int, y: int) -> None:
         """Double-click with natural approach and varied inter-click gap."""
-        jx, jy = apply_jitter(x, y, self._config.click_jitter_px)
+        jx, jy = apply_jitter(
+            x, y,
+            self._inner._screen_width,
+            self._inner._screen_height,
+            self._config.click_jitter_px,
+        )
         self._move_naturally(jx, jy)
         self._do_micro_movements(jx, jy)
 
@@ -455,7 +476,12 @@ class HumanizedMouseController:
 
     def triple_click(self, x: int, y: int) -> None:
         """Triple-click with natural approach and varied inter-click gaps."""
-        jx, jy = apply_jitter(x, y, self._config.click_jitter_px)
+        jx, jy = apply_jitter(
+            x, y,
+            self._inner._screen_width,
+            self._inner._screen_height,
+            self._config.click_jitter_px,
+        )
         self._move_naturally(jx, jy)
         self._do_micro_movements(jx, jy)
 
@@ -479,7 +505,7 @@ class HumanizedMouseController:
         self._move_naturally(x, y)
 
         # Build scroll manually for per-tick timing control
-        hid_x, hid_y = _screen_to_hid(x, y)
+        hid_x, hid_y = self._inner._screen_to_hid(x, y)
         if direction not in ("up", "down"):
             raise ValueError(f"Unknown scroll direction: {direction!r}")
         single = -1 if direction == "down" else 1
@@ -529,6 +555,8 @@ class HumanizedMouseController:
             (from_x, from_y),
             (to_x, to_y),
             step_count,
+            self._inner._screen_width,
+            self._inner._screen_height,
             self._config.curve_noise * 0.5,  # less noise during drag
         )
         delays = compute_step_delays(
@@ -538,7 +566,7 @@ class HumanizedMouseController:
         )
 
         # Move to start (no button)
-        from_hx, from_hy = _screen_to_hid(from_x, from_y)
+        from_hx, from_hy = self._inner._screen_to_hid(from_x, from_y)
         self._inner.send_report(0, from_hx, from_hy)
         time.sleep(0.02 * random.uniform(0.8, 1.2))
 
@@ -548,13 +576,13 @@ class HumanizedMouseController:
 
         # Drag along curved path with button held
         for i, (px, py) in enumerate(path):
-            hx, hy = _screen_to_hid(px, py)
+            hx, hy = self._inner._screen_to_hid(px, py)
             self._inner.send_report(BUTTON_LEFT, hx, hy)
             if i < len(delays):
                 time.sleep(delays[i])
 
         # Release at destination
-        to_hx, to_hy = _screen_to_hid(to_x, to_y)
+        to_hx, to_hy = self._inner._screen_to_hid(to_x, to_y)
         self._inner.send_report(0, to_hx, to_hy)
 
         self._last_x = to_x

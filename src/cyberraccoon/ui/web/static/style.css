@@ -263,6 +263,28 @@ body {
     color: var(--error);
     background: rgba(231, 76, 60, 0.1);
     border-radius: var(--radius);
+    white-space: pre-wrap;       /* preserve line breaks in StaleBondError msg */
+}
+
+.stale-bond-banner {
+    padding: 0.6rem 1rem;
+    margin-bottom: 0.5rem;
+    background: rgba(243, 156, 18, 0.12);
+    border: 1px solid rgba(243, 156, 18, 0.5);
+    border-radius: var(--radius);
+}
+.stale-bond-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+.pairing-reset-result {
+    padding: 0.4rem 1rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--ok);
+    background: rgba(46, 204, 113, 0.1);
+    border-radius: var(--radius);
 }
 
 /* ---- Task panel ---- */
@@ -334,6 +356,55 @@ body {
     width: 100%;
     height: 100%;
     object-fit: contain;
+    display: block;
+}
+
+/* Wrapper sized to the screenshot's natural aspect ratio (set inline via
+   :style="aspect-ratio: W / H"). The img fills it exactly, so click
+   markers position via percentage land on the right pixel without any
+   letterbox math. The wrapper itself is centered inside .preview-area
+   and shrinks to fit. */
+.preview-img-wrap {
+    position: relative;
+    max-width: 100%;
+    max-height: 100%;
+    display: flex;
+}
+
+/* Click marker — high-contrast double ring (white + black) around a
+   colored dot, visible on any screenshot background.
+   Position is percentage-of-wrapper, set inline.  --marker-color is the
+   center fill, also set inline per action. */
+.click-marker {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    margin: -7px 0 0 -7px;          /* center on the (x, y) anchor */
+    border-radius: 50%;
+    background: var(--marker-color, #e74c3c);
+    box-shadow:
+        0 0 0 3px rgba(255, 255, 255, 0.95),
+        0 0 0 5px rgba(0, 0, 0, 0.85),
+        0 0 8px rgba(0, 0, 0, 0.4);
+    pointer-events: none;
+    z-index: 5;
+}
+.click-marker.drag-end {
+    --marker-color: #f39c12;        /* orange dot at drag end */
+}
+.click-marker .marker-label {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+    text-shadow:
+        0 0 3px #000, 0 0 3px #000, 0 0 3px #000, 0 0 3px #000;
+    white-space: nowrap;
+    pointer-events: none;
 }
 
 .preview-placeholder {
@@ -359,6 +430,147 @@ body {
     padding: 0.75rem;
     margin-bottom: 0.5rem;
     border-left: 3px solid var(--accent);
+}
+
+/* 260429-xe5 — Fatal API error banner. Sticky-feeling red callout above
+ * the task input. Carries the literal API error message + request_id and
+ * Retry / Cancel actions for the operator. */
+.fatal-error-banner {
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    padding: 0.85rem 1rem;
+    margin-bottom: 0.75rem;
+    border-left: 4px solid #ef4444;
+    box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.25);
+}
+.fatal-error-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.95rem;
+    color: #fca5a5;
+    margin-bottom: 0.35rem;
+}
+.fatal-error-icon {
+    font-size: 1.1rem;
+}
+.fatal-error-status {
+    margin-left: auto;
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+.fatal-error-message {
+    font-size: 0.9rem;
+    color: var(--text);
+    margin-bottom: 0.5rem;
+    word-break: break-word;
+}
+.fatal-error-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-bottom: 0.4rem;
+}
+.fatal-error-meta code {
+    background: rgba(239, 68, 68, 0.08);
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.78rem;
+    color: var(--text);
+}
+.fatal-error-step {
+    margin-left: 0.25rem;
+    font-style: italic;
+}
+.fatal-error-hint {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-bottom: 0.6rem;
+}
+.fatal-error-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+.btn-link-sm {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 0.78rem;
+    padding: 0.1rem 0.45rem;
+    border-radius: 3px;
+}
+.btn-link-sm:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text);
+}
+
+/* 260429-ucg — Target-OS detection progress banner. Renders above the
+ * action list while the agent is establishing the target OS at task
+ * start. Subtle accent colour — informational, not alarming. */
+.os-detection-banner {
+    background: var(--bg-card);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.os-detection-banner small {
+    margin-left: 0.25rem;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+}
+
+/* 260429-zl4 — Operator hint textarea on replan dialogs and escalation
+ * banner. Shared style for the textarea + label + character counter. */
+.dialog-hint-section {
+    margin: 0.6rem 0 0.4rem;
+}
+.dialog-hint-section label {
+    display: block;
+    width: 100%;
+}
+.dialog-hint-label {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-bottom: 0.25rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.dialog-hint-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 0.4rem 0.55rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    resize: vertical;
+    min-height: 2.5em;
+}
+.dialog-hint-textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.dialog-hint-counter {
+    margin-top: 0.15rem;
+    text-align: right;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-family: monospace;
 }
 .escalation-header {
     font-size: 0.85rem;
@@ -1593,6 +1805,25 @@ fieldset select:focus {
 }
 .btn-abort:hover {
     background: rgba(231, 76, 60, 0.15);
+}
+
+/* Primary "go-ahead" action (Execute / Start / Resume in escalation
+   dialogs). Filled green so it visually dominates the row and is the
+   obvious target — these are the buttons users press most often. */
+.btn-start {
+    background: var(--ok);
+    border: 1px solid var(--ok);
+    color: #000;
+    font-weight: 700;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+}
+.btn-start:hover:not(:disabled) {
+    background: #27ae60;
+    border-color: #27ae60;
+}
+.btn-start:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .paused-badge {

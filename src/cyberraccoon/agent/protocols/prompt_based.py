@@ -13,7 +13,12 @@ from typing import Any
 
 from cyberraccoon.agent.prompts import build_prompt_based_system_prompt
 from cyberraccoon.agent.protocols.anthropic_cu import AnthropicCUProtocol
-from cyberraccoon.agent.protocols.base import ComputerUseProtocol, StepResult
+from cyberraccoon.agent.protocols.base import (
+    ComputerUseProtocol,
+    StepResult,
+    is_fatal_status_code,
+    model_supports_temperature,
+)
 from cyberraccoon.agent.protocols.parsing import parse_json_actions
 
 logger = logging.getLogger("M3.prompt_based")
@@ -56,21 +61,20 @@ class PromptBasedProtocol(ComputerUseProtocol):
         api_key: str,
         base_url: str | None = None,
         max_tokens: int = 4096,
-        temperature: float = 0.0,
         history_max_turns: int = 10,
         display_width: int = 1920,
         display_height: int = 1080,
         enable_cache: bool = True,
         skill_text: str | None = None,
+        target_os: str = "",
     ) -> None:
         self._provider = provider.lower()
         self._model = model
         self._max_tokens = max_tokens
-        self._temperature = temperature
         self._history_max_turns = history_max_turns
         self._enable_cache = enable_cache
         self._system_prompt = build_prompt_based_system_prompt(
-            display_width, display_height,
+            display_width, display_height, target_os=target_os,
         )
         if skill_text:
             self._system_prompt += "\n\n## Application Skill\n\n" + skill_text
@@ -108,9 +112,16 @@ class PromptBasedProtocol(ComputerUseProtocol):
                 )
         except Exception as e:
             latency_ms = int((time.monotonic() - start) * 1000)
-            logger.error(
-                "Prompt-based API call failed (%s): %s",
-                type(e).__name__, e,
+            # Both anthropic.APIStatusError and openai.APIStatusError surface
+            # status_code + request_id attributes; duck-type on those rather
+            # than importing both SDKs' exception hierarchies here.
+            status_code = getattr(e, "status_code", None)
+            request_id = getattr(e, "request_id", None)
+            fatal = is_fatal_status_code(status_code)
+            log_fn = logger.error if fatal else logger.warning
+            log_fn(
+                "Prompt-based API call failed (%s, status=%s, request_id=%s, fatal=%s): %s",
+                type(e).__name__, status_code, request_id, fatal, e,
             )
             return StepResult(
                 command=None,
@@ -123,6 +134,9 @@ class PromptBasedProtocol(ComputerUseProtocol):
                 latency_ms=latency_ms,
                 success=False,
                 error=f"{type(e).__name__}: {e}",
+                fatal=fatal,
+                error_status_code=status_code,
+                error_request_id=request_id,
             )
 
         latency_ms = int((time.monotonic() - start) * 1000)
@@ -356,10 +370,11 @@ class PromptBasedProtocol(ComputerUseProtocol):
         kwargs: dict[str, Any] = {
             "model": self._model,
             "max_tokens": self._max_tokens,
-            "temperature": self._temperature,
             "system": self._system_prompt,
             "messages": messages,
         }
+        if model_supports_temperature(self._model):
+            kwargs["temperature"] = 0.0
         if self._enable_cache:
             kwargs["cache_control"] = {"type": "ephemeral"}
         response = self._anthropic_client.messages.create(**kwargs)
@@ -407,12 +422,14 @@ class PromptBasedProtocol(ComputerUseProtocol):
         messages.extend(self._messages)
         messages.append({"role": "user", "content": current_user_content})
 
-        response = self._openai_client.chat.completions.create(
-            model=self._model,
-            max_completion_tokens=self._max_tokens,
-            temperature=self._temperature,
-            messages=messages,
-        )
+        kwargs: dict[str, Any] = {
+            "model": self._model,
+            "max_completion_tokens": self._max_tokens,
+            "messages": messages,
+        }
+        if model_supports_temperature(self._model):
+            kwargs["temperature"] = 0.0
+        response = self._openai_client.chat.completions.create(**kwargs)
 
         if not response.choices or not response.choices[0].message.content:
             raise ValueError(

@@ -182,6 +182,24 @@ def _run_task(args: argparse.Namespace, logger: logging.Logger) -> None:
             print(f"\nError: {e}", file=sys.stderr)
             sys.exit(1)
 
+    # 260429-cmf — capture output dims feed both create_protocol (LLM
+    # coordinate space) and the executor (HID coordinate space). Source
+    # from the live capture object (its actual output), not a config
+    # default: CSI capture ignores config and uses hardware-constrained
+    # dims (e.g. 1280×720 on 2-lane CAM0).
+    try:
+        _test_frame = capture.capture()
+        screen_width, screen_height = _test_frame.width, _test_frame.height
+    except Exception as _e:
+        from cyberraccoon.config import CaptureConfig
+        _defaults = CaptureConfig()
+        screen_width = getattr(capture, "_target_width", _defaults.target_width)
+        screen_height = getattr(capture, "_target_height", _defaults.target_height)
+        logger.warning(
+            "Test capture failed (%s); falling back to capture._target_* dims (%dx%d)",
+            _e, screen_width, screen_height,
+        )
+
     # M3: Protocol
     try:
         protocol = create_protocol(
@@ -192,6 +210,8 @@ def _run_task(args: argparse.Namespace, logger: logging.Logger) -> None:
             protocol_override=args.protocol,
             enable_cache=not args.no_cache,
             skill_text=skill_text,
+            display_width=screen_width,
+            display_height=screen_height,
         )
         logger.info("M3 Protocol initialized")
     except (ValueError, ImportError) as e:
@@ -209,12 +229,16 @@ def _run_task(args: argparse.Namespace, logger: logging.Logger) -> None:
             executor = BluetoothExecutor(
                 humanize_config=humanize_config,
                 target_os=target_os,
+                screen_width=screen_width,
+                screen_height=screen_height,
             )
         else:
             executor = ActionExecutor(
                 device=args.hid_device,
                 humanize_config=humanize_config,
                 target_os=target_os,
+                screen_width=screen_width,
+                screen_height=screen_height,
             )
         executor.open()
         logger.info(

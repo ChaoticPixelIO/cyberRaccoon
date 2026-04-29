@@ -55,11 +55,20 @@ class BaseExecutor(ABC):
         self,
         humanize_config: HumanizeConfig | None = None,
         target_os: str | None = None,
+        *,
+        screen_width: int,
+        screen_height: int,
     ) -> None:
+        if screen_width <= 0:
+            raise ValueError(f"screen_width must be > 0, got {screen_width}")
+        if screen_height <= 0:
+            raise ValueError(f"screen_height must be > 0, got {screen_height}")
         self._humanize_config = humanize_config
         self._keyboard: KeyboardController | HumanizedKeyboardController | None = None
         self._mouse: MouseController | HumanizedMouseController | None = None
         self._executed_ids: deque[str] = deque(maxlen=1000)
+        self._screen_width = screen_width
+        self._screen_height = screen_height
 
         # Target OS for non-ASCII error hints
         self._target_os: TargetOS | None = TargetOS(target_os) if target_os is not None else None

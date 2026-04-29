@@ -1367,3 +1367,256 @@ class TestFrameDiffDebug:
         assert not any("FRAME_DIFF_DEBUG" in msg for msg in log_output.messages), (
             "Expected NO FRAME_DIFF_DEBUG log message when env var is unset"
         )
+
+
+# ===========================================================================
+# Fatal API error pause + retry/cancel (260429-xe5)
+# ===========================================================================
+
+class TestWorkflowFatalErrorPause:
+    """When VisionAgent returns FAILED_FATAL, the runner must pause and wait
+    for ``resolve_fatal_error_retry`` or ``resolve_fatal_error_cancel`` from
+    AppController instead of consuming the per-step retry budget."""
+
+    @staticmethod
+    def _build_runner_with_fatal_then_done() -> tuple[WorkflowRunner, dict]:
+        """Build a runner whose ``agent.run`` returns FAILED_FATAL once,
+        then COMPLETED. Returns (runner, state_dict)."""
+        agent = _make_agent([{"action": "done", "reason": "ok"}])
+        planner = MockPlanner([PlanStep(number=1, goal="Pretend step")])
+        runner = WorkflowRunner(agent, planner, max_retries_per_step=2, auto_approve=True)
+
+        state = {"call_count": 0}
+
+        def fake_run(goal, on_step=None, **kwargs):
+            state["call_count"] += 1
+            if state["call_count"] == 1:
+                return TaskResult(
+                    status=TaskStatus.FAILED_FATAL,
+                    reason="`temperature` is deprecated for this model",
+                    total_steps=1,
+                    total_input_tokens=0,
+                    total_output_tokens=0,
+                    total_duration_s=0.1,
+                    fatal_error={
+                        "status_code": 400,
+                        "request_id": "req_011XYZ",
+                        "message": "`temperature` is deprecated for this model",
+                    },
+                )
+            return TaskResult(
+                status=TaskStatus.COMPLETED,
+                reason="Step done",
+                total_steps=1,
+                total_input_tokens=0,
+                total_output_tokens=0,
+                total_duration_s=0.1,
+            )
+
+        agent.run = fake_run  # type: ignore[assignment]
+        return runner, state
+
+    def test_fatal_error_populates_pending_and_fires_callback(self) -> None:
+        runner, state = self._build_runner_with_fatal_then_done()
+        notified: list[dict] = []
+        runner.set_on_fatal_error_callback(notified.append)
+
+        result_holder: dict = {}
+        def workflow_thread() -> None:
+            result_holder["result"] = runner.run("task", "fake_screenshot")
+
+        t = threading.Thread(target=workflow_thread, daemon=True)
+        t.start()
+        # Wait for the runner to expose the pending fatal error.
+        deadline = time.monotonic() + 5.0
+        while runner.get_pending_fatal_error() is None:
+            if time.monotonic() > deadline:
+                runner.resolve_fatal_error_cancel()
+                t.join(timeout=2.0)
+                pytest.fail("Runner did not expose pending fatal error within 5s")
+            time.sleep(0.05)
+
+        pending = runner.get_pending_fatal_error()
+        assert pending is not None
+        assert pending["status_code"] == 400
+        assert pending["request_id"] == "req_011XYZ"
+        assert pending["step_number"] == 1
+        assert "temperature" in pending["message"]
+
+        # Callback fired with the same payload (UI fan-out hook).
+        assert len(notified) == 1
+        assert notified[0]["status_code"] == 400
+
+        # Resolve so the worker thread can finish and we don't leak it.
+        runner.resolve_fatal_error_retry()
+        t.join(timeout=5.0)
+        assert not t.is_alive(), "Workflow thread did not exit after retry"
+
+    def test_fatal_error_retry_reruns_step_and_succeeds(self) -> None:
+        runner, state = self._build_runner_with_fatal_then_done()
+
+        result_holder: dict = {}
+        def workflow_thread() -> None:
+            result_holder["result"] = runner.run("task", "fake_screenshot")
+
+        t = threading.Thread(target=workflow_thread, daemon=True)
+        t.start()
+        deadline = time.monotonic() + 5.0
+        while runner.get_pending_fatal_error() is None:
+            if time.monotonic() > deadline:
+                runner.resolve_fatal_error_cancel()
+                t.join(timeout=2.0)
+                pytest.fail("Runner did not pause on fatal error")
+            time.sleep(0.05)
+
+        runner.resolve_fatal_error_retry()
+        t.join(timeout=5.0)
+        result = result_holder["result"]
+        assert result.status == "completed"
+        assert state["call_count"] == 2  # one fatal call + one successful retry
+        # Pending state must be cleared after resolution.
+        assert runner.get_pending_fatal_error() is None
+
+    def test_fatal_error_cancel_returns_cancelled(self) -> None:
+        runner, state = self._build_runner_with_fatal_then_done()
+
+        result_holder: dict = {}
+        def workflow_thread() -> None:
+            result_holder["result"] = runner.run("task", "fake_screenshot")
+
+        t = threading.Thread(target=workflow_thread, daemon=True)
+        t.start()
+        deadline = time.monotonic() + 5.0
+        while runner.get_pending_fatal_error() is None:
+            if time.monotonic() > deadline:
+                runner.resolve_fatal_error_cancel()
+                t.join(timeout=2.0)
+                pytest.fail("Runner did not pause on fatal error")
+            time.sleep(0.05)
+
+        runner.resolve_fatal_error_cancel()
+        t.join(timeout=5.0)
+        result = result_holder["result"]
+        assert result.status == "cancelled"
+        # Only the original fatal call was made — no retry.
+        assert state["call_count"] == 1
+        # Cancellation reason carries the API error message for traceability.
+        assert "temperature" in result.reason
+
+
+# ===========================================================================
+# Operator hint plumbing (260429-zl4)
+# ===========================================================================
+
+class TestOperatorHintInjection:
+    """The textarea on the replan / escalation dialog feeds operator-
+    supplied hints into ``submit_replan_decision(choice, hint=...)``.
+    The runner stores them in ``_pending_hint`` and applies them
+    one-shot to the next step_goal so the LLM sees the hint as part
+    of the user's instruction."""
+
+    def test_submit_replan_decision_stores_hint(self) -> None:
+        agent = _make_agent([{"action": "done", "reason": "ok"}])
+        planner = MockPlanner([PlanStep(number=1, goal="x")])
+        runner = WorkflowRunner(agent, planner, auto_approve=True)
+        # Simulate gate armed (would normally happen inside run() loop)
+        with runner._gate_lock:
+            runner._active_gate = "replan_A"
+        runner.submit_replan_decision("continue", hint="the password is hunter2")
+        assert runner._pending_hint == "the password is hunter2"
+        assert runner._replan_choice == "continue"
+
+    def test_empty_hint_leaves_pending_empty(self) -> None:
+        agent = _make_agent([{"action": "done", "reason": "ok"}])
+        planner = MockPlanner([PlanStep(number=1, goal="x")])
+        runner = WorkflowRunner(agent, planner, auto_approve=True)
+        with runner._gate_lock:
+            runner._active_gate = "replan_B"
+        runner.submit_replan_decision("retry", hint="")
+        assert runner._pending_hint == ""
+
+    def test_hint_too_long_raises(self) -> None:
+        agent = _make_agent([{"action": "done", "reason": "ok"}])
+        planner = MockPlanner([PlanStep(number=1, goal="x")])
+        runner = WorkflowRunner(agent, planner, auto_approve=True)
+        with runner._gate_lock:
+            runner._active_gate = "replan_A"
+        oversized = "x" * 2001
+        with pytest.raises(ValueError, match="hint too long"):
+            runner.submit_replan_decision("continue", hint=oversized)
+        # State must NOT be partially updated.
+        assert runner._pending_hint == ""
+
+    def test_hint_at_max_length_accepted(self) -> None:
+        agent = _make_agent([{"action": "done", "reason": "ok"}])
+        planner = MockPlanner([PlanStep(number=1, goal="x")])
+        runner = WorkflowRunner(agent, planner, auto_approve=True)
+        with runner._gate_lock:
+            runner._active_gate = "replan_A"
+        exactly_max = "x" * 2000
+        runner.submit_replan_decision("continue", hint=exactly_max)
+        assert runner._pending_hint == exactly_max
+
+    def test_hint_appended_to_step_goal_and_consumed_one_shot(self) -> None:
+        """End-to-end: plant a hint, run a 2-step workflow, verify the
+        first step's goal includes the hint and the second step's goal
+        does NOT (one-shot consumption)."""
+        # Capture the goal each step is invoked with.
+        observed_goals: list[str] = []
+
+        class GoalCapturingProtocol(MockProtocol):
+            def step(self, screenshot_base64, task_goal):
+                observed_goals.append(task_goal)
+                return super().step(screenshot_base64, task_goal)
+
+        agent = VisionAgent(
+            capture=MockCapture(),
+            protocol=GoalCapturingProtocol([{"action": "done", "reason": "ok"}]),
+            executor=MockExecutor(),
+            max_steps=10,
+            max_consecutive_failures=3,
+            post_action_delay_s=0,
+            stability_check=False,
+        )
+        planner = MockPlanner([
+            PlanStep(number=1, goal="step one goal"),
+            PlanStep(number=2, goal="step two goal"),
+        ])
+        runner = WorkflowRunner(agent, planner, auto_approve=True)
+        runner._pending_hint = "the password is hunter2"
+
+        result = runner.run("task", "fake_screenshot")
+
+        assert result.status == "completed"
+        assert len(observed_goals) >= 2
+        # First step sees the hint appended.
+        assert "Operator hint: the password is hunter2" in observed_goals[0]
+        # Second step does NOT — hint was consumed one-shot.
+        assert "Operator hint" not in observed_goals[1]
+        # Runner's stored hint is also cleared.
+        assert runner._pending_hint == ""
+
+    def test_no_hint_means_no_injection(self) -> None:
+        """When _pending_hint is empty, step_goal is byte-identical to
+        the goal returned by step.format_for_agent — no 'Operator hint:'
+        marker should appear."""
+        observed_goals: list[str] = []
+
+        class GoalCapturingProtocol(MockProtocol):
+            def step(self, screenshot_base64, task_goal):
+                observed_goals.append(task_goal)
+                return super().step(screenshot_base64, task_goal)
+
+        agent = VisionAgent(
+            capture=MockCapture(),
+            protocol=GoalCapturingProtocol([{"action": "done", "reason": "ok"}]),
+            executor=MockExecutor(),
+            max_steps=10,
+            post_action_delay_s=0,
+            stability_check=False,
+        )
+        planner = MockPlanner([PlanStep(number=1, goal="some step")])
+        runner = WorkflowRunner(agent, planner, auto_approve=True)
+        # _pending_hint stays "" by default.
+        runner.run("task", "fake_screenshot")
+        assert all("Operator hint" not in g for g in observed_goals)

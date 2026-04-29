@@ -32,20 +32,20 @@ class CaptureConfig:
 # Built-in defaults for each LLM provider, used when switching to a provider
 # that has no saved snapshot yet. Keyed by the value of ``LLMConfig.provider``.
 # Fields mirror the flat ``LLMConfig`` fields populated when that provider is
-# active (``model``, ``base_url``, ``max_tokens``, ``temperature``). ``api_key``
-# is intentionally excluded — it is resolved from env vars at load time.
+# active (``model``, ``base_url``, ``max_tokens``). ``api_key`` is intentionally
+# excluded — it is resolved from env vars at load time. ``temperature`` is no
+# longer user-configurable; the protocol layer hardcodes 0.0 (deterministic
+# agent behavior) and skips it for models that reject the parameter.
 LLM_PROVIDER_DEFAULTS: dict[str, dict[str, Any]] = {
     "anthropic": {
         "model": "claude-opus-4-7",
         "base_url": None,
         "max_tokens": 1024,
-        "temperature": 0.0,
     },
     "openai": {
         "model": "gpt-5.5",
         "base_url": None,
         "max_tokens": 1024,
-        "temperature": 0.0,
     },
 }
 
@@ -55,7 +55,6 @@ _LLM_PROVIDER_SNAPSHOT_FIELDS: tuple[str, ...] = (
     "api_key",
     "base_url",
     "max_tokens",
-    "temperature",
 )
 
 
@@ -66,7 +65,6 @@ class LLMConfig:
     api_key: str = ""
     base_url: str | None = None
     max_tokens: int = 1024
-    temperature: float = 0.0
     # Per-provider snapshots of the flat fields above. When the active provider
     # is switched, the current flat fields are saved here under the old provider
     # name, and the new provider's snapshot (or ``LLM_PROVIDER_DEFAULTS``) is
@@ -216,6 +214,12 @@ class AppConfig:
     capture_source: str = "uvc"        # uvc | csi | airplay | picamera
     executor_transport: str = "bt"    # usb | bt
     target_os: str = ""               # "" (auto-detect) | windows | macos | linux
+    # Cached auto-detection result (260429-ucg). Set by VisionAgent the
+    # first time detect_os() runs against the current capture source, so
+    # subsequent tasks reuse the value at zero LLM cost. Invalidated by
+    # AppController when the capture source changes (signals a different
+    # target machine). User-set ``target_os`` always wins over this cache.
+    detected_target_os: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +253,6 @@ def load_llm_config() -> LLMConfig:
         api_key="",
         base_url=defaults.get("base_url"),
         max_tokens=defaults.get("max_tokens", 1024),
-        temperature=defaults.get("temperature", 0.0),
     )
 
 
@@ -289,6 +292,19 @@ def resolve_provider_model(provider: str) -> str:
         return llm.model
     snap = llm.providers.get(provider) or {}
     return snap.get("model", "") or ""
+
+
+def resolve_effective_target_os(config: AppConfig) -> str:
+    """Resolve the effective target OS for the current task.
+
+    Manual override (``config.target_os``) always wins. Falls back to the
+    auto-detection cache (``config.detected_target_os``). Returns ``""``
+    when neither is set, signalling that detection should run inline.
+
+    Used by VisionAgent (to decide whether to skip detection) and by the
+    protocol factory (to inject the OS into the LLM system prompt).
+    """
+    return config.target_os or config.detected_target_os or ""
 
 
 def resolve_provider_base_url(provider: str) -> str | None:

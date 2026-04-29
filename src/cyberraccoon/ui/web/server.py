@@ -48,7 +48,7 @@ from typing import Any, AsyncGenerator, Literal
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, StrictBool
+from pydantic import BaseModel, Field, StrictBool
 
 from cyberraccoon.agent.skills import (
     SkillFormatError,
@@ -116,9 +116,15 @@ class ReplanDecisionRequest(BaseModel):
     not in the Literal set yields 422 at the FastAPI boundary.
     The runner performs a second validation against the per-gate
     allowlist (see workflow_runner.submit_replan_decision).
+
+    260429-zl4: optional ``hint`` carries an operator-supplied freeform
+    string (the textarea on the dialog) that the runner appends to the
+    next step's task_goal. Capped at 2000 characters; longer values are
+    rejected at the boundary with HTTP 422.
     """
 
     choice: Literal["continue", "retry", "replan", "resume", "abort"]
+    hint: str = Field(default="", max_length=2000)
 
 
 class AutoReplanRequest(BaseModel):
@@ -319,6 +325,16 @@ def create_app(controller: AppController) -> FastAPI:
         except Exception as e:
             return JSONResponse({"status": "error", "message": str(e)}, status_code=400)
 
+    @app.post("/api/config/redetect-target-os")
+    async def redetect_target_os() -> JSONResponse:
+        """Clear the OS-detection cache. The next task re-runs detection.
+
+        260429-ucg. Called from the UI's "Re-detect" link in the Config
+        tab. Idempotent — returns ok even if the cache was already empty.
+        """
+        controller.invalidate_detected_target_os()
+        return JSONResponse({"status": "ok"})
+
     # ---- Modules API (legacy — kept for backward compat) ----
 
     @app.post("/api/modules/init")
@@ -366,12 +382,42 @@ def create_app(controller: AppController) -> FastAPI:
             device = status.get("executor_device", "")
             return JSONResponse({"status": "ok", "device": device})
         except Exception as e:
-            return JSONResponse({"status": "error", "message": str(e)}, status_code=400)
+            # Detect stale-bond by message marker (the StaleBondError
+            # message is wrapped through TaskError → str). Surface a
+            # structured error code so the UI can show the dedicated
+            # "Reset Pairing" button instead of the generic banner.
+            err_msg = str(e)
+            stale = "out of sync between the Pi" in err_msg
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "message": err_msg,
+                    "code": "stale_bond" if stale else "executor_init_failed",
+                },
+                status_code=400,
+            )
 
     @app.post("/api/executor/disconnect")
     async def executor_disconnect() -> JSONResponse:
         controller.close_executor()
         return JSONResponse({"status": "ok"})
+
+    @app.post("/api/executor/reset-pairing")
+    async def executor_reset_pairing() -> JSONResponse:
+        """Clear all paired devices on the Pi side via bluetoothctl.
+
+        Recovery action when the UI detects a stale-bond error. The
+        user must still forget the device on the Mac side and re-pair
+        — clearing the Pi side alone leaves the Mac with stale keys.
+        """
+        try:
+            cleared = await asyncio.to_thread(controller.reset_bt_pairing)
+            return JSONResponse({"status": "ok", "cleared": cleared})
+        except Exception as e:
+            return JSONResponse(
+                {"status": "error", "message": str(e)},
+                status_code=400,
+            )
 
     # ---- Task API ----
 
@@ -416,11 +462,15 @@ def create_app(controller: AppController) -> FastAPI:
         Phase 3 — REPLAN-01/02/03. Choice is strictly enum-validated by
         Pydantic; the controller + runner perform a second per-gate
         allowlist check (defense in depth).
+
+        260429-zl4: ``req.hint`` carries the optional operator hint
+        (textarea content) for one-shot injection into the next
+        step_goal.
         """
         try:
-            controller.submit_replan_decision(req.choice)
+            controller.submit_replan_decision(req.choice, hint=req.hint)
         except ValueError as e:
-            # Runner rejected the choice (wrong gate)
+            # Runner rejected the choice (wrong gate) or hint too long.
             return JSONResponse({"error": str(e)}, status_code=400)
         except RuntimeError as e:
             # No active gate
@@ -469,6 +519,40 @@ def create_app(controller: AppController) -> FastAPI:
         """
         pending = controller.get_pending_dialogs()
         return JSONResponse(pending)
+
+    @app.get("/api/task/fatal-error")
+    async def get_fatal_error() -> JSONResponse:
+        """Return the current pending fatal-error payload, or null.
+
+        260429-xe5. Polled by the web UI on reconnect to re-render the
+        red error banner if the workflow is still paused on a 4xx-non-429
+        API error. WebSocket clients also receive ``fatal_error`` events
+        in real time; this endpoint covers the reconnect-replay case.
+        """
+        pending = controller.get_pending_fatal_error()
+        return JSONResponse({"error": pending})
+
+    @app.post("/api/task/fatal-error/retry")
+    async def fatal_error_retry() -> JSONResponse:
+        """Retry the step that hit a fatal API error.
+
+        Re-runs the same step with a fresh attempt budget; the protocol's
+        conversation history is intact so the LLM picks up where the
+        failed call left off. Use after fixing the API config (key,
+        model name, etc.) that caused the error.
+        """
+        controller.resolve_fatal_error_retry()
+        return JSONResponse({"status": "ok"})
+
+    @app.post("/api/task/fatal-error/cancel")
+    async def fatal_error_cancel() -> JSONResponse:
+        """Cancel the task after a fatal API error.
+
+        The task transitions to FAILED with the API error message in
+        the workflow result reason.
+        """
+        controller.resolve_fatal_error_cancel()
+        return JSONResponse({"status": "ok"})
 
     # Phase 7 — Pause / Resume / Cancel (CRUISE-03, CRUISE-05)
     # State validation returns 409 for invalid transitions (review MEDIUM-3).

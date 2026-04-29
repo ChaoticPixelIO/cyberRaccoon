@@ -129,6 +129,24 @@ def main() -> None:
         default="normal",
         help="Humanization preset: subtle, normal, aggressive (default: normal)",
     )
+    parser.add_argument(
+        "--display-width",
+        type=int,
+        default=1280,
+        help=(
+            "LLM coordinate space; must match the capture's target "
+            "resolution. Default 1280x720 (CSI default)."
+        ),
+    )
+    parser.add_argument(
+        "--display-height",
+        type=int,
+        default=720,
+        help=(
+            "LLM coordinate space; must match the capture's target "
+            "resolution. Default 1280x720 (CSI default)."
+        ),
+    )
 
     args = parser.parse_args()
     cmd_id = f"cli_{uuid.uuid4().hex[:8]}"
@@ -150,12 +168,16 @@ def main() -> None:
         executor = BluetoothExecutor(
             humanize_config=humanize_config,
             target_os=target_os,
+            screen_width=args.display_width,
+            screen_height=args.display_height,
         )
     else:
         executor = ActionExecutor(
             device=args.device,
             humanize_config=humanize_config,
             target_os=target_os,
+            screen_width=args.display_width,
+            screen_height=args.display_height,
         )
 
     try:

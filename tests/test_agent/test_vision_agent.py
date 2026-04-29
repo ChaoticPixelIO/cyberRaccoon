@@ -148,6 +148,44 @@ class TestTerminationConditions:
 
         assert result.status == TaskStatus.COMPLETED
 
+    def test_fatal_step_short_circuits_after_one_call(self) -> None:
+        """StepResult(fatal=True) -> FAILED_FATAL after exactly one API call.
+
+        Regression for the silent-retry-on-fatal bug: today the agent burns
+        max_consecutive_failures=3 calls on a fatal 400 (deprecated param,
+        bad auth) before stopping. With the short-circuit, a single fatal
+        StepResult must cause an immediate return — no second/third call.
+        """
+        agent = _make_agent([{"action": "click", "x": 1, "y": 1}])
+
+        fatal_result = StepResult(
+            command=None,
+            is_done=False,
+            done_reason="",
+            screen_summary="",
+            raw_text="",
+            input_tokens=0,
+            output_tokens=0,
+            latency_ms=42,
+            success=False,
+            error="`temperature` is deprecated for this model",
+            fatal=True,
+            error_status_code=400,
+            error_request_id="req_011XYZ",
+        )
+        with patch.object(agent._protocol, "step", return_value=fatal_result) as mock_step:
+            result = agent.run("task with fatal API config")
+
+        assert result.status == TaskStatus.FAILED_FATAL
+        assert result.fatal_error is not None
+        assert result.fatal_error["status_code"] == 400
+        assert result.fatal_error["request_id"] == "req_011XYZ"
+        assert "temperature" in result.fatal_error["message"]
+        # Critical: only ONE call, not three. Today's bug burns 3.
+        assert mock_step.call_count == 1
+        # And report_result MUST NOT have been called (would round-trip to LLM).
+        assert agent._protocol.report_result_calls == []
+
     def test_capture_failure_aborts(self) -> None:
         """M1 capture failure -> FAILED immediately."""
         agent = _make_agent(
@@ -1295,3 +1333,109 @@ class TestPause:
         assert hasattr(agent, "pause"), "VisionAgent must have public pause() method"
         agent.pause()
         assert agent._pause_event.is_set()
+
+
+# ===========================================================================
+# Target-OS detection cache (260429-ucg)
+# ===========================================================================
+
+class TestTargetOSDetectionCache:
+    """When ``cached_target_os`` is set, VisionAgent must skip the
+    ``protocol.detect_os`` LLM call entirely (zero-cost detection). When
+    no cache, it runs detection inline and fires ``on_os_detected`` so
+    AppController can persist the result."""
+
+    def _make_executor_with_target_os(self) -> MockExecutor:
+        ex = MockExecutor()
+        ex._target_os = None  # signal "needs detection"
+        return ex
+
+    def test_cached_target_os_skips_detect_os_call(self) -> None:
+        executor = self._make_executor_with_target_os()
+        agent = VisionAgent(
+            capture=MockCapture(),
+            protocol=MockProtocol(
+                [{"action": "done", "reason": "ok"}],
+                detect_os_result="windows",
+            ),
+            executor=executor,
+            max_steps=5,
+            max_consecutive_failures=2,
+            post_action_delay_s=0,
+            stability_check=False,
+            cached_target_os="windows",
+        )
+
+        events: list[dict] = []
+        result = agent.run("task", on_step=events.append)
+
+        assert result.status == TaskStatus.COMPLETED
+        # detect_os MUST NOT have been called — cache hit.
+        assert agent._protocol.detect_os_calls == []
+        # Executor target_os populated from cache (TargetOS enum).
+        from cyberraccoon.executor.clipboard_bridge import TargetOS
+        assert executor._target_os == TargetOS.WINDOWS
+        # Step event emitted so the UI can render "using cached OS".
+        cached_events = [e for e in events if e.get("type") == "target_os_cached"]
+        assert len(cached_events) == 1
+        assert cached_events[0]["os"] == "windows"
+
+    def test_no_cache_runs_detection_and_persists(self) -> None:
+        executor = self._make_executor_with_target_os()
+        persisted: list[str] = []
+
+        agent = VisionAgent(
+            capture=MockCapture(),
+            protocol=MockProtocol(
+                [{"action": "done", "reason": "ok"}],
+                detect_os_result="macos",
+            ),
+            executor=executor,
+            max_steps=5,
+            post_action_delay_s=0,
+            stability_check=False,
+            cached_target_os=None,
+            on_os_detected=persisted.append,
+        )
+
+        events: list[dict] = []
+        result = agent.run("task", on_step=events.append)
+
+        assert result.status == TaskStatus.COMPLETED
+        # Detection ran exactly once.
+        assert len(agent._protocol.detect_os_calls) == 1
+        from cyberraccoon.executor.clipboard_bridge import TargetOS
+        assert executor._target_os == TargetOS.MACOS
+        # AppController persistence callback received the result.
+        assert persisted == ["macos"]
+        # Progress events fired for the UI.
+        types = [e.get("type") for e in events]
+        assert "detecting_target_os" in types
+        assert "target_os_detected" in types
+        # Detected event carries the OS string.
+        detected_evt = next(e for e in events if e.get("type") == "target_os_detected")
+        assert detected_evt["os"] == "macos"
+
+    def test_invalid_cache_falls_back_to_detection(self) -> None:
+        """A malformed cache value (e.g. an OS we no longer support) must
+        not poison the agent — detection runs as a fallback."""
+        executor = self._make_executor_with_target_os()
+        agent = VisionAgent(
+            capture=MockCapture(),
+            protocol=MockProtocol(
+                [{"action": "done", "reason": "ok"}],
+                detect_os_result="linux",
+            ),
+            executor=executor,
+            max_steps=5,
+            post_action_delay_s=0,
+            stability_check=False,
+            cached_target_os="not-an-os",  # invalid
+        )
+        result = agent.run("task")
+
+        assert result.status == TaskStatus.COMPLETED
+        # Fallback detection ran.
+        assert len(agent._protocol.detect_os_calls) == 1
+        from cyberraccoon.executor.clipboard_bridge import TargetOS
+        assert executor._target_os == TargetOS.LINUX

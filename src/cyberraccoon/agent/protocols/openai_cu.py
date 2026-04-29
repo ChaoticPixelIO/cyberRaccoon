@@ -13,7 +13,11 @@ import time
 from typing import Any
 
 from cyberraccoon.agent.prompts import build_openai_cu_system_prompt
-from cyberraccoon.agent.protocols.base import ComputerUseProtocol, StepResult
+from cyberraccoon.agent.protocols.base import (
+    ComputerUseProtocol,
+    StepResult,
+    is_fatal_status_code,
+)
 from cyberraccoon.agent.protocols.parsing import extract_completion_status
 
 logger = logging.getLogger("M3.openai_cu")
@@ -70,6 +74,7 @@ class OpenAICUProtocol(ComputerUseProtocol):
         display_width: int = 1920,
         display_height: int = 1080,
         skill_text: str | None = None,
+        target_os: str = "",
     ) -> None:
         import openai
 
@@ -80,7 +85,7 @@ class OpenAICUProtocol(ComputerUseProtocol):
         self._openai = openai  # for exception handling
         self._client = openai.OpenAI(api_key=api_key, timeout=30.0)
 
-        self._system_prompt = build_openai_cu_system_prompt()
+        self._system_prompt = build_openai_cu_system_prompt(target_os=target_os)
         if skill_text:
             self._system_prompt += "\n\n## Application Skill\n\n" + skill_text
 
@@ -123,12 +128,22 @@ class OpenAICUProtocol(ComputerUseProtocol):
                 response = self._call_api_continuation(screenshot_base64)
         except self._openai.APIError as e:
             latency_ms = int((time.monotonic() - start) * 1000)
-            logger.error("OpenAI CU API call failed: %s", e)
+            status_code = getattr(e, "status_code", None)
+            request_id = getattr(e, "request_id", None)
+            fatal = is_fatal_status_code(status_code)
+            log_fn = logger.error if fatal else logger.warning
+            log_fn(
+                "OpenAI CU API call failed (status=%s, request_id=%s, fatal=%s): %s",
+                status_code, request_id, fatal, e,
+            )
             return StepResult(
                 command=None, is_done=False, done_reason="",
                 screen_summary="", raw_text="",
                 input_tokens=0, output_tokens=0,
                 latency_ms=latency_ms, success=False, error=str(e),
+                fatal=fatal,
+                error_status_code=status_code,
+                error_request_id=request_id,
             )
 
         latency_ms = int((time.monotonic() - start) * 1000)

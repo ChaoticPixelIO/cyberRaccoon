@@ -4,6 +4,30 @@ Isolated here for easy iteration without touching agent logic.
 Provides prompts for different computer-use protocol modes.
 """
 
+# Title-cased display names for the target-OS section. Keep in sync with
+# ``cyberraccoon.executor.clipboard_bridge.TargetOS`` enum values.
+_TARGET_OS_DISPLAY: dict[str, str] = {
+    "windows": "Windows",
+    "macos": "macOS",
+    "linux": "Linux",
+}
+
+
+def _build_target_os_section(target_os: str) -> str:
+    """Return a single-paragraph platform hint to append to a system prompt.
+
+    Empty when ``target_os`` is unset / unknown — the prompt builder omits
+    the section in that case and the LLM falls back to its prior behavior.
+    """
+    display = _TARGET_OS_DISPLAY.get(target_os.lower()) if target_os else None
+    if not display:
+        return ""
+    return (
+        f"\n## Target Platform\n\n"
+        f"The target machine is running **{display}**. Use platform-appropriate "
+        f"keyboard shortcuts (Cmd vs Ctrl), application names, and file paths.\n"
+    )
+
 # ---------------------------------------------------------------------------
 # Anthropic native computer-use prompt (lightweight — tool defines actions)
 # ---------------------------------------------------------------------------
@@ -13,11 +37,14 @@ You are CyberRaccoon, an AI agent that controls a computer by looking at \
 screenshots and using the computer tool to perform mouse/keyboard actions.
 
 You will be given a task to complete. Use the computer tool to interact with \
-the screen. Work step by step — execute one action at a time, observe the \
-result, and decide the next action.
+the screen. Work step by step — observe each result and decide the next action.
 
 Rules:
-1. Execute ONE action per turn.
+1. You may execute multiple actions per turn when the sequence is \
+deterministic and does not require visual feedback between steps (e.g., click \
+a text field then type into it). Execute a single action when the next action \
+depends on observing the result (e.g., waiting for a dialog, clicking a button \
+that only appears after a load).
 2. Aim for the CENTER of UI elements when clicking.
 3. If unsure, make a reasonable attempt rather than doing nothing.
 4. When you see loading indicators or transitions, use the wait action.
@@ -48,6 +75,19 @@ you start typing. Do NOT try to select or delete it; just click the \
 field and type directly. If you tried to select or delete text in a \
 field and the screen did not change, it is placeholder text — stop \
 trying to clear it and just type.
+11. NEVER guess passwords, 2FA codes, PINs, security questions, recovery \
+phrases, credit-card CVVs, or any other credential from your own knowledge \
+or by inference. Wrong credentials can permanently lock the user's account \
+after only a few attempts. \
+If the user's instruction (including any "Operator hint:" appended to it, \
+or the task description, or the application skill) supplies the credential \
+explicitly, type that exact value into the field. \
+Otherwise, when the screen requires a credential and you have not been given \
+one, stop using the computer tool and respond with \
+{"status": "stuck"} together with a reason that names the credential needed \
+(e.g. "Login screen requires the user's Gmail password"). The operator will \
+supply it through the UI's hint textarea, after which it will appear in your \
+next user instruction.
 
 IMPORTANT: If an "Application Skill" section appears below, it contains \
 mandatory instructions for a specific application or environment. You MUST \
@@ -57,9 +97,14 @@ behavior for the specific scenarios they describe.
 """
 
 
-def build_anthropic_cu_system_prompt() -> str:
-    """Return the system prompt for Anthropic native computer-use."""
-    return ANTHROPIC_CU_SYSTEM_PROMPT
+def build_anthropic_cu_system_prompt(target_os: str = "") -> str:
+    """Return the system prompt for Anthropic native computer-use.
+
+    If ``target_os`` is one of "windows" / "macos" / "linux", a Target
+    Platform section is appended so the LLM picks the right shortcuts
+    and app names. Empty / unknown values are no-ops.
+    """
+    return ANTHROPIC_CU_SYSTEM_PROMPT + _build_target_os_section(target_os)
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +190,8 @@ next screenshot, and decide the next action.
 Rules:
 1. NEVER ask clarifying questions. You are fully autonomous — make reasonable \
 assumptions and proceed immediately. If details are ambiguous, pick the most \
-likely interpretation and act on it.
+likely interpretation and act on it. EXCEPTION: stop and escalate when \
+credentials are required — see rule 8.
 2. Aim for the CENTER of UI elements when clicking.
 3. If unsure, make a reasonable attempt rather than doing nothing.
 4. When you see loading indicators or transitions, use the wait action.
@@ -166,6 +212,19 @@ computer tool and respond with a JSON status block followed by your explanation:
 {"status": "success"} -- task completed as requested
 {"status": "gave_up"} -- tried but cannot complete the task
 {"status": "stuck"} -- screen doesn't match expectations, need human help
+8. NEVER guess passwords, 2FA codes, PINs, security questions, recovery \
+phrases, credit-card CVVs, or any other credential from your own knowledge \
+or by inference. Wrong credentials can permanently lock the user's account \
+after only a few attempts. \
+If the user's instruction (including any "Operator hint:" appended to it, \
+or the task description, or the application skill) supplies the credential \
+explicitly, type that exact value into the field. \
+Otherwise, when the screen requires a credential and you have not been given \
+one, stop using the computer tool and respond with \
+{"status": "stuck"} together with a reason that names the credential needed \
+(e.g. "Login screen requires the user's Gmail password"). The operator will \
+supply it through the UI's hint textarea, after which it will appear in your \
+next user instruction.
 
 IMPORTANT: If an "Application Skill" section appears below, it contains \
 mandatory instructions for a specific application or environment. You MUST \
@@ -175,9 +234,9 @@ behavior for the specific scenarios they describe.
 """
 
 
-def build_openai_cu_system_prompt() -> str:
+def build_openai_cu_system_prompt(target_os: str = "") -> str:
     """Return the system prompt for OpenAI native computer-use."""
-    return OPENAI_CU_SYSTEM_PROMPT
+    return OPENAI_CU_SYSTEM_PROMPT + _build_target_os_section(target_os)
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +312,18 @@ you start typing. Do NOT try to select or delete it; just click the \
 field and type directly. If you tried to select or delete text in a \
 field and the screen did not change, it is placeholder text — stop \
 trying to clear it and just type.
+11. NEVER guess passwords, 2FA codes, PINs, security questions, recovery \
+phrases, credit-card CVVs, or any other credential from your own knowledge \
+or by inference. Wrong credentials can permanently lock the user's account \
+after only a few attempts. \
+If the user's instruction (including any "Operator hint:" appended to it, \
+or the task description, or the application skill) supplies the credential \
+explicitly, type that exact value into the field. \
+Otherwise, when the screen requires a credential and you have not been \
+given one, return the "done" action with status="stuck" and a reason that \
+names the credential needed (e.g. "Login screen requires the user's Gmail \
+password"). The operator will supply it through the UI's hint textarea, \
+after which it will appear in your next user instruction.
 
 IMPORTANT: If an "Application Skill" section appears below, it contains \
 mandatory instructions for a specific application or environment. You MUST \
@@ -263,12 +334,15 @@ behavior for the specific scenarios they describe.
 
 
 def build_prompt_based_system_prompt(
-    display_width: int = 1920, display_height: int = 1080,
+    display_width: int = 1920,
+    display_height: int = 1080,
+    target_os: str = "",
 ) -> str:
     """Return the system prompt for prompt-based fallback protocol."""
-    return _PROMPT_BASED_TEMPLATE.format(
+    base = _PROMPT_BASED_TEMPLATE.format(
         width=display_width, height=display_height,
     )
+    return base + _build_target_os_section(target_os)
 
 
 # ---------------------------------------------------------------------------

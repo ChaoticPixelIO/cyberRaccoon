@@ -72,6 +72,14 @@ class AppEventType(Enum):
     WORKFLOW_EVENT = "workflow_event"
     TASK_FINISHED = "task_finished"
 
+    # Fatal API error gate (260429-xe5). FATAL_ERROR fires when the
+    # workflow has paused on a non-retryable API error (4xx-non-429);
+    # the UI shows a banner with Retry / Cancel buttons.
+    # FATAL_ERROR_RESOLVED fires once the user makes a choice so any
+    # other connected client can clear its banner.
+    FATAL_ERROR = "fatal_error"
+    FATAL_ERROR_RESOLVED = "fatal_error_resolved"
+
     # Config
     CONFIG_CHANGED = "config_changed"
 
@@ -255,7 +263,6 @@ def _snapshot_llm_flat(llm: Any) -> dict[str, Any]:
         "api_key": llm.api_key,
         "base_url": llm.base_url,
         "max_tokens": llm.max_tokens,
-        "temperature": llm.temperature,
     }
 
 
@@ -329,6 +336,13 @@ class AppController:
         self._executor_ready = False
         self._capture_device_name: str = ""
         self._executor_device_name: str = ""
+        # Live capture output dims — single source of truth for the LLM
+        # coordinate space and the executor's HID denominator. Sourced
+        # from the live capture object (not config) because CSI capture
+        # ignores config.capture.target_width/height and uses hardware-
+        # constrained values (e.g. 1280×720 on 2-lane CAM0).
+        self._capture_width: int | None = None
+        self._capture_height: int | None = None
 
         # Disconnect monitors
         self._airplay_monitor_stop = threading.Event()
@@ -350,6 +364,10 @@ class AppController:
         # (populated by plan 03-03 event router; cleared on TASK_STARTED/FINISHED)
         self._pending_replan_dialog: dict[str, Any] | None = None
         self._pending_escalation: dict[str, Any] | None = None
+        # 260429-xe5 — pending fatal-error banner state for reconnect replay.
+        # Set when WorkflowRunner emits ``type=fatal_error`` via on_progress;
+        # cleared on ``type=fatal_error_resolved`` or TASK_FINISHED.
+        self._pending_fatal_error: dict[str, Any] | None = None
         # Optional test hook: override the factory that builds a TaskPlanner
         # for chat calls. When None, the real factory is used.
         self._chat_planner_factory: Callable[[], Any] | None = None
@@ -402,6 +420,10 @@ class AppController:
                 # next task (Pitfall 2).
                 self._pending_replan_dialog = None
                 self._pending_escalation = None
+                # 260429-xe5 — same for the fatal-error banner. If a task
+                # ended while the gate was armed (e.g. abort during the
+                # wait), the banner should not bleed into the next task.
+                self._pending_fatal_error = None
         with self._lock:
             listeners = list(self._listeners)
         for fn in listeners:
@@ -458,6 +480,12 @@ class AppController:
         new_provider = kwargs.pop("llm.provider", None)
         old_provider = config.llm.provider
 
+        # 260429-ucg — snapshot capture-identity fields BEFORE applying the
+        # update so we can detect "user is now looking at a different target
+        # machine" and invalidate the detected_target_os cache.
+        old_capture_source = config.capture_source
+        old_device_index = config.capture.device_index
+
         # Drop round-tripped masked api_key so it doesn't clobber the real
         # value held server-side. The API masks api_key in GET responses;
         # unedited masked strings end with "..." or equal "***".
@@ -500,9 +528,26 @@ class AppController:
                 else:
                     logger.warning("Unknown config key: %s", key)
 
+        # 260429-ucg — invalidate the OS detection cache when the capture
+        # identity changes (different source or device index = potentially a
+        # different target machine). User-set ``target_os`` is left alone.
+        capture_identity_changed = (
+            config.capture_source != old_capture_source
+            or config.capture.device_index != old_device_index
+        )
+        if capture_identity_changed and config.detected_target_os:
+            logger.info(
+                "Invalidating detected_target_os=%s (capture identity changed: "
+                "source %s→%s, device %s→%s)",
+                config.detected_target_os,
+                old_capture_source, config.capture_source,
+                old_device_index, config.capture.device_index,
+            )
+            config.detected_target_os = ""
+
         # Mirror the current flat llm fields into the active provider's
         # snapshot. Done on every update_config call so edits to model /
-        # temperature / etc. are captured under the current provider.
+        # api_key / etc. are captured under the current provider.
         config.llm.providers[old_provider] = _snapshot_llm_flat(config.llm)
 
         if new_provider is not None and new_provider != old_provider:
@@ -536,6 +581,70 @@ class AppController:
         self._config_store.reset()
         return self.load_config()
 
+    def invalidate_detected_target_os(self) -> AppConfig:
+        """Clear the OS-detection cache. The next task re-runs detection.
+
+        Called from the UI's "Re-detect" link in the Config tab. Persists
+        the cleared value to yaml and emits CONFIG_CHANGED so other clients
+        sync their dropdowns.
+        """
+        with self._lock:
+            config = self._config
+        if config is None:
+            config = self.load_config()
+        if not config.detected_target_os:
+            # Nothing to do — cache was already empty. Idempotent.
+            return config
+        previous = config.detected_target_os
+        config.detected_target_os = ""
+        try:
+            self._config_store.save(config)
+        except Exception as e:
+            logger.warning(
+                "Failed to persist invalidated detected_target_os "
+                "(was %s): %s — invalidation still applied in memory",
+                previous, e,
+            )
+        with self._lock:
+            self._config = config
+        logger.info(
+            "Manually invalidated detected_target_os (was %s)", previous,
+        )
+        self._emit(AppEvent(
+            type=AppEventType.CONFIG_CHANGED,
+            data={"source": "redetect_target_os", "keys": ["detected_target_os"]},
+        ))
+        return config
+
+    def _persist_detected_target_os(self, detected: str) -> None:
+        """Persist an auto-detected target OS to ~/.cyberraccoon/config.yaml.
+
+        Called from VisionAgent's ``on_os_detected`` hook the first time
+        detection runs against a fresh capture source. Writes to
+        ``config.detected_target_os`` (the cache field) so subsequent tasks
+        can skip the 8-second detection LLM call.
+        """
+        with self._lock:
+            config = self._config
+        if config is None:
+            return
+        if config.detected_target_os == detected:
+            return  # no-op
+        config.detected_target_os = detected
+        try:
+            self._config_store.save(config)
+        except Exception as e:
+            logger.warning(
+                "Failed to persist detected_target_os=%s: %s — cache will "
+                "still be used for the rest of this session", detected, e,
+            )
+        with self._lock:
+            self._config = config
+        self._emit(AppEvent(
+            type=AppEventType.CONFIG_CHANGED,
+            data={"source": "os_detection", "keys": ["detected_target_os"]},
+        ))
+
     @property
     def config_store(self) -> ConfigStore:
         """Access to the underlying ConfigStore for path inspection."""
@@ -544,6 +653,17 @@ class AppController:
     # ------------------------------------------------------------------
     # Module lifecycle — individual connections
     # ------------------------------------------------------------------
+
+    def _resolve_capture_dims(self, config: AppConfig) -> tuple[int, int]:
+        """Return the live capture output dims, falling back to config.
+
+        Set during init_capture() from the test frame; required by
+        init_executor() and create_protocol() so the LLM coordinate space
+        and the HID denominator agree with what the LLM actually sees.
+        """
+        if self._capture_width is not None and self._capture_height is not None:
+            return self._capture_width, self._capture_height
+        return config.capture.target_width, config.capture.target_height
 
     def init_capture(self) -> CaptureResult | None:
         """Initialise M1 (Capture), grab a test frame, emit ``CAPTURE_READY``.
@@ -604,6 +724,15 @@ class AppController:
         else:
             device_name = config.capture_source
 
+        # Resolve actual capture output dims. Test frame is authoritative;
+        # fall back to the capture's _target_width/_target_height attrs if
+        # the test frame failed (set on every backend at construction).
+        if test_frame is not None:
+            cap_w, cap_h = test_frame.width, test_frame.height
+        else:
+            cap_w = getattr(capture, "_target_width", config.capture.target_width)
+            cap_h = getattr(capture, "_target_height", config.capture.target_height)
+
         with self._lock:
             if self._capture is not capture:
                 # Cancelled by close_capture() while we were waiting
@@ -611,6 +740,8 @@ class AppController:
                 return None
             self._capture_ready = True
             self._capture_device_name = device_name
+            self._capture_width = cap_w
+            self._capture_height = cap_h
 
         self._emit(AppEvent(
             type=AppEventType.CAPTURE_READY,
@@ -698,9 +829,17 @@ class AppController:
                 self._close_executor_locked()
 
         target_os = config.target_os or None
+        # 260429-cmf — capture output dims feed BOTH create_protocol (LLM
+        # coordinate space, set in _ensure_agent below) and the executor
+        # (HID coordinate space). Source from the live capture object,
+        # not config: CSI capture ignores config and uses hardware-
+        # constrained dims (e.g. 1280×720 on 2-lane CAM0).
+        screen_width, screen_height = self._resolve_capture_dims(config)
         if config.executor_transport == "bt":
             executor: ActionExecutor | BluetoothExecutor = BluetoothExecutor(
                 target_os=target_os,
+                screen_width=screen_width,
+                screen_height=screen_height,
             )
         else:
             device_path = config.executor.device
@@ -712,6 +851,8 @@ class AppController:
             executor = ActionExecutor(
                 device=device_path,
                 target_os=target_os,
+                screen_width=screen_width,
+                screen_height=screen_height,
             )
 
         # Store early so close_executor() can kill a blocking open().
@@ -723,6 +864,22 @@ class AppController:
         try:
             executor.open()
         except Exception as e:
+            # Always log the underlying exception with traceback — the
+            # API client only sees str(e), and journal-only debugging
+            # was missing the cause when init_executor silently failed.
+            logger.exception("Executor open() failed: %s", e)
+            # CRITICAL: tear down any state the failed open() left behind
+            # (D-Bus pairing agent, BlueZ profile registration, partial
+            # sockets). Without this, the leaked state collides with the
+            # next connect attempt — the recurring "already a handler"
+            # bug. See bluetooth_device.disconnect() for the cleanup.
+            try:
+                executor.close()
+            except Exception as close_err:
+                logger.warning(
+                    "Cleanup after failed executor.open() also failed: %s",
+                    close_err,
+                )
             with self._lock:
                 if self._executor is executor:
                     self._executor = None
@@ -772,6 +929,48 @@ class AppController:
         self._emit(AppEvent(type=AppEventType.EXECUTOR_CLOSED))
         if was_ready:
             self._emit(AppEvent(type=AppEventType.MODULES_CLOSED))
+
+    def reset_bt_pairing(self) -> list[str]:
+        """Clear every paired BT device on the Pi side.
+
+        Recovery action for the stale-bond pattern (UI shows the
+        "Reset Pairing" button when the executor connect surfaces a
+        StaleBondError). The user must still forget the device on the
+        Mac side; this only clears the Pi half.
+
+        Returns:
+            List of MAC addresses that were removed.
+        """
+        import subprocess
+        # Close the executor first so we don't try to remove a device
+        # that's actively bound. Best-effort.
+        with self._lock:
+            self._close_executor_locked()
+
+        cleared: list[str] = []
+        try:
+            result = subprocess.run(
+                ["bluetoothctl", "devices"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                return cleared
+            for line in result.stdout.strip().splitlines():
+                parts = line.strip().split(None, 2)
+                if len(parts) >= 2 and parts[0] == "Device":
+                    addr = parts[1]
+                    try:
+                        subprocess.run(
+                            ["bluetoothctl", "remove", addr],
+                            check=False, capture_output=True, timeout=5,
+                        )
+                        cleared.append(addr)
+                    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                        logger.warning("Failed to remove %s: %s", addr, e)
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            logger.warning("bluetoothctl not available: %s", e)
+        logger.info("Reset BT pairing — cleared %d device(s)", len(cleared))
+        return cleared
 
     def _close_executor_locked(self) -> None:
         """Internal executor close (caller must hold ``_lock``)."""
@@ -867,8 +1066,20 @@ class AppController:
             except Exception as e:
                 raise TaskError(f"Failed to load skills: {e}") from e
 
+        # 260429-ucg — resolve target_os via the manual-override-then-cache
+        # priority. Forwarded to (a) create_protocol so the LLM system
+        # prompt picks up a Target Platform line, and (b) VisionAgent so
+        # it can skip the 8s detect_os call when the cache is populated.
+        from cyberraccoon.config import resolve_effective_target_os
+        effective_target_os = resolve_effective_target_os(config)
+
         # M3: Protocol — skill_text intentionally NOT passed here.
         # Skills go to the planner, not the executor.
+        # 260429-cmf — display_width/display_height must match the executor's
+        # screen_width/screen_height (set in init_executor) so the LLM and
+        # the HID layer share one coordinate space. Both resolve from the
+        # live capture object, not config.
+        proto_w, proto_h = self._resolve_capture_dims(config)
         try:
             protocol = create_protocol(
                 provider=config.llm.provider,
@@ -878,9 +1089,34 @@ class AppController:
                 history_max_turns=config.agent.history_max_turns,
                 protocol_override=config.agent.protocol_override,
                 enable_cache=config.agent.enable_cache,
+                target_os=effective_target_os,
+                display_width=proto_w,
+                display_height=proto_h,
             )
         except Exception as e:
             raise TaskError(f"Protocol init failed: {e}") from e
+
+        # Sync the executor's cached target OS to the resolved effective
+        # value so manual overrides and Re-detect invalidations actually
+        # take effect on the next task. Without this, VisionAgent.run()'s
+        # ``if executor._target_os is None`` gate skips re-resolution and
+        # keeps using whatever was first auto-detected for the session.
+        if hasattr(self._executor, "_target_os"):
+            from cyberraccoon.executor.clipboard_bridge import TargetOS
+            if effective_target_os:
+                try:
+                    self._executor._target_os = TargetOS(effective_target_os)
+                except ValueError:
+                    logger.warning(
+                        "Unknown effective_target_os=%s; clearing executor "
+                        "target so VisionAgent will re-detect",
+                        effective_target_os,
+                    )
+                    self._executor._target_os = None
+            else:
+                # Empty → cache was invalidated or never detected. Force
+                # VisionAgent to run detection on the next task.
+                self._executor._target_os = None
 
         with self._lock:
             agent = VisionAgent(
@@ -895,6 +1131,8 @@ class AppController:
                 stability_threshold=config.agent.stability_threshold,
                 stability_interval_s=config.agent.stability_interval_s,
                 stability_max_wait_s=config.agent.stability_max_wait_s,
+                cached_target_os=effective_target_os or None,
+                on_os_detected=self._persist_detected_target_os,
             )
             self._protocol = protocol
             self._agent = agent
@@ -1541,7 +1779,7 @@ class AppController:
             agent._workflow_runner.resolve_escalation()
             logger.info("Workflow escalation resolved")
 
-    def submit_replan_decision(self, choice: str) -> None:
+    def submit_replan_decision(self, choice: str, hint: str = "") -> None:
         """Forward the user's replan dialog choice to the workflow runner.
 
         Phase 3 — REPLAN-01/02/03. Choice is validated by the runner against
@@ -1551,13 +1789,21 @@ class AppController:
 
         Choice is one of: "continue", "retry", "replan", "resume", "abort"
         (gate determines which subset is legal).
+
+        ``hint`` (260429-zl4): optional operator-supplied freeform text
+        from the dialog textarea. Forwarded verbatim to the runner,
+        which appends it one-shot to the next step's task_goal. Pydantic
+        already capped at 2000 chars; the runner enforces the same.
         """
         with self._lock:
             agent = self._agent
         if agent and hasattr(agent, '_workflow_runner') and agent._workflow_runner:
             try:
-                agent._workflow_runner.submit_replan_decision(choice)
-                logger.info("Replan decision submitted: %s", choice)
+                agent._workflow_runner.submit_replan_decision(choice, hint=hint)
+                logger.info(
+                    "Replan decision submitted: %s (hint_present=%s, hint_length=%d)",
+                    choice, bool(hint), len(hint or ""),
+                )
             except (ValueError, RuntimeError) as e:
                 # Runner rejected the choice — log and re-raise so the HTTP
                 # layer returns 400. (Plan 03-03's endpoint wraps this.)
@@ -1591,6 +1837,98 @@ class AppController:
                 f"Auto Re-plan applied in memory but YAML write failed: {e}"
             ) from e
         logger.info("Auto Re-plan set to: %s", enabled)
+
+    def get_pending_fatal_error(self) -> dict[str, Any] | None:
+        """Return the current pending fatal-error payload, or ``None``.
+
+        Populated when ``WorkflowRunner`` paused the task on a 4xx-non-429
+        API error (260429-xe5). Cleared as soon as the user clicks Retry
+        or Cancel. Web UI polls this on reconnect to re-render the banner.
+        """
+        with self._lock:
+            return (
+                dict(self._pending_fatal_error)
+                if self._pending_fatal_error else None
+            )
+
+    def resolve_fatal_error_retry(self) -> None:
+        """Drive the workflow runner's retry resolution from the UI.
+
+        Rebuilds the protocol with the current config (api_key, model,
+        base_url, target_os) so any edits the operator made via the
+        Config tab while the banner was up actually take effect on the
+        retry. Without this rebuild, the banner's "fix and retry" UX
+        is broken: the active protocol holds the old client and the
+        retry hits the same fatal error.
+
+        Trade-off: the protocol's conversation history is dropped on
+        rebuild. Acceptable here because (a) fatal errors fire on
+        4xx-non-429 (auth / config / contract issues) where the prior
+        request never succeeded, and (b) a single step rerun with the
+        current screenshot is typically enough context for the LLM.
+        """
+        with self._lock:
+            agent = self._agent
+        if not (agent and hasattr(agent, "_workflow_runner")
+                and agent._workflow_runner):
+            logger.warning(
+                "resolve_fatal_error_retry: no active workflow runner"
+            )
+            return
+
+        # Best-effort protocol rebuild. If it fails (e.g. api_key still
+        # empty), keep the existing protocol — the retry will surface
+        # the same fatal error again, which re-displays the banner so
+        # the user can correct config and retry once more.
+        config = self.get_config()
+        try:
+            from cyberraccoon.config import resolve_effective_target_os
+            effective_target_os = resolve_effective_target_os(config)
+            proto_w, proto_h = self._resolve_capture_dims(config)
+            new_protocol = create_protocol(
+                provider=config.llm.provider,
+                model=config.llm.model,
+                api_key=config.llm.api_key,
+                base_url=config.llm.base_url,
+                history_max_turns=config.agent.history_max_turns,
+                protocol_override=config.agent.protocol_override,
+                enable_cache=config.agent.enable_cache,
+                target_os=effective_target_os,
+                display_width=proto_w,
+                display_height=proto_h,
+            )
+        except Exception as e:
+            logger.warning(
+                "resolve_fatal_error_retry: protocol rebuild failed (%s) "
+                "— retry will reuse existing protocol and likely hit the "
+                "same error", e,
+            )
+        else:
+            with self._lock:
+                self._protocol = new_protocol
+                agent._protocol = new_protocol
+            logger.info(
+                "resolve_fatal_error_retry: protocol rebuilt "
+                "(provider=%s, model=%s)",
+                config.llm.provider, config.llm.model,
+            )
+
+        agent._workflow_runner.resolve_fatal_error_retry()
+
+    def resolve_fatal_error_cancel(self) -> None:
+        """Drive the workflow runner's cancel resolution from the UI.
+
+        The task transitions to FAILED with the API error message in
+        ``WorkflowResult.reason``.
+        """
+        with self._lock:
+            agent = self._agent
+        if agent and hasattr(agent, "_workflow_runner") and agent._workflow_runner:
+            agent._workflow_runner.resolve_fatal_error_cancel()
+        else:
+            logger.warning(
+                "resolve_fatal_error_cancel: no active workflow runner"
+            )
 
     def get_pending_dialogs(self) -> dict[str, Any]:
         """Return every currently-unresolved dialog for reconnect replay.
@@ -1947,6 +2285,36 @@ class AppController:
                 # escalation cache.
                 with self._lock:
                     self._pending_escalation = None
+
+            elif event_type == "fatal_error":
+                # 260429-xe5 — WorkflowRunner paused on a non-retryable API
+                # error. Cache the payload for reconnect-replay and emit a
+                # dedicated AppEventType.FATAL_ERROR so the UI can render
+                # the banner immediately on every connected client.
+                with self._lock:
+                    self._pending_fatal_error = dict(step_info)
+                logger.warning(
+                    "FatalError: cached payload (status=%s, request_id=%s, "
+                    "step_number=%s)",
+                    step_info.get("status_code"),
+                    step_info.get("request_id"),
+                    step_info.get("step_number"),
+                )
+                self._emit(AppEvent(
+                    type=AppEventType.FATAL_ERROR,
+                    data=dict(step_info),
+                ))
+
+            elif event_type == "fatal_error_resolved":
+                # User clicked Retry / Cancel (or task was aborted). Clear
+                # the cache and emit FATAL_ERROR_RESOLVED so other clients
+                # remove the banner.
+                with self._lock:
+                    self._pending_fatal_error = None
+                self._emit(AppEvent(
+                    type=AppEventType.FATAL_ERROR_RESOLVED,
+                    data={"choice": step_info.get("choice")},
+                ))
 
             self._emit(AppEvent(
                 type=AppEventType.WORKFLOW_EVENT,

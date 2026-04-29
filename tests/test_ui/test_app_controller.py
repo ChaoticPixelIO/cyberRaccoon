@@ -183,13 +183,13 @@ class TestConfig:
     ) -> None:
         ctrl = AppController(config_path=str(tmp_path / "cfg.yaml"))
         ctrl.load_config()
-        ctrl.update_config(**{"llm.model": "custom-model", "llm.temperature": 0.7})
+        ctrl.update_config(**{"llm.model": "custom-model", "llm.max_tokens": 2048})
 
         config = ctrl.get_config()
         active = config.llm.provider
         snap = config.llm.providers[active]
         assert snap["model"] == "custom-model"
-        assert snap["temperature"] == 0.7
+        assert snap["max_tokens"] == 2048
 
     def test_provider_swap_snapshots_old_and_loads_new(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -207,7 +207,7 @@ class TestConfig:
         ctrl.update_config(**{"llm.provider": "anthropic"})
         ctrl.update_config(**{
             "llm.model": "claude-sonnet-4-6",
-            "llm.temperature": 0.3,
+            "llm.max_tokens": 2048,
         })
 
         # Swap to openai
@@ -216,7 +216,7 @@ class TestConfig:
 
         # Old provider snapshot preserves the final anthropic state
         assert config.llm.providers["anthropic"]["model"] == "claude-sonnet-4-6"
-        assert config.llm.providers["anthropic"]["temperature"] == 0.3
+        assert config.llm.providers["anthropic"]["max_tokens"] == 2048
         # Flat fields now reflect openai defaults (no prior snapshot)
         assert config.llm.provider == "openai"
         assert config.llm.model == "gpt-5.5"
@@ -225,7 +225,7 @@ class TestConfig:
         ctrl.update_config(**{"llm.provider": "anthropic"})
         config = ctrl.get_config()
         assert config.llm.model == "claude-sonnet-4-6"
-        assert config.llm.temperature == 0.3
+        assert config.llm.max_tokens == 2048
 
     def test_masked_api_key_roundtrip_is_ignored(self, tmp_path: Path) -> None:
         ctrl = AppController(config_path=str(tmp_path / "cfg.yaml"))
@@ -2124,3 +2124,426 @@ class TestPendingDialogsGetter:
         })
         result = ctrl.get_pending_dialogs()
         assert result["dialogs"][0]["_active_gate"] == "escalation_C"
+
+
+# ===========================================================================
+# Fatal-error pause + retry/cancel (260429-xe5)
+# ===========================================================================
+
+class TestFatalErrorBanner:
+    """AppController bridges WorkflowRunner's fatal-error gate to the UI:
+    caches the payload via ``_on_step_bridge``, emits FATAL_ERROR /
+    FATAL_ERROR_RESOLVED AppEvents, and exposes ``get_pending_fatal_error``
+    + ``resolve_fatal_error_retry``/``..._cancel`` for the HTTP layer.
+    """
+
+    def _ctrl(self, tmp_path: Path) -> AppController:
+        c = AppController(config_path=str(tmp_path / "cfg.yaml"))
+        c.load_config()
+        return c
+
+    def test_empty_returns_none(self, tmp_path: Path) -> None:
+        ctrl = self._ctrl(tmp_path)
+        assert ctrl.get_pending_fatal_error() is None
+
+    def test_fatal_error_event_caches_and_emits(self, tmp_path: Path) -> None:
+        ctrl = self._ctrl(tmp_path)
+        events: list = []
+        ctrl.add_listener(events.append)
+
+        ctrl._on_step_bridge({
+            "type": "fatal_error",
+            "status_code": 400,
+            "request_id": "req_011XYZ",
+            "message": "`temperature` is deprecated for this model",
+            "step_number": 1,
+        })
+
+        # Cache populated
+        pending = ctrl.get_pending_fatal_error()
+        assert pending is not None
+        assert pending["status_code"] == 400
+        assert pending["request_id"] == "req_011XYZ"
+        assert pending["step_number"] == 1
+        assert "temperature" in pending["message"]
+
+        # FATAL_ERROR AppEvent emitted (separate from generic WORKFLOW_EVENT)
+        from cyberraccoon.ui.app_controller import AppEventType
+        fatal_events = [e for e in events if e.type == AppEventType.FATAL_ERROR]
+        assert len(fatal_events) == 1
+        assert fatal_events[0].data["status_code"] == 400
+
+    def test_fatal_error_resolved_clears_and_emits(self, tmp_path: Path) -> None:
+        ctrl = self._ctrl(tmp_path)
+        ctrl._on_step_bridge({
+            "type": "fatal_error",
+            "status_code": 400,
+            "request_id": "req_011X",
+            "message": "x",
+            "step_number": 1,
+        })
+        assert ctrl.get_pending_fatal_error() is not None
+
+        events: list = []
+        ctrl.add_listener(events.append)
+
+        ctrl._on_step_bridge({
+            "type": "fatal_error_resolved",
+            "choice": "retry",
+        })
+
+        assert ctrl.get_pending_fatal_error() is None
+        from cyberraccoon.ui.app_controller import AppEventType
+        resolved_events = [
+            e for e in events if e.type == AppEventType.FATAL_ERROR_RESOLVED
+        ]
+        assert len(resolved_events) == 1
+        assert resolved_events[0].data["choice"] == "retry"
+
+    def test_task_finished_clears_pending_fatal_error(
+        self, tmp_path: Path,
+    ) -> None:
+        """Defensive: a task that ends without explicit resolution (e.g.
+        external abort) must not leave the banner cached for the next task.
+        """
+        ctrl = self._ctrl(tmp_path)
+        ctrl._on_step_bridge({
+            "type": "fatal_error",
+            "status_code": 400,
+            "request_id": "req_x",
+            "message": "x",
+            "step_number": 1,
+        })
+        assert ctrl.get_pending_fatal_error() is not None
+
+        from cyberraccoon.ui.app_controller import AppEvent, AppEventType
+        ctrl._emit(AppEvent(type=AppEventType.TASK_FINISHED, data={}))
+
+        assert ctrl.get_pending_fatal_error() is None
+
+    def test_resolve_retry_no_runner_logs_warning(
+        self, tmp_path: Path, caplog,
+    ) -> None:
+        """Calling resolve_fatal_error_retry with no active workflow logs
+        a warning (rather than raising) — matches the existing pattern for
+        other gate resolutions."""
+        import logging
+        ctrl = self._ctrl(tmp_path)
+        with caplog.at_level(logging.WARNING):
+            ctrl.resolve_fatal_error_retry()
+        assert any(
+            "no active workflow runner" in r.message for r in caplog.records
+        )
+
+    def test_resolve_cancel_no_runner_logs_warning(
+        self, tmp_path: Path, caplog,
+    ) -> None:
+        import logging
+        ctrl = self._ctrl(tmp_path)
+        with caplog.at_level(logging.WARNING):
+            ctrl.resolve_fatal_error_cancel()
+        assert any(
+            "no active workflow runner" in r.message for r in caplog.records
+        )
+
+
+# ===========================================================================
+# OS-detection cache invalidation (260429-ucg)
+# ===========================================================================
+
+class TestOSCacheInvalidation:
+    """The cached detected_target_os must auto-invalidate when capture
+    identity changes (different source / device — likely a different
+    target machine), and must support a manual invalidate via
+    ``invalidate_detected_target_os()`` for the Re-detect link in the UI.
+    """
+
+    def _ctrl(self, tmp_path: Path) -> AppController:
+        c = AppController(config_path=str(tmp_path / "cfg.yaml"))
+        c.load_config()
+        return c
+
+    def test_capture_source_change_invalidates(self, tmp_path: Path) -> None:
+        ctrl = self._ctrl(tmp_path)
+        # Seed a cached value via update_config (no source change yet)
+        ctrl.update_config(**{"detected_target_os": "windows"})
+        assert ctrl.get_config().detected_target_os == "windows"
+
+        # Switch capture source — should clear the cache.
+        ctrl.update_config(**{"capture_source": "airplay"})
+        assert ctrl.get_config().detected_target_os == ""
+
+    def test_device_index_change_invalidates(self, tmp_path: Path) -> None:
+        ctrl = self._ctrl(tmp_path)
+        ctrl.update_config(**{"detected_target_os": "macos"})
+        ctrl.update_config(**{"capture.device_index": 2})
+        assert ctrl.get_config().detected_target_os == ""
+
+    def test_unrelated_change_does_not_invalidate(self, tmp_path: Path) -> None:
+        ctrl = self._ctrl(tmp_path)
+        ctrl.update_config(**{"detected_target_os": "linux"})
+        # Editing something unrelated must not clear the cache.
+        ctrl.update_config(**{"agent.max_steps": 25})
+        assert ctrl.get_config().detected_target_os == "linux"
+
+    def test_manual_invalidate_clears_cache_and_persists(
+        self, tmp_path: Path,
+    ) -> None:
+        ctrl = self._ctrl(tmp_path)
+        ctrl.update_config(**{"detected_target_os": "windows"})
+        assert ctrl.get_config().detected_target_os == "windows"
+
+        ctrl.invalidate_detected_target_os()
+
+        # Cleared in memory.
+        assert ctrl.get_config().detected_target_os == ""
+        # And persisted — re-loading from disk shows empty.
+        from cyberraccoon.ui.config_store import ConfigStore
+        reloaded = ConfigStore(str(tmp_path / "cfg.yaml")).load()
+        assert reloaded.detected_target_os == ""
+
+    def test_manual_invalidate_idempotent(self, tmp_path: Path) -> None:
+        ctrl = self._ctrl(tmp_path)
+        # Cache already empty — no-op (must not raise, must not emit a
+        # bogus CONFIG_CHANGED).
+        events: list = []
+        ctrl.add_listener(events.append)
+        ctrl.invalidate_detected_target_os()
+        from cyberraccoon.ui.app_controller import AppEventType
+        cfg_events = [e for e in events if e.type == AppEventType.CONFIG_CHANGED]
+        assert cfg_events == []
+
+    def test_persist_detected_target_os_writes_yaml(self, tmp_path: Path) -> None:
+        """The on_os_detected callback writes the result to yaml so the
+        next task starts with the cache populated."""
+        ctrl = self._ctrl(tmp_path)
+        assert ctrl.get_config().detected_target_os == ""
+
+        ctrl._persist_detected_target_os("windows")
+
+        assert ctrl.get_config().detected_target_os == "windows"
+        from cyberraccoon.ui.config_store import ConfigStore
+        reloaded = ConfigStore(str(tmp_path / "cfg.yaml")).load()
+        assert reloaded.detected_target_os == "windows"
+
+
+# ===========================================================================
+# Executor target_os sync at task start (260429 review fixup)
+# ===========================================================================
+
+class TestExecutorTargetOSSync:
+    """``_ensure_agent`` must sync ``executor._target_os`` from the resolved
+    ``effective_target_os`` on every task start. Without this, a manual
+    override or a Re-detect cache invalidation is silently ignored —
+    ``VisionAgent.run()``'s ``if executor._target_os is None`` gate skips
+    re-resolution and the executor keeps using whatever was first detected.
+    """
+
+    def _ctrl_with_modules(self, tmp_path: Path) -> tuple[AppController, Any, Any]:
+        """Build an AppController with mock capture + executor wired in,
+        ready for ``_ensure_agent()`` to run."""
+        ctrl = AppController(config_path=str(tmp_path / "cfg.yaml"))
+        ctrl.load_config()
+
+        # Mock capture + executor with the fields _ensure_agent touches.
+        mock_capture = MagicMock()
+        mock_executor = MagicMock()
+        mock_executor._target_os = None  # default: not yet detected
+
+        ctrl._capture = mock_capture
+        ctrl._executor = mock_executor
+        ctrl._capture_ready = True
+        ctrl._executor_ready = True
+        return ctrl, mock_capture, mock_executor
+
+    def test_manual_override_applied_to_executor(self, tmp_path: Path) -> None:
+        """User selects 'macos' in dropdown → executor.target_os becomes MACOS
+        on next _ensure_agent, even if executor was previously set to WINDOWS."""
+        from cyberraccoon.executor.clipboard_bridge import TargetOS
+        ctrl, _, mock_executor = self._ctrl_with_modules(tmp_path)
+        # Simulate prior auto-detection wrote WINDOWS into the executor.
+        mock_executor._target_os = TargetOS.WINDOWS
+
+        # Operator now sets manual override to macos.
+        ctrl.update_config(**{"target_os": "macos"})
+
+        with patch("cyberraccoon.ui.app_controller.create_protocol", return_value=MagicMock()), \
+             patch("cyberraccoon.ui.app_controller.VisionAgent", return_value=MagicMock()):
+            ctrl._ensure_agent()
+
+        assert mock_executor._target_os == TargetOS.MACOS
+
+    def test_cleared_cache_forces_redetect(self, tmp_path: Path) -> None:
+        """After invalidate_detected_target_os() (Re-detect link), executor
+        target must be cleared so VisionAgent runs detection on next task.
+        Reproduces the bug where the cache cleared but executor stayed stale.
+        """
+        from cyberraccoon.executor.clipboard_bridge import TargetOS
+        ctrl, _, mock_executor = self._ctrl_with_modules(tmp_path)
+        mock_executor._target_os = TargetOS.WINDOWS  # stale prior detection
+
+        # No manual override + no cached value = empty effective_target_os
+        # → executor must be cleared to None.
+        ctrl.invalidate_detected_target_os()
+
+        with patch("cyberraccoon.ui.app_controller.create_protocol", return_value=MagicMock()), \
+             patch("cyberraccoon.ui.app_controller.VisionAgent", return_value=MagicMock()):
+            ctrl._ensure_agent()
+
+        assert mock_executor._target_os is None
+
+    def test_cached_value_applied_to_executor(self, tmp_path: Path) -> None:
+        """A populated detected_target_os cache must be pushed to the
+        executor — covers the path where a previous task auto-detected
+        but the executor was reset between tasks."""
+        from cyberraccoon.executor.clipboard_bridge import TargetOS
+        ctrl, _, mock_executor = self._ctrl_with_modules(tmp_path)
+        mock_executor._target_os = None
+        ctrl.update_config(**{"detected_target_os": "linux"})
+
+        with patch("cyberraccoon.ui.app_controller.create_protocol", return_value=MagicMock()), \
+             patch("cyberraccoon.ui.app_controller.VisionAgent", return_value=MagicMock()):
+            ctrl._ensure_agent()
+
+        assert mock_executor._target_os == TargetOS.LINUX
+
+    def test_unknown_os_value_clears_to_force_redetect(
+        self, tmp_path: Path,
+    ) -> None:
+        """If config has a stale / unrecognized target_os string, the
+        executor target is cleared (None) so VisionAgent re-detects rather
+        than carrying a bogus value forward."""
+        from cyberraccoon.executor.clipboard_bridge import TargetOS
+        ctrl, _, mock_executor = self._ctrl_with_modules(tmp_path)
+        mock_executor._target_os = TargetOS.WINDOWS
+        # Bypass enum validation by writing directly to the config.
+        with ctrl._lock:
+            ctrl._config.target_os = "freebsd"  # not a valid TargetOS value
+
+        with patch("cyberraccoon.ui.app_controller.create_protocol", return_value=MagicMock()), \
+             patch("cyberraccoon.ui.app_controller.VisionAgent", return_value=MagicMock()):
+            ctrl._ensure_agent()
+
+        assert mock_executor._target_os is None
+
+
+# ===========================================================================
+# Fatal-error retry rebuilds protocol with current config (260429 review fixup)
+# ===========================================================================
+
+class TestFatalErrorRetryConfigRebuild:
+    """``resolve_fatal_error_retry`` must rebuild the protocol with the
+    current config so config edits made via the banner (api_key, model,
+    base_url) actually take effect on the retry attempt. Without this,
+    the active protocol holds the stale client and the retry hits the
+    same fatal error.
+    """
+
+    def _ctrl_with_active_workflow(
+        self, tmp_path: Path,
+    ) -> tuple[AppController, Any, Any]:
+        """Build a controller with a mock agent + workflow_runner attached,
+        mimicking the state during a fatal-error pause."""
+        ctrl = AppController(config_path=str(tmp_path / "cfg.yaml"))
+        ctrl.load_config()
+
+        old_protocol = MagicMock(name="old_protocol")
+        mock_runner = MagicMock(name="workflow_runner")
+        mock_agent = MagicMock(name="agent")
+        mock_agent._workflow_runner = mock_runner
+        mock_agent._protocol = old_protocol
+        ctrl._agent = mock_agent
+        ctrl._protocol = old_protocol
+        return ctrl, mock_agent, mock_runner
+
+    def test_retry_rebuilds_protocol_with_updated_api_key(
+        self, tmp_path: Path,
+    ) -> None:
+        """Operator edits api_key in Config tab during the fatal-error
+        banner, then clicks Retry. The protocol is rebuilt with the new
+        api_key and swapped into both ctrl and agent."""
+        ctrl, mock_agent, mock_runner = self._ctrl_with_active_workflow(tmp_path)
+
+        # Operator pastes a new key.
+        ctrl.update_config(**{"llm.api_key": "sk-new-key-xyz"})
+
+        new_protocol = MagicMock(name="new_protocol")
+        with patch(
+            "cyberraccoon.ui.app_controller.create_protocol",
+            return_value=new_protocol,
+        ) as mock_create:
+            ctrl.resolve_fatal_error_retry()
+
+        # create_protocol called with the updated api_key.
+        assert mock_create.called
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["api_key"] == "sk-new-key-xyz"
+
+        # Both ctrl and agent now point at the new protocol.
+        assert ctrl._protocol is new_protocol
+        assert mock_agent._protocol is new_protocol
+
+        # Runner is unblocked.
+        mock_runner.resolve_fatal_error_retry.assert_called_once()
+
+    def test_retry_rebuilds_protocol_with_updated_model_and_base_url(
+        self, tmp_path: Path,
+    ) -> None:
+        """Same flow for model / base_url edits — common for users
+        switching to an OpenAI-compatible service after a 404."""
+        ctrl, mock_agent, mock_runner = self._ctrl_with_active_workflow(tmp_path)
+        ctrl.update_config(**{
+            "llm.model": "gpt-5.5",
+            "llm.base_url": "https://api.example.com/v1",
+        })
+
+        new_protocol = MagicMock(name="new_protocol")
+        with patch(
+            "cyberraccoon.ui.app_controller.create_protocol",
+            return_value=new_protocol,
+        ) as mock_create:
+            ctrl.resolve_fatal_error_retry()
+
+        kwargs = mock_create.call_args.kwargs
+        assert kwargs["model"] == "gpt-5.5"
+        assert kwargs["base_url"] == "https://api.example.com/v1"
+        assert mock_agent._protocol is new_protocol
+
+    def test_retry_proceeds_even_if_rebuild_fails(
+        self, tmp_path: Path, caplog,
+    ) -> None:
+        """If create_protocol raises (e.g. api_key still empty), keep the
+        old protocol and still resolve the runner — the same fatal error
+        will re-surface, re-displaying the banner so the user can correct."""
+        import logging
+        ctrl, mock_agent, mock_runner = self._ctrl_with_active_workflow(tmp_path)
+        old_protocol = mock_agent._protocol
+
+        with patch(
+            "cyberraccoon.ui.app_controller.create_protocol",
+            side_effect=ValueError("API key is empty"),
+        ), caplog.at_level(logging.WARNING):
+            ctrl.resolve_fatal_error_retry()
+
+        # Old protocol retained.
+        assert mock_agent._protocol is old_protocol
+        # Runner still unblocked so banner doesn't get stuck.
+        mock_runner.resolve_fatal_error_retry.assert_called_once()
+        # Warning logged.
+        assert any(
+            "protocol rebuild failed" in r.message for r in caplog.records
+        )
+
+    def test_retry_no_runner_skips_rebuild(self, tmp_path: Path) -> None:
+        """No active workflow → don't rebuild (nothing to retry against),
+        log a warning. Matches existing behaviour for the no-runner case."""
+        ctrl = AppController(config_path=str(tmp_path / "cfg.yaml"))
+        ctrl.load_config()
+
+        with patch(
+            "cyberraccoon.ui.app_controller.create_protocol"
+        ) as mock_create:
+            ctrl.resolve_fatal_error_retry()
+
+        # Rebuild not attempted because there's no agent / runner to retry.
+        mock_create.assert_not_called()

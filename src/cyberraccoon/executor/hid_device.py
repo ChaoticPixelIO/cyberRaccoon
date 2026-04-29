@@ -23,6 +23,24 @@ class HIDDeviceError(Exception):
     """Raised when HID device operations fail (not found, permission denied, write error)."""
 
 
+class StaleBondError(HIDDeviceError):
+    """Raised when the BT connect fails due to mismatched pairing keys.
+
+    Symptom: Mac and Pi both *think* they're paired but link keys
+    drifted apart (Mac forgot the device while Pi kept the bond, or
+    vice versa). Surface signs:
+
+    - Brief connection (<10s) followed by host-side disconnect
+    - Kernel log: "ACL packet for unknown connection handle"
+    - bluetoothctl: ``Connected: yes`` then drops with no profile bound
+
+    Recovery is the same regardless of which side drifted: forget on
+    BOTH sides, then re-pair fresh. The web UI offers a one-click
+    button to clear the Pi side; the user must clear the Mac side
+    manually via System Settings → Bluetooth.
+    """
+
+
 class HIDDevice:
     """Wrapper around a Linux HID gadget device file.
 

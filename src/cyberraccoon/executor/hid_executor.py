@@ -42,8 +42,16 @@ class ActionExecutor(BaseExecutor):
         target_os: str | None = None,
         # Legacy kwarg accepted for backwards compatibility
         keyboard_device: str | None = None,
+        *,
+        screen_width: int,
+        screen_height: int,
     ) -> None:
-        super().__init__(humanize_config=humanize_config, target_os=target_os)
+        super().__init__(
+            humanize_config=humanize_config,
+            target_os=target_os,
+            screen_width=screen_width,
+            screen_height=screen_height,
+        )
         self._device_path = keyboard_device or device
         self._hid_dev: HIDDevice | None = None
 
@@ -60,7 +68,11 @@ class ActionExecutor(BaseExecutor):
             KeyboardController(self._hid_dev)
         )
         self._mouse = self._wrap_mouse_if_humanized(
-            MouseController(self._hid_dev)
+            MouseController(
+                self._hid_dev,
+                screen_width=self._screen_width,
+                screen_height=self._screen_height,
+            )
         )
 
         logger.info("ActionExecutor opened (device=%s)", self._device_path)

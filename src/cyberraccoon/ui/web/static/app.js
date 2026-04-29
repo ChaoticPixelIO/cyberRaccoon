@@ -15,6 +15,8 @@ function cyberRaccoon() {
         taskRunning: false,
         steps: [],
         screenshot: null,
+        screenshotNaturalWidth: 0,   // natural pixel dims of the loaded screenshot;
+        screenshotNaturalHeight: 0,  // used as the SVG viewBox for click markers
         refreshingScreenshot: false,
         taskResult: null,
         selectedStep: null,  // unique key string (e.g. "3-2"), null = follow latest
@@ -38,6 +40,9 @@ function cyberRaccoon() {
         connectingExecutor: false,
         captureError: '',
         executorError: '',
+        executorErrorCode: '',     // 'stale_bond' triggers the "Reset Pairing" button
+        resettingPairing: false,
+        pairingResetResult: '',    // last reset summary shown after click
         captureDevice: '',
         executorDevice: '',
 
@@ -73,6 +78,30 @@ function cyberRaccoon() {
         autoReplan: false,                   // synced from /api/config on init, persisted via /api/task/auto-replan
         connectionLostDuringDialog: false,   // true when WebSocket drops while replanDialog !== null
         _priorFocus: null,                   // saved focus target for restore on dialog close
+
+        // --- Operator hint to agent (260429-zl4) ---
+        // Freeform text typed into the textarea on the replan / escalation
+        // dialog. POSTed alongside the decision; the runner appends it
+        // one-shot to the next step's task_goal so the LLM sees it as
+        // part of the user's instruction. Cleared on submit and on
+        // task lifecycle transitions so it never leaks across tasks.
+        pendingHint: '',
+
+        // --- Target-OS detection progress (260429-ucg) ---
+        // null | {type: 'detecting_target_os'|'target_os_detected'|'target_os_cached', os?: string}
+        // Set by workflow events when the agent is in the OS-detection phase
+        // of a task. Rendered as a small transient banner above the action
+        // list. Cleared on task_started / task_finished.
+        osDetectionStatus: null,
+
+        // --- Fatal API error banner (260429-xe5) ---
+        // Set by `fatal_error` WS event or by a GET /api/task/fatal-error on
+        // reconnect. Cleared by `fatal_error_resolved`. Operator clicks
+        // Retry / Cancel; Retry replays the same step with a fresh attempt
+        // budget after the user fixes the API config in another tab.
+        fatalError: null,                    // null | {status_code, request_id, message, step_number}
+        fatalErrorActionPending: false,      // true between click and server ack
+        fatalErrorRequestIdCopied: false,    // shows a "Copied!" affordance briefly
         currentWorkflowStep: 0,  // which workflow step is currently executing
         selectedWorkflowStep: null, // which step the user clicked to filter actions (null = show all)
 
@@ -200,6 +229,88 @@ function cyberRaccoon() {
             return this.steps.length > 0 ? this.steps[this.steps.length - 1] : null;
         },
 
+        // Coords (in screenshot-pixel space) of every action in the active step
+        // that has a target position. Drives the SVG marker overlay on the
+        // preview-img. Iterates step.commands (the canonical array — see
+        // vision_agent.py) and falls back to step.command (singular) for
+        // older or partial event shapes.
+        get clickMarkers() {
+            const step = this.activeStep;
+            if (!step) return [];
+            const cmds = (Array.isArray(step.commands) && step.commands.length > 0)
+                ? step.commands
+                : (step.command ? [step.command] : []);
+            const markers = [];
+            const POINT_ACTIONS = new Set([
+                'click', 'left_click', 'right_click', 'middle_click',
+                'double_click', 'triple_click',
+                'scroll', 'mouse_move', 'mouse_down', 'mouse_up',
+            ]);
+            cmds.forEach((raw, idx) => {
+                const cmd = this._normalizeToolUseInput(raw);
+                const action = cmd.action;
+                if (POINT_ACTIONS.has(action)) {
+                    const x = Number(cmd.x), y = Number(cmd.y);
+                    if (Number.isFinite(x) && Number.isFinite(y)) {
+                        markers.push({ x, y, action, idx, kind: 'point' });
+                    }
+                } else if (action === 'drag' || action === 'left_click_drag') {
+                    const sx = Number(cmd.startX ?? cmd.from_x);
+                    const sy = Number(cmd.startY ?? cmd.from_y);
+                    const ex = Number(cmd.endX ?? cmd.to_x);
+                    const ey = Number(cmd.endY ?? cmd.to_y);
+                    if (Number.isFinite(sx) && Number.isFinite(sy)
+                        && Number.isFinite(ex) && Number.isFinite(ey)) {
+                        markers.push({ x: sx, y: sy, x2: ex, y2: ey, action, idx, kind: 'drag' });
+                    }
+                }
+            });
+            return markers;
+        },
+
+        // Color the center dot per action so users can distinguish click types.
+        // Outline is always white-on-black halo for contrast on any background.
+        markerColor(action) {
+            switch (action) {
+                case 'right_click':   return '#f39c12';  // orange
+                case 'middle_click':  return '#9b59b6';  // purple
+                case 'double_click':
+                case 'triple_click':  return '#e67e22';  // amber
+                case 'scroll':        return '#3498db';  // blue
+                case 'mouse_move':
+                case 'mouse_down':
+                case 'mouse_up':      return '#1abc9c';  // teal
+                case 'drag':
+                case 'left_click_drag': return '#9b59b6'; // purple
+                default:              return '#e74c3c';  // red (click / left_click / fallback)
+            }
+        },
+
+        // Short label rendered next to the marker (e.g. "2x" for double-click).
+        markerLabel(action) {
+            switch (action) {
+                case 'double_click':  return '2x';
+                case 'triple_click':  return '3x';
+                case 'right_click':   return 'R';
+                case 'middle_click':  return 'M';
+                case 'scroll':        return '↕';   // ↕
+                case 'mouse_down':    return '▼';   // ▼
+                case 'mouse_up':      return '▲';   // ▲
+                case 'mouse_move':    return '○';   // ○
+                default:              return '';
+            }
+        },
+
+        // Reset the SVG viewBox dims when the screenshot src changes so a
+        // stale natural-size doesn't position markers wrongly during the
+        // brief gap before the new image's @load event fires.
+        onScreenshotLoad(event) {
+            const img = event && event.target;
+            if (!img || !img.naturalWidth) return;
+            this.screenshotNaturalWidth = img.naturalWidth;
+            this.screenshotNaturalHeight = img.naturalHeight;
+        },
+
         // ================================================================
         // Initialisation
         // ================================================================
@@ -325,6 +436,20 @@ function cyberRaccoon() {
                     // will retry; logging at warn level rather than silent.
                     console.warn('pending-dialogs network error:', e);
                 }
+                // 260429-xe5 — same reconnect-replay pattern for the
+                // fatal-error banner. The /ws endpoint does NOT push
+                // current pending state on connect, so we fetch.
+                try {
+                    const resp = await fetch('/api/task/fatal-error');
+                    if (resp.ok) {
+                        const body = await resp.json();
+                        if (body && body.error) {
+                            this.fatalError = body.error;
+                        }
+                    }
+                } catch (e) {
+                    console.warn('fatal-error reconnect-replay failed:', e);
+                }
                 // Keepalive ping every 15 seconds
                 this._wsPingTimer = setInterval(() => {
                     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -429,6 +554,13 @@ function cyberRaccoon() {
                     this.replanDialog = null;
                     this.replanDecisionPending = false;
                     this.connectionLostDuringDialog = false;
+                    // 260429-xe5: clear stale fatal-error banner on new task.
+                    this.fatalError = null;
+                    this.fatalErrorActionPending = false;
+                    // 260429-ucg: reset OS-detection status banner.
+                    this.osDetectionStatus = null;
+                    // 260429-zl4: clear stale hint state on new task.
+                    this.pendingHint = '';
                     break;
 
                 case 'workflow_event':
@@ -472,6 +604,8 @@ function cyberRaccoon() {
                     this.planPaused = false;
                     this.pauseRequested = false;
                     this.taskResult = data;
+                    // 260429-ucg: clear OS-detection banner on task end.
+                    this.osDetectionStatus = null;
                     // Auto-follow state machine (UAT gap 2): only resume when toggle is ON.
                     // MANUAL -> FOLLOWING on task completion (D-18) only if autoFollow is enabled.
                     if (this.autoFollow) {
@@ -561,6 +695,22 @@ function cyberRaccoon() {
 
         handleWorkflowEvent(data) {
             switch (data.type) {
+                case 'detecting_target_os':
+                case 'target_os_detected':
+                case 'target_os_cached':
+                    // 260429-ucg — surface OS-detection progress in the
+                    // action list as transient banner-style entries. The
+                    // rendering uses the existing `osDetectionStatus`
+                    // alpine state read by the Plan section header.
+                    this.osDetectionStatus = data;
+                    if (data.type === 'target_os_detected' && data.os && this.config) {
+                        // Optimistically update the local cache so the
+                        // dropdown label refreshes without waiting for the
+                        // CONFIG_CHANGED round-trip.
+                        this.config.detected_target_os = data.os;
+                    }
+                    break;
+
                 case 'plan_ready':
                     this.workflowActive = true;
                     this.planPending = true;
@@ -700,6 +850,25 @@ function cyberRaccoon() {
                     this.escalationPending = false;
                     this.escalationReason = '';
                     this.planExecuting = true;
+                    break;
+
+                case 'fatal_error':
+                    // 260429-xe5 — workflow paused on a non-retryable API
+                    // error. Show the red banner with Retry / Cancel.
+                    this.fatalError = {
+                        status_code: data.status_code ?? null,
+                        request_id: data.request_id ?? null,
+                        message: data.message || 'API request failed',
+                        step_number: data.step_number ?? null,
+                    };
+                    this.fatalErrorActionPending = false;
+                    this.fatalErrorRequestIdCopied = false;
+                    break;
+
+                case 'fatal_error_resolved':
+                    this.fatalError = null;
+                    this.fatalErrorActionPending = false;
+                    this.fatalErrorRequestIdCopied = false;
                     break;
 
                 case 'plan_modification_proposed':
@@ -909,6 +1078,8 @@ function cyberRaccoon() {
         async connectExecutor() {
             this.connectingExecutor = true;
             this.executorError = '';
+            this.executorErrorCode = '';
+            this.pairingResetResult = '';
             const abort = new AbortController();
             this._executorAbort = abort;
             try {
@@ -919,6 +1090,7 @@ function cyberRaccoon() {
                 const result = await resp.json();
                 if (result.status === 'error') {
                     this.executorError = result.message;
+                    this.executorErrorCode = result.code || '';
                 } else {
                     this.executorReady = true;
                     if (result.device) this.executorDevice = result.device;
@@ -929,6 +1101,40 @@ function cyberRaccoon() {
             } finally {
                 this._executorAbort = null;
                 this.connectingExecutor = false;
+            }
+        },
+
+        async resetBtPairing() {
+            if (this.resettingPairing) return;
+            if (!confirm(
+                'This clears all paired Bluetooth devices on the Pi. ' +
+                'You will then need to:\n\n' +
+                '  1. Forget "CyberRaccoon" on the Mac (System Settings → Bluetooth)\n' +
+                '  2. Pair fresh from the Mac\n' +
+                '  3. Click Connect again\n\n' +
+                'Continue?'
+            )) return;
+
+            this.resettingPairing = true;
+            try {
+                const resp = await fetch('/api/executor/reset-pairing', {
+                    method: 'POST',
+                });
+                const result = await resp.json();
+                if (result.status === 'ok') {
+                    const cleared = (result.cleared || []).join(', ') || '(none)';
+                    this.pairingResetResult =
+                        'Cleared on Pi: ' + cleared +
+                        '. Now forget "CyberRaccoon" on the Mac and re-pair.';
+                    this.executorError = '';
+                    this.executorErrorCode = '';
+                } else {
+                    this.pairingResetResult = 'Reset failed: ' + (result.message || 'unknown error');
+                }
+            } catch (e) {
+                this.pairingResetResult = 'Network error: ' + e.message;
+            } finally {
+                this.resettingPairing = false;
             }
         },
 
@@ -1469,6 +1675,95 @@ function cyberRaccoon() {
         },
 
         // ================================================================
+        // Fatal API error banner (260429-xe5)
+        // ================================================================
+
+        async retryFatalError() {
+            // Operator fixed the API config (key, model, etc.) and wants to
+            // re-run the same step. The workflow runner replays the step
+            // with the protocol's existing conversation history intact.
+            if (this.fatalErrorActionPending) return;
+            this.fatalErrorActionPending = true;
+            try {
+                const resp = await fetch('/api/task/fatal-error/retry', { method: 'POST' });
+                if (!resp.ok) {
+                    this._flash(`Retry failed: HTTP ${resp.status}`);
+                    this.fatalErrorActionPending = false;
+                }
+                // Success: server-side resolve unblocks the runner; the
+                // ensuing 'fatal_error_resolved' WS event clears the banner.
+            } catch (e) {
+                console.error('retryFatalError network error:', e);
+                this._flash('Retry network error — try again');
+                this.fatalErrorActionPending = false;
+            }
+        },
+
+        async cancelFatalError() {
+            if (this.fatalErrorActionPending) return;
+            this.fatalErrorActionPending = true;
+            try {
+                const resp = await fetch('/api/task/fatal-error/cancel', { method: 'POST' });
+                if (!resp.ok) {
+                    this._flash(`Cancel failed: HTTP ${resp.status}`);
+                    this.fatalErrorActionPending = false;
+                }
+            } catch (e) {
+                console.error('cancelFatalError network error:', e);
+                this._flash('Cancel network error — try again');
+                this.fatalErrorActionPending = false;
+            }
+        },
+
+        async copyFatalErrorRequestId() {
+            const reqId = this.fatalError && this.fatalError.request_id;
+            if (!reqId) return;
+            try {
+                await navigator.clipboard.writeText(reqId);
+                this.fatalErrorRequestIdCopied = true;
+                setTimeout(() => { this.fatalErrorRequestIdCopied = false; }, 1500);
+            } catch (e) {
+                console.warn('Clipboard write failed:', e);
+                this._flash('Could not copy — clipboard permission denied');
+            }
+        },
+
+        // ================================================================
+        // Target-OS auto-detection cache (260429-ucg)
+        // ================================================================
+
+        autoOptionLabel() {
+            // The "Auto-detect" option in the Target OS dropdown shows the
+            // currently-cached value (if any) so the operator can see what
+            // the system thinks the target machine is.
+            const detected = this.config && this.config.detected_target_os;
+            if (!detected) return 'Auto-detect';
+            const display = {
+                windows: 'Windows', macos: 'macOS', linux: 'Linux',
+            }[String(detected).toLowerCase()] || detected;
+            return `Auto (detected: ${display})`;
+        },
+
+        async redetectTargetOS() {
+            // Clear the cache so the next task re-runs detection.
+            try {
+                const resp = await fetch('/api/config/redetect-target-os', { method: 'POST' });
+                if (!resp.ok) {
+                    this._flash(`Re-detect failed: HTTP ${resp.status}`);
+                    return;
+                }
+                // Optimistic local update; server emits CONFIG_CHANGED so
+                // other connected clients sync via the WS path.
+                if (this.config) {
+                    this.config.detected_target_os = '';
+                }
+            } catch (e) {
+                console.error('redetectTargetOS network error:', e);
+                this._flash('Re-detect network error — try again');
+            }
+        },
+
+        // ================================================================
         // Replan Dialog (Phase 3 — REPLAN-01/02/03, UI-02/03, H7, H8)
         // ================================================================
 
@@ -1500,6 +1795,11 @@ function cyberRaccoon() {
         async submitReplanDecision(choice) {
             if (this.replanDecisionPending) return;
             this.replanDecisionPending = true;
+            // 260429-zl4 — capture hint snapshot at submit time, then
+            // clear local state immediately so reopening the dialog
+            // (after a subsequent failure) starts with an empty box.
+            const hintSnapshot = this.pendingHint || '';
+            this.pendingHint = '';
             // I5 — fetch only throws on network errors; HTTP 4xx/5xx still
             // resolve. Without an explicit resp.ok check the modal stays
             // open forever when the server returns 400 (bad gate) or 409
@@ -1509,13 +1809,16 @@ function cyberRaccoon() {
                 const resp = await fetch('/api/task/replan-decision', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ choice }),
+                    body: JSON.stringify({ choice, hint: hintSnapshot }),
                 });
                 if (!resp.ok) {
                     const body = await resp.json().catch(() => ({}));
                     const detail = body.error || body.detail || `HTTP ${resp.status}`;
                     this._flash(`Decision rejected: ${detail}`);
                     this.replanDecisionPending = false;
+                    // Restore the typed hint so the operator can re-submit
+                    // without losing what they typed.
+                    this.pendingHint = hintSnapshot;
                     if (resp.status === 409) {
                         // Server already moved on — close the now-stale modal.
                         this.closeReplanDialog();
@@ -1528,6 +1831,7 @@ function cyberRaccoon() {
                 console.error('replan-decision failed:', e);
                 this._flash(`Network error submitting decision: ${e.message || e}`);
                 this.replanDecisionPending = false;
+                this.pendingHint = hintSnapshot;  // restore on network error too
             }
         },
 

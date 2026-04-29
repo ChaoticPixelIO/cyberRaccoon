@@ -9,43 +9,98 @@ import pytest
 from cyberraccoon.executor.mouse import (
     HID_MAX,
     REPORT_ID,
-    SCREEN_HEIGHT,
-    SCREEN_WIDTH,
     _build_report,
-    _screen_to_hid,
     MouseController,
 )
 from tests.test_executor.conftest import MockHIDDevice
 
 
 class TestMouseCoordinates:
-    """Tests for screen→HID coordinate conversion."""
+    """Tests for screen→HID coordinate conversion (1920×1080 controller)."""
 
-    def test_origin(self) -> None:
-        hx, hy = _screen_to_hid(0, 0)
+    def test_origin(self, mock_mouse: MouseController) -> None:
+        hx, hy = mock_mouse._screen_to_hid(0, 0)
         assert hx == 0
         assert hy == 0
 
-    def test_center(self) -> None:
-        hx, hy = _screen_to_hid(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
-        # 640 * 32767 / 1280 = 16383.5 → 16383
+    def test_center(self, mock_mouse: MouseController) -> None:
+        hx, hy = mock_mouse._screen_to_hid(1920 // 2, 1080 // 2)
+        # 960 * 32767 / 1920 = 16383.5 → 16383
         assert abs(hx - HID_MAX // 2) <= 1
         assert abs(hy - HID_MAX // 2) <= 1
 
-    def test_max_corner(self) -> None:
-        hx, hy = _screen_to_hid(SCREEN_WIDTH, SCREEN_HEIGHT)
+    def test_max_corner(self, mock_mouse: MouseController) -> None:
+        hx, hy = mock_mouse._screen_to_hid(1920, 1080)
         assert hx == HID_MAX
         assert hy == HID_MAX
 
-    def test_negative_clamps_to_zero(self) -> None:
-        hx, hy = _screen_to_hid(-10, -5)
+    def test_negative_clamps_to_zero(self, mock_mouse: MouseController) -> None:
+        hx, hy = mock_mouse._screen_to_hid(-10, -5)
         assert hx == 0
         assert hy == 0
 
-    def test_overflow_clamps_to_max(self) -> None:
-        hx, hy = _screen_to_hid(9999, 9999)
+    def test_overflow_clamps_to_max(self, mock_mouse: MouseController) -> None:
+        hx, hy = mock_mouse._screen_to_hid(9999, 9999)
         assert hx == HID_MAX
         assert hy == HID_MAX
+
+
+class TestMouseCoordinates720:
+    """Regression tests for the 1280×720 (CSI default) coordinate-space bug.
+
+    Before the fix, MouseController hardcoded SCREEN_WIDTH=1920/SCREEN_HEIGHT=1080,
+    so a 1280x720 capture's center click (640, 360) landed at ~66.7% of HID center
+    instead of the actual HID center.
+    """
+
+    def test_origin(self, mock_mouse_720: MouseController) -> None:
+        hx, hy = mock_mouse_720._screen_to_hid(0, 0)
+        assert hx == 0
+        assert hy == 0
+
+    def test_center_maps_to_hid_center(self, mock_mouse_720: MouseController) -> None:
+        # 640 * 32767 / 1280 = 16383.5 → 16383; same for 360 / 720
+        hx, hy = mock_mouse_720._screen_to_hid(640, 360)
+        assert abs(hx - HID_MAX // 2) <= 1
+        assert abs(hy - HID_MAX // 2) <= 1
+
+    def test_max_corner_maps_to_hid_max(self, mock_mouse_720: MouseController) -> None:
+        hx, hy = mock_mouse_720._screen_to_hid(1280, 720)
+        assert hx == HID_MAX
+        assert hy == HID_MAX
+
+    def test_negative_clamps_to_zero(self, mock_mouse_720: MouseController) -> None:
+        hx, hy = mock_mouse_720._screen_to_hid(-10, -5)
+        assert hx == 0
+        assert hy == 0
+
+    def test_overflow_clamps_to_max(self, mock_mouse_720: MouseController) -> None:
+        hx, hy = mock_mouse_720._screen_to_hid(9999, 9999)
+        assert hx == HID_MAX
+        assert hy == HID_MAX
+
+
+class TestMouseControllerInit:
+    """Tests for MouseController constructor invariants."""
+
+    def test_missing_dims_raises_typeerror(
+        self, mock_mouse_device: MockHIDDevice
+    ) -> None:
+        """Constructing without screen_width/screen_height must be a hard TypeError."""
+        with pytest.raises(TypeError):
+            MouseController(mock_mouse_device)  # type: ignore[call-arg]
+
+    def test_zero_width_raises(self, mock_mouse_device: MockHIDDevice) -> None:
+        with pytest.raises(ValueError, match="screen_width"):
+            MouseController(mock_mouse_device, screen_width=0, screen_height=720)
+
+    def test_zero_height_raises(self, mock_mouse_device: MockHIDDevice) -> None:
+        with pytest.raises(ValueError, match="screen_height"):
+            MouseController(mock_mouse_device, screen_width=1280, screen_height=0)
+
+    def test_negative_width_raises(self, mock_mouse_device: MockHIDDevice) -> None:
+        with pytest.raises(ValueError, match="screen_width"):
+            MouseController(mock_mouse_device, screen_width=-1, screen_height=720)
 
 
 class TestMouseReport:

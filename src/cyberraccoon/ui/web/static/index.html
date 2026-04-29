@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CyberRaccoon</title>
-    <link rel="stylesheet" href="/static/style.css?v=15">
+    <link rel="stylesheet" href="/static/style.css?v=20">
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <script src="/static/app.js?v=15"></script>
+    <script src="/static/app.js?v=20"></script>
 </head>
 <body>
 
@@ -112,16 +112,80 @@
                     <span class="connection-label-fixed">Target OS:</span>
                     <select class="connection-select" x-model="config.target_os"
                             @change="saveTopLevel('target_os')">
-                        <option value="">Auto-detect</option>
+                        <option value="" x-text="autoOptionLabel()"></option>
                         <option value="windows">Windows</option>
                         <option value="macos">macOS</option>
                         <option value="linux">Linux</option>
                     </select>
+                    <button class="btn-link-sm"
+                            x-show="config.detected_target_os && !config.target_os"
+                            @click="redetectTargetOS()"
+                            title="Clear the detected OS and re-run detection on the next task">
+                        Re-detect
+                    </button>
                 </div>
             </div>
         </div>
         <div class="connection-error" x-show="captureError" x-text="captureError" x-cloak></div>
         <div class="connection-error" x-show="executorError" x-text="executorError" x-cloak></div>
+
+        <!-- Stale-bond recovery banner: surfaced when the connect endpoint
+             returns code='stale_bond'. Offers the one-click Reset Pairing
+             action that clears /var/lib/bluetooth on the Pi. The user
+             must still forget the device on the Mac side after running. -->
+        <div class="stale-bond-banner" x-show="executorErrorCode === 'stale_bond'"
+             x-cloak role="alert">
+            <div class="stale-bond-actions">
+                <button class="btn btn-sm btn-start"
+                        @click="resetBtPairing()"
+                        :disabled="resettingPairing">
+                    <span x-show="!resettingPairing">Reset Pairing on Pi</span>
+                    <span x-show="resettingPairing">Resetting…</span>
+                </button>
+            </div>
+        </div>
+        <div class="pairing-reset-result" x-show="pairingResetResult"
+             x-text="pairingResetResult" x-cloak></div>
+
+        <!-- 260429-xe5 Fatal API error banner. Shown above the task input
+             whenever the workflow has paused on a non-retryable API error
+             (4xx-non-429). Carries the literal API message + request_id so
+             the operator can fix the config and click Retry, or Cancel. -->
+        <div class="fatal-error-banner" x-show="fatalError" x-cloak
+             role="alert" aria-live="assertive">
+            <div class="fatal-error-header">
+                <span class="fatal-error-icon" aria-hidden="true">⚠</span>
+                <strong>API request failed</strong>
+                <span class="fatal-error-status" x-show="fatalError && fatalError.status_code"
+                      x-text="fatalError && fatalError.status_code ? `HTTP ${fatalError.status_code}` : ''"></span>
+            </div>
+            <div class="fatal-error-message" x-text="fatalError && fatalError.message"></div>
+            <div class="fatal-error-meta" x-show="fatalError && fatalError.request_id">
+                <span>request_id:</span>
+                <code x-text="fatalError && fatalError.request_id"></code>
+                <button class="btn-link-sm" @click="copyFatalErrorRequestId()"
+                        :title="fatalErrorRequestIdCopied ? 'Copied!' : 'Copy request ID'">
+                    <span x-text="fatalErrorRequestIdCopied ? '✓ Copied' : '📋 Copy'"></span>
+                </button>
+                <span x-show="fatalError && fatalError.step_number != null"
+                      x-text="`(step ${fatalError && fatalError.step_number})`"
+                      class="fatal-error-step"></span>
+            </div>
+            <div class="fatal-error-hint">
+                Fix the API configuration in the Config tab, then click Retry to re-run this step.
+            </div>
+            <div class="fatal-error-actions">
+                <button class="btn btn-primary" @click="retryFatalError()"
+                        :disabled="fatalErrorActionPending">
+                    <span x-show="!fatalErrorActionPending">Retry step</span>
+                    <span x-show="fatalErrorActionPending">
+                        <span class="spinner-sm"></span> Working…
+                    </span>
+                </button>
+                <button class="btn btn-danger" @click="cancelFatalError()"
+                        :disabled="fatalErrorActionPending">Cancel task</button>
+            </div>
+        </div>
 
         <div class="task-controls">
             <input type="text" x-model="taskGoal" placeholder="Task goal..."
@@ -192,13 +256,24 @@
                 <div class="escalation-header">Action Required</div>
                 <p class="escalation-reason" x-text="escalationReason"></p>
                 <p class="muted">Resolve the issue on the target machine, then click Resume.</p>
+                <!-- 260429-zl4 — operator hint textarea -->
+                <div class="dialog-hint-section">
+                    <label>
+                        <span class="dialog-hint-label">Hint to agent (optional)</span>
+                        <textarea x-model="pendingHint" maxlength="2000" rows="2"
+                                  class="dialog-hint-textarea"
+                                  placeholder="e.g. The password is X, or 'the button is in the top-right not center.'"></textarea>
+                    </label>
+                    <div class="dialog-hint-counter"
+                         x-text="pendingHint.length + '/2000'"></div>
+                </div>
                 <div class="escalation-actions" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                     <button class="btn btn-sm btn-start"
                             @click="submitReplanDecision('resume')"
-                            title="Discard the dialog and continue with the next step.">Resume</button>
+                            title="Discard the dialog and continue with the next step (with any hint above).">Resume</button>
                     <button class="btn btn-sm btn-primary"
                             @click="submitReplanDecision('replan')"
-                            title="Discard remaining steps and replan from the current screen.">Re-plan</button>
+                            title="Discard remaining steps and replan from the current screen (with any hint above).">Re-plan</button>
                     <button class="btn btn-sm btn-danger"
                             @click="submitReplanDecision('abort')"
                             title="Stop the task entirely.">Abort</button>
@@ -265,9 +340,21 @@
               <template x-if="connectionLostDuringDialog">
                 <div class="replan-dialog-connection-lost">Connection lost. Waiting to reconnect…</div>
               </template>
+              <!-- 260429-zl4 — operator hint textarea, shared across Path A and B -->
+              <div class="dialog-hint-section">
+                <label>
+                    <span class="dialog-hint-label">Hint to agent (optional)</span>
+                    <textarea x-model="pendingHint" maxlength="2000" rows="2"
+                              class="dialog-hint-textarea"
+                              placeholder="e.g. The password is X, or 'the button is in the top-right not center.'"></textarea>
+                </label>
+                <div class="dialog-hint-counter"
+                     x-text="pendingHint.length + '/2000'"></div>
+              </div>
               <div class="replan-dialog-actions">
                 <template x-if="replanDialog.path === 'A'">
                   <div style="display: contents;">
+                    <button class="btn btn-danger" @click="submitReplanDecision('abort')" :disabled="replanDecisionPending">Abort Task</button>
                     <button class="btn" @click="submitReplanDecision('continue')" :disabled="replanDecisionPending">Continue Anyway</button>
                     <button class="btn btn-primary" @click="submitReplanDecision('replan')" :disabled="replanDecisionPending">
                       <span x-show="!replanDecisionPending">Re-plan</span>
@@ -310,9 +397,37 @@
                             <span x-show="refreshingScreenshot" class="spinner-sm"></span>
                         </button>
                     </template>
+                    <!-- Image + marker overlay sit inside a wrapper sized to
+                         match the screenshot's natural aspect ratio. That
+                         eliminates object-fit:contain letterbox math: the img
+                         fills the wrapper exactly, so percentage-positioned
+                         markers always land on the correct pixel. -->
                     <template x-if="screenshot">
-                        <img :src="'data:image/jpeg;base64,' + screenshot"
-                             alt="Screen preview" class="preview-img">
+                        <div class="preview-img-wrap"
+                             :style="screenshotNaturalWidth > 0
+                                 ? `aspect-ratio: ${screenshotNaturalWidth} / ${screenshotNaturalHeight}`
+                                 : ''">
+                            <img :src="'data:image/jpeg;base64,' + screenshot"
+                                 alt="Screen preview" class="preview-img"
+                                 @load="onScreenshotLoad($event)">
+                            <template x-for="m in clickMarkers" :key="m.idx">
+                                <div>
+                                    <!-- Drag arrow: render endpoint dot first -->
+                                    <template x-if="m.kind === 'drag'">
+                                        <div class="click-marker drag-end"
+                                             :style="`left: ${m.x2 / screenshotNaturalWidth * 100}%; top: ${m.y2 / screenshotNaturalHeight * 100}%`"></div>
+                                    </template>
+                                    <!-- Primary marker (click point or drag start) -->
+                                    <div class="click-marker"
+                                         :class="`marker-${m.action}`"
+                                         :style="`left: ${m.x / screenshotNaturalWidth * 100}%; top: ${m.y / screenshotNaturalHeight * 100}%; --marker-color: ${markerColor(m.action)}`">
+                                        <template x-if="markerLabel(m.action)">
+                                            <span class="marker-label" x-text="markerLabel(m.action)"></span>
+                                        </template>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
                     </template>
                     <template x-if="!screenshot">
                         <div class="preview-placeholder">No screenshot yet</div>
@@ -646,6 +761,33 @@
                     </template>
                 </div>
 
+                <!-- 260429-ucg — Target-OS detection progress banner.
+                     Visible while the agent is establishing the target
+                     OS at task start (cache hit OR running detection),
+                     so the operator sees what the system is doing
+                     during what would otherwise be silent. -->
+                <div class="os-detection-banner" x-show="osDetectionStatus" x-cloak>
+                    <template x-if="osDetectionStatus && osDetectionStatus.type === 'detecting_target_os'">
+                        <div>
+                            <span class="spinner-sm"></span>
+                            Detecting target OS… (one-time, ~8s)
+                        </div>
+                    </template>
+                    <template x-if="osDetectionStatus && osDetectionStatus.type === 'target_os_detected'">
+                        <div>
+                            <span aria-hidden="true">✓</span>
+                            Detected target OS: <strong x-text="osDetectionStatus.os"></strong>
+                            <small>(cached for next task)</small>
+                        </div>
+                    </template>
+                    <template x-if="osDetectionStatus && osDetectionStatus.type === 'target_os_cached'">
+                        <div>
+                            <span aria-hidden="true">⚡</span>
+                            Using cached target OS: <strong x-text="osDetectionStatus.os"></strong>
+                        </div>
+                    </template>
+                </div>
+
                 <!-- Step log -->
                 <div class="step-log" x-ref="stepLog">
                     <template x-if="filteredSteps.length === 0 && !taskRunning">
@@ -731,10 +873,6 @@
                     <label>Base URL
                         <input type="text" x-model="config.llm.base_url"
                                placeholder="(default)">
-                    </label>
-                    <label>Temperature
-                        <input type="number" x-model.number="config.llm.temperature"
-                               step="0.1" min="0" max="2">
                     </label>
                     <button @click="saveSection('llm')" class="btn">Save LLM</button>
                 </fieldset>

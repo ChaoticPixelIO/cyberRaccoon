@@ -21,9 +21,291 @@ from cyberraccoon.agent.protocols.base import (
     _supports_anthropic_cu,
     _supports_openai_cu,
     create_protocol,
+    is_fatal_status_code,
+    model_supports_temperature,
 )
 from cyberraccoon.agent.protocols.anthropic_cu import AnthropicCUProtocol
 from cyberraccoon.agent.protocols.prompt_based import PromptBasedProtocol, VALID_ACTIONS
+
+
+# ===========================================================================
+# Temperature support gating
+# ===========================================================================
+
+class TestModelSupportsTemperature:
+    """Tests for ``model_supports_temperature()``.
+
+    Anthropic deprecated the ``temperature`` request parameter starting with
+    ``claude-opus-4-7`` (returns 400 invalid_request_error). The protocol
+    layer must omit the kwarg for these models and pass 0.0 for the rest.
+    """
+
+    @pytest.mark.parametrize("model", [
+        "claude-opus-4-7",
+        "claude-opus-4-7-20260415",
+        "claude-sonnet-4-7",
+        "claude-sonnet-4-7-20260601",
+        # Mixed case — the helper lowercases the model name first
+        "Claude-Opus-4-7",
+    ])
+    def test_deprecated_models_unsupported(self, model: str) -> None:
+        assert model_supports_temperature(model) is False
+
+    @pytest.mark.parametrize("model", [
+        "claude-opus-4-6",
+        "claude-opus-4-5",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-4o",
+        "custom-provider-model",
+    ])
+    def test_other_models_supported(self, model: str) -> None:
+        assert model_supports_temperature(model) is True
+
+
+# ===========================================================================
+# Fatal status code classification
+# ===========================================================================
+
+class TestIsFatalStatusCode:
+    """Tests for ``is_fatal_status_code()``.
+
+    Fatal = the request is wrong (auth / contract / deprecated param) so
+    retrying with the same payload will not help. Any 4xx except 429.
+    """
+
+    @pytest.mark.parametrize("code", [400, 401, 403, 404, 409, 422])
+    def test_4xx_non_429_is_fatal(self, code: int) -> None:
+        assert is_fatal_status_code(code) is True
+
+    def test_429_is_not_fatal(self) -> None:
+        # Rate limit — should be retried with backoff, not surfaced as fatal.
+        assert is_fatal_status_code(429) is False
+
+    @pytest.mark.parametrize("code", [500, 502, 503, 504])
+    def test_5xx_is_not_fatal(self, code: int) -> None:
+        # Server-side errors — transient, should be retried.
+        assert is_fatal_status_code(code) is False
+
+    @pytest.mark.parametrize("code", [200, 201, 204])
+    def test_2xx_is_not_fatal(self, code: int) -> None:
+        # Success codes — not an error at all.
+        assert is_fatal_status_code(code) is False
+
+    def test_none_is_not_fatal(self) -> None:
+        # Network-level errors raise without a status code; treat as
+        # transient (the existing retry loop handles them).
+        assert is_fatal_status_code(None) is False
+
+
+# ===========================================================================
+# Protocol-level fatal-error tagging
+# ===========================================================================
+
+class TestProtocolFatalErrorTagging:
+    """Both AnthropicCUProtocol and PromptBasedProtocol must tag
+    StepResult.fatal=True on 4xx-non-429 SDK exceptions, populating
+    error_status_code and error_request_id from the SDK error object.
+    """
+
+    def _make_anthropic_cu(self) -> AnthropicCUProtocol:
+        from unittest.mock import MagicMock
+        proto = AnthropicCUProtocol.__new__(AnthropicCUProtocol)
+        proto._model = "claude-opus-4-7"
+        proto._max_tokens = 4096
+        proto._history_max_turns = 10
+        proto._display_width = 1280
+        proto._display_height = 720
+        proto._enable_cache = True
+        # Mock the anthropic module + client
+        mock_anthropic = MagicMock()
+        # Make APIError a real (catchable) class so the except clause matches
+        class _FakeAPIError(Exception):
+            pass
+        mock_anthropic.APIError = _FakeAPIError
+        proto._anthropic = mock_anthropic
+        proto._client = MagicMock()
+        proto._tool_def = {"type": "computer_20251124", "name": "computer"}
+        proto._system_prompt = "test"
+        proto._messages = []
+        proto._step_count = 0
+        proto._total_input_tokens = 0
+        proto._total_output_tokens = 0
+        proto._total_cache_read_tokens = 0
+        proto._total_cache_creation_tokens = 0
+        proto._last_tool_use_id = None
+        proto._last_exec_error = None
+        return proto
+
+    def test_anthropic_cu_400_marks_fatal(self) -> None:
+        proto = self._make_anthropic_cu()
+        # Build an exception instance carrying status_code + request_id —
+        # mirroring how anthropic.APIStatusError surfaces them.
+        err = proto._anthropic.APIError("temperature is deprecated for this model")
+        err.status_code = 400
+        err.request_id = "req_011XYZ"
+        proto._client.beta.messages.create.side_effect = err
+
+        result = proto.step(screenshot_base64="abc", task_goal="test")
+
+        assert result.success is False
+        assert result.fatal is True
+        assert result.error_status_code == 400
+        assert result.error_request_id == "req_011XYZ"
+        assert "temperature" in result.error
+
+    def test_anthropic_cu_429_does_not_mark_fatal(self) -> None:
+        proto = self._make_anthropic_cu()
+        err = proto._anthropic.APIError("rate limited")
+        err.status_code = 429
+        err.request_id = "req_011RATE"
+        proto._client.beta.messages.create.side_effect = err
+
+        result = proto.step(screenshot_base64="abc", task_goal="test")
+
+        assert result.success is False
+        assert result.fatal is False
+        # Status + request id still surfaced for logging, but fatal=False
+        # so the existing retry loop handles it.
+        assert result.error_status_code == 429
+        assert result.error_request_id == "req_011RATE"
+
+    def test_anthropic_cu_5xx_does_not_mark_fatal(self) -> None:
+        proto = self._make_anthropic_cu()
+        err = proto._anthropic.APIError("server error")
+        err.status_code = 503
+        err.request_id = "req_011SRV"
+        proto._client.beta.messages.create.side_effect = err
+
+        result = proto.step(screenshot_base64="abc", task_goal="test")
+
+        assert result.fatal is False
+        assert result.error_status_code == 503
+
+    def test_prompt_based_400_marks_fatal_on_anthropic_path(self) -> None:
+        from unittest.mock import MagicMock, patch
+        proto = PromptBasedProtocol.__new__(PromptBasedProtocol)
+        proto._provider = "anthropic"
+        proto._model = "claude-sonnet-4-7"
+        proto._messages = []
+        proto._last_exec_error = None
+
+        class _FakeAPIError(Exception):
+            pass
+        err = _FakeAPIError("temperature is deprecated for this model")
+        err.status_code = 400
+        err.request_id = "req_011ANT"
+
+        with patch.object(proto, "_call_anthropic", side_effect=err):
+            result = proto.step(screenshot_base64="abc", task_goal="test")
+
+        assert result.fatal is True
+        assert result.error_status_code == 400
+        assert result.error_request_id == "req_011ANT"
+
+    def test_prompt_based_401_marks_fatal_on_openai_path(self) -> None:
+        from unittest.mock import MagicMock, patch
+        proto = PromptBasedProtocol.__new__(PromptBasedProtocol)
+        proto._provider = "openai"
+        proto._model = "gpt-5.5"
+        proto._messages = []
+        proto._last_exec_error = None
+
+        class _FakeAPIError(Exception):
+            pass
+        err = _FakeAPIError("invalid api key")
+        err.status_code = 401
+        err.request_id = "req-OAI-001"
+
+        with patch.object(proto, "_call_openai", side_effect=err):
+            result = proto.step(screenshot_base64="abc", task_goal="test")
+
+        assert result.fatal is True
+        assert result.error_status_code == 401
+        assert result.error_request_id == "req-OAI-001"
+
+    # OpenAI CU native protocol — same fatal-tagging contract as Anthropic.
+    def _make_openai_cu(self):
+        from unittest.mock import MagicMock
+        import collections
+        from cyberraccoon.agent.protocols.openai_cu import OpenAICUProtocol
+        proto = OpenAICUProtocol.__new__(OpenAICUProtocol)
+        proto._model = "gpt-5.5"
+        proto._display_width = 1280
+        proto._display_height = 720
+        mock_openai = MagicMock()
+        # APIError must be a real exception class so the except clause matches
+        class _FakeAPIError(Exception):
+            pass
+        mock_openai.APIError = _FakeAPIError
+        proto._openai = mock_openai
+        proto._client = MagicMock()
+        proto._system_prompt = "test"
+        proto._last_response_id = None
+        proto._last_call_id = None
+        proto._pending_safety_checks = []
+        proto._action_queue = collections.deque()
+        proto._last_exec_error = None
+        proto._messages = []
+        proto._step_count = 0
+        proto._total_input_tokens = 0
+        proto._total_output_tokens = 0
+        proto._total_cache_read_tokens = 0
+        return proto
+
+    def test_openai_cu_401_marks_fatal(self) -> None:
+        proto = self._make_openai_cu()
+        err = proto._openai.APIError("invalid api key")
+        err.status_code = 401
+        err.request_id = "req_OAI_AUTH"
+        proto._client.responses.create.side_effect = err
+
+        result = proto.step(screenshot_base64="abc", task_goal="test")
+
+        assert result.success is False
+        assert result.fatal is True
+        assert result.error_status_code == 401
+        assert result.error_request_id == "req_OAI_AUTH"
+
+    def test_openai_cu_404_marks_fatal(self) -> None:
+        # Common case: model name not found in this account / wrong base_url.
+        proto = self._make_openai_cu()
+        err = proto._openai.APIError("model not found")
+        err.status_code = 404
+        err.request_id = "req_OAI_MODEL"
+        proto._client.responses.create.side_effect = err
+
+        result = proto.step(screenshot_base64="abc", task_goal="test")
+
+        assert result.fatal is True
+        assert result.error_status_code == 404
+
+    def test_openai_cu_429_does_not_mark_fatal(self) -> None:
+        proto = self._make_openai_cu()
+        err = proto._openai.APIError("rate limited")
+        err.status_code = 429
+        err.request_id = "req_OAI_RATE"
+        proto._client.responses.create.side_effect = err
+
+        result = proto.step(screenshot_base64="abc", task_goal="test")
+
+        assert result.success is False
+        assert result.fatal is False
+        assert result.error_status_code == 429
+
+    def test_openai_cu_5xx_does_not_mark_fatal(self) -> None:
+        proto = self._make_openai_cu()
+        err = proto._openai.APIError("server error")
+        err.status_code = 503
+        err.request_id = "req_OAI_SRV"
+        proto._client.responses.create.side_effect = err
+
+        result = proto.step(screenshot_base64="abc", task_goal="test")
+
+        assert result.fatal is False
+        assert result.error_status_code == 503
 
 
 # ===========================================================================
@@ -265,7 +547,6 @@ class TestAnthropicCUErrorFeedback:
         proto = AnthropicCUProtocol.__new__(AnthropicCUProtocol)
         proto._model = "claude-sonnet-4-6"
         proto._max_tokens = 4096
-        proto._temperature = 0.0
         proto._history_max_turns = 10
         proto._display_width = 1280
         proto._display_height = 720
@@ -719,7 +1000,7 @@ class TestExecutorNewActions:
             def close(self) -> None:
                 pass
 
-        executor = TestExecutor()
+        executor = TestExecutor(screen_width=1920, screen_height=1080)
         executor.open()
         return executor
 
@@ -862,7 +1143,6 @@ class TestCacheMetrics:
         proto = AnthropicCUProtocol.__new__(AnthropicCUProtocol)
         proto._model = "claude-sonnet-4-6"
         proto._max_tokens = 4096
-        proto._temperature = 0.0
         proto._history_max_turns = 10
         proto._display_width = 1280
         proto._display_height = 720
@@ -903,6 +1183,24 @@ class TestCacheMetrics:
         call_kwargs = proto._client.beta.messages.create.call_args
         assert "cache_control" not in call_kwargs.kwargs
 
+    def test_anthropic_cu_temperature_omitted_for_opus_4_7(self) -> None:
+        """opus-4-7 deprecated `temperature` — kwarg must be omitted to avoid 400."""
+        proto = self._make_cu_protocol()
+        proto._model = "claude-opus-4-7"
+        proto._call_api()
+
+        call_kwargs = proto._client.beta.messages.create.call_args
+        assert "temperature" not in call_kwargs.kwargs
+
+    def test_anthropic_cu_temperature_passed_for_supported_model(self) -> None:
+        """For models that still accept temperature, the kwarg is sent as 0.0."""
+        proto = self._make_cu_protocol()
+        proto._model = "claude-sonnet-4-6"
+        proto._call_api()
+
+        call_kwargs = proto._client.beta.messages.create.call_args
+        assert call_kwargs.kwargs.get("temperature") == 0.0
+
 
 # ===========================================================================
 # Completion Status Propagation (COMP-03)
@@ -928,7 +1226,6 @@ class TestCompletionStatusPropagation:
         proto._provider = "anthropic"
         proto._model = "test-model"
         proto._max_tokens = 4096
-        proto._temperature = 0.0
         proto._history_max_turns = 10
         proto._enable_cache = False
         proto._system_prompt = "test"
@@ -963,7 +1260,6 @@ class TestCompletionStatusPropagation:
         proto._provider = "anthropic"
         proto._model = "test-model"
         proto._max_tokens = 4096
-        proto._temperature = 0.0
         proto._history_max_turns = 10
         proto._enable_cache = False
         proto._system_prompt = "test"
@@ -997,7 +1293,6 @@ class TestCompletionStatusPropagation:
         proto._provider = "anthropic"
         proto._model = "test-model"
         proto._max_tokens = 4096
-        proto._temperature = 0.0
         proto._history_max_turns = 10
         proto._enable_cache = False
         proto._system_prompt = "test"
@@ -1033,7 +1328,6 @@ class TestCompletionStatusPropagation:
         proto = AnthropicCUProtocol.__new__(AnthropicCUProtocol)
         proto._model = "claude-sonnet-4-6"
         proto._max_tokens = 4096
-        proto._temperature = 0.0
         proto._history_max_turns = 10
         proto._display_width = 1280
         proto._display_height = 720
@@ -1353,3 +1647,50 @@ class TestGetCommands:
             latency_ms=0, success=True,
         )
         assert result.get_commands() == []
+
+
+# ===========================================================================
+# Target-OS injection into system prompts (260429-ucg)
+# ===========================================================================
+
+class TestTargetOSPromptInjection:
+    """When ``target_os`` is set on protocol construction, the LLM system
+    prompt picks up a Target Platform section. Empty / unknown values
+    are no-ops so existing prompts stay byte-identical for the
+    target-OS-unknown case."""
+
+    @pytest.mark.parametrize("os_value, expected", [
+        ("windows", "Windows"),
+        ("macos", "macOS"),
+        ("linux", "Linux"),
+        ("WINDOWS", "Windows"),  # case-insensitive
+    ])
+    def test_anthropic_cu_prompt_includes_target_os(
+        self, os_value: str, expected: str,
+    ) -> None:
+        from cyberraccoon.agent.prompts import build_anthropic_cu_system_prompt
+        prompt = build_anthropic_cu_system_prompt(target_os=os_value)
+        assert "## Target Platform" in prompt
+        assert expected in prompt
+
+    def test_anthropic_cu_prompt_omits_section_when_unset(self) -> None:
+        from cyberraccoon.agent.prompts import build_anthropic_cu_system_prompt
+        prompt = build_anthropic_cu_system_prompt(target_os="")
+        assert "## Target Platform" not in prompt
+
+    def test_anthropic_cu_prompt_omits_section_for_unknown_os(self) -> None:
+        from cyberraccoon.agent.prompts import build_anthropic_cu_system_prompt
+        prompt = build_anthropic_cu_system_prompt(target_os="haiku-os")
+        assert "## Target Platform" not in prompt
+
+    def test_prompt_based_includes_target_os(self) -> None:
+        from cyberraccoon.agent.prompts import build_prompt_based_system_prompt
+        prompt = build_prompt_based_system_prompt(target_os="macos")
+        assert "macOS" in prompt
+        assert "## Target Platform" in prompt
+
+    def test_openai_cu_includes_target_os(self) -> None:
+        from cyberraccoon.agent.prompts import build_openai_cu_system_prompt
+        prompt = build_openai_cu_system_prompt(target_os="linux")
+        assert "Linux" in prompt
+        assert "## Target Platform" in prompt
