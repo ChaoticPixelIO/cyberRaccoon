@@ -251,16 +251,10 @@ class ConfigStore:
             updated = self._merge_section(current, section_data, dc_type)
             setattr(config, section_name, updated)
 
-        # Backward compat: migrate legacy `skill: "name"` → `skills: ["name"]`
-        agent_data = yaml_data.get("agent", {})
-        if isinstance(agent_data, dict) and "skill" in agent_data and "skills" not in agent_data:
-            old_skill = agent_data["skill"]
-            if old_skill:
-                config.agent.skills = [str(old_skill)]
-
-        # Backward compat: seed `llm.providers[<active>]` from the flat llm
-        # fields if the YAML predates per-provider snapshots. Keeps existing
-        # configs working without a manual migration.
+        # Ensure the active provider always has a snapshot in `providers`.
+        # Fresh configs default to ``providers={}``, so we seed the active
+        # provider's snapshot from the flat llm.* fields. Subsequent
+        # provider switches rely on every visited provider having an entry.
         if config.llm.provider not in config.llm.providers:
             config.llm.providers[config.llm.provider] = {
                 "model": config.llm.model,

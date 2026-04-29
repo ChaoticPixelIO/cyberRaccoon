@@ -299,7 +299,6 @@ ExecStart=$VENV_PYTHON -m cyberraccoon --web --host 0.0.0.0 --port $WEB_PORT
 Restart=on-failure
 RestartSec=5
 Environment=HOME=$RUN_HOME
-EnvironmentFile=-$RUN_HOME/.apikeys
 
 [Install]
 WantedBy=multi-user.target

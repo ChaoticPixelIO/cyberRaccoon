@@ -1,7 +1,7 @@
-"""Pure-function tests for _cancel_and_append (Phase 3 — STEPS-01/02).
+"""Pure-function tests for _cancel_and_append.
 
-See .planning/phases/03-verified-replan-with-user-approval/03-RESEARCH.md
-section 'Step Status State Machine' for the full algorithm.
+Covers the step status state machine: when a step's verification fails,
+the current step is cancelled and a re-plan is appended to the step list.
 """
 from __future__ import annotations
 

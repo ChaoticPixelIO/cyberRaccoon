@@ -466,9 +466,9 @@ class TestProtocolIntegration:
             proto = OpenAICUProtocol(
                 model="gpt-5.5",
                 api_key="fake",
-                skill_text="# WeChat Tips",
+                skill_text="# Notepad Tips",
             )
-            assert "# WeChat Tips" in proto.get_system_prompt()
+            assert "# Notepad Tips" in proto.get_system_prompt()
 
     def test_openai_cu_no_skill_unchanged(self) -> None:
         """Without skill_text, OpenAICU system prompt is unmodified."""

@@ -391,10 +391,9 @@ fi
 # ---------------------------------------------------------------------------
 # Why: BTHID-01 originally relied on `setcap cap_net_admin+eip` on the venv
 # Python interpreter so `_configure_adapter` could call `hciconfig hci0 class
-# 0x002540` at runtime. That design failed on real hardware (cycle-9
-# checkpoint, see .planning/phases/04-harden-bluetooth-hid-setup/04-03-SUMMARY.md
-# Step 8): file caps DO NOT propagate to subprocess'd hciconfig because the
-# parent's CapInh=0 / CapAmb=0 zero out NewPermitted in the child. By
+# 0x002540` at runtime. That design failed on real hardware: file caps
+# DO NOT propagate to subprocess'd hciconfig because the parent's
+# CapInh=0 / CapAmb=0 zero out NewPermitted in the child. By
 # persisting the class in main.conf, bluetoothd applies it on its own start
 # (it already holds CAP_NET_ADMIN), so no runtime privileged op is required.
 #
@@ -502,7 +501,7 @@ if [ -n "$RUNNING_PIDS" ]; then
         echo "         # If you launched manually (e.g. via nohup / foreground):"
         echo "         kill $RUNNING_PIDS"
         echo "         # ...then re-run your launch command:"
-        echo "         cd $REPO_ROOT && source ~/.apikeys && venv/bin/python3 -m cyberraccoon --web --host 0.0.0.0 --port 8000"
+        echo "         cd $REPO_ROOT && venv/bin/python3 -m cyberraccoon --web --host 0.0.0.0 --port 8000"
     fi
 fi
 

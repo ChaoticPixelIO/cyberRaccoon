@@ -176,12 +176,13 @@ class TestPartialYAML:
 
 
 class TestLLMProviderSnapshots:
-    """llm.providers per-provider snapshot persistence and migration."""
+    """llm.providers per-provider snapshot persistence."""
 
-    def test_legacy_flat_yaml_seeds_active_provider_snapshot(
+    def test_yaml_without_providers_block_seeds_active_provider_snapshot(
         self, tmp_config_path: Path
     ) -> None:
-        # Legacy YAML has flat llm fields and no `providers` sub-dict.
+        # YAML with only flat llm fields and no `providers` sub-dict —
+        # the loader should seed `providers[<active>]` from those fields.
         tmp_config_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_config_path.write_text(
             yaml.dump({
@@ -317,52 +318,18 @@ class TestReset:
         assert not store.exists()
 
 
-class TestSkillsBackwardCompat:
-    """Backward compat: old `skill: "x"` → new `skills: ["x"]`."""
-
-    def test_legacy_skill_string_migrated(self, tmp_config_path: Path) -> None:
-        tmp_config_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_config_path.write_text(
-            yaml.dump({"agent": {"skill": "blender"}}),
-            encoding="utf-8",
-        )
-
-        store = ConfigStore(str(tmp_config_path))
-        config = store.load()
-        assert config.agent.skills == ["blender"]
-
-    def test_legacy_empty_skill_not_migrated(self, tmp_config_path: Path) -> None:
-        tmp_config_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_config_path.write_text(
-            yaml.dump({"agent": {"skill": ""}}),
-            encoding="utf-8",
-        )
-
-        store = ConfigStore(str(tmp_config_path))
-        config = store.load()
-        assert config.agent.skills == []
-
-    def test_new_skills_list_not_overwritten_by_legacy(self, tmp_config_path: Path) -> None:
-        """If both `skill` and `skills` exist, `skills` takes precedence."""
-        tmp_config_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_config_path.write_text(
-            yaml.dump({"agent": {"skill": "old", "skills": ["new1", "new2"]}}),
-            encoding="utf-8",
-        )
-
-        store = ConfigStore(str(tmp_config_path))
-        config = store.load()
-        assert config.agent.skills == ["new1", "new2"]
+class TestSkillsList:
+    """Skills list persistence."""
 
     def test_skills_list_roundtrips(
         self, tmp_config_path: Path, sample_config: AppConfig
     ) -> None:
-        sample_config.agent.skills = ["wechat", "blender"]
+        sample_config.agent.skills = ["notepad", "blender"]
         store = ConfigStore(str(tmp_config_path))
         store.save(sample_config)
 
         loaded = store.load()
-        assert loaded.agent.skills == ["wechat", "blender"]
+        assert loaded.agent.skills == ["notepad", "blender"]
 
 
 class TestListCoercion:

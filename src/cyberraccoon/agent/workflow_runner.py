@@ -6,7 +6,7 @@ Orchestrates the plan-then-execute loop:
   3. Handle retries, re-planning, and transitions between steps
 
 The runner is generic — it has no knowledge of specific applications (BIOS,
-WeChat, etc.). All domain-specific behavior comes from the skill text and
+Notepad, etc.). All domain-specific behavior comes from the skill text and
 the planner's step decomposition.
 
 Usage::

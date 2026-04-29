@@ -409,7 +409,7 @@ def main() -> None:
     # Skills
     parser.add_argument(
         "--skill", dest="skills", action="append", default=[],
-        help="Load application skill(s) (repeatable, e.g. --skill wechat --skill blender)",
+        help="Load application skill(s) (repeatable, e.g. --skill notepad --skill blender)",
     )
 
     # Humanization

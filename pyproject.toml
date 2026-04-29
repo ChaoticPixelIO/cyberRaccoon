@@ -7,12 +7,13 @@ name = "cyberraccoon"
 version = "0.1.0"
 description = "AI computer control via HDMI capture + USB HID"
 requires-python = ">=3.10"
-license = "MIT"
+license = "Apache-2.0"
 authors = [{name = "ChaoticPixelIO"}]
 
-# NOTE: opencv-python intentionally excluded -- Pi venv inherits system
-# python3-opencv (4.10.0 w/ GStreamer). pip-installing opencv-python
-# shadows it and breaks AirPlay capture. See CLAUDE.md for details.
+# NOTE: opencv-python intentionally excluded -- on Raspberry Pi, the venv
+# inherits the system python3-opencv (4.10.0 with GStreamer). pip-installing
+# opencv-python shadows the system package and loses GStreamer support,
+# which breaks AirPlay capture.
 dependencies = [
     "Pillow>=10.0.0",
     "numpy>=1.24.0",

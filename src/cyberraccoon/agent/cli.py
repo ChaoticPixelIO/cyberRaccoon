@@ -67,7 +67,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--skill", dest="skills", action="append", default=[],
-        help="Load application skill(s) (repeatable, e.g. --skill wechat --skill blender)",
+        help="Load application skill(s) (repeatable, e.g. --skill notepad --skill blender)",
     )
     parser.add_argument(
         "--fake-verification-fail",

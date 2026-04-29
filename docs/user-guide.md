@@ -763,7 +763,7 @@ python -m cyberraccoon.executor.cli drag 100 200 400 500
 **"No API key configured for provider …"**
 - Open the Web UI → **Config** tab → enter your key under the active provider and click **Save LLM**.
 - Or, for a one-off CLI run, pass `--api-key sk-...`.
-- Keys live in `~/.cyberraccoon/config.yaml` (mode `0o600`). There is no env-var fallback — if you have keys in `~/.bashrc` / `~/.apikeys`, import them once via the Config tab and you can then remove the exports.
+- Keys live in `~/.cyberraccoon/config.yaml` (mode `0o600`). There is no env-var fallback — if you have keys in environment variables, paste them once into the Config tab.
 
 **"Model not found" or 404 errors**
 - Check the model name matches your provider. OpenAI models start with `gpt-`, Anthropic models with `claude-`.
