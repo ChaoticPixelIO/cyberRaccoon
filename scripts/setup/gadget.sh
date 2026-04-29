@@ -111,55 +111,26 @@ DWC2_STATE=$(awk -v want="$MODEL_FILTER" '
     END { print result }
 ' "$CONFIG_TXT")
 
-case "$DWC2_STATE" in
-    peripheral|otg|default)
-        echo "[INFO] dwc2 overlay already enabled in $CONFIG_TXT (mode: $DWC2_STATE)"
-        ;;
-    host)
-        echo "[ERROR] dwc2 overlay in $CONFIG_TXT is set to host mode."
-        echo "        With dr_mode=host the Pi can't act as a USB device."
-        echo "        Edit $CONFIG_TXT and change dr_mode=host to"
-        echo "        dr_mode=peripheral (or remove dr_mode= for OTG default),"
-        echo "        then reboot before re-running this script."
-        exit 1
-        ;;
-    missing)
-        echo "[INFO] dwc2 overlay not enabled for this Pi in $CONFIG_TXT — adding it."
-        BACKUP="${CONFIG_TXT}.cyberraccoon-bak"
-        if [ ! -f "$BACKUP" ]; then
-            cp "$CONFIG_TXT" "$BACKUP"
-            echo "[INFO] Backup saved to $BACKUP"
-        fi
-        cat >> "$CONFIG_TXT" <<'CFG'
-
-# CyberRaccoon: enable dwc2 in peripheral mode so the Pi USB-C port can
-# act as a USB device (HID gadget). Required for /dev/hidg0.
-[all]
-dtoverlay=dwc2,dr_mode=peripheral
-CFG
-        echo ""
-        echo "[REBOOT REQUIRED] dwc2 overlay added to $CONFIG_TXT."
-        echo "                  The kernel must reboot before /sys/class/udc"
-        echo "                  appears and /dev/hidg0 can be created."
-        echo ""
-        echo "                  Run:  sudo reboot"
-        echo "                  Then re-run: sudo scripts/setup.sh --gadget"
-        # Signal to setup.sh / install.sh that a reboot is required.
-        # World-writable so the unprivileged installer can clean it up later.
-        touch /tmp/cyberraccoon-needs-reboot 2>/dev/null && chmod 666 /tmp/cyberraccoon-needs-reboot 2>/dev/null || true
-        exit 0
-        ;;
-    *)
-        echo "[WARN] Unrecognised dwc2 dr_mode=$DWC2_STATE in $CONFIG_TXT — continuing anyway."
-        ;;
-esac
-
 # ---------------------------------------------------------------------------
+# Install persistence artefacts BEFORE the dwc2 overlay state check.
+#
+# These steps are safe regardless of dwc2 state — the systemd unit's
+# ConditionPathExistsGlob=/sys/class/udc/* guard means it harmlessly skips
+# at boot when dwc2 isn't loaded yet. Installing them upfront means a
+# fresh Pi that needs the dwc2 overlay added (the missing-overlay path
+# below, which exits 0 after editing config.txt) self-heals on the next
+# boot: dwc2 loads, the UDC appears, the unit fires, /dev/hidg0 is
+# created — without the user having to re-run setup.sh --gadget.
+#
+# Doing this before the dwc2 check is critical: if we did it after, the
+# missing-overlay early-exit would skip the install entirely and the
+# post-reboot boot would have a loaded UDC but no unit to bind to it.
+# ---------------------------------------------------------------------------
+
 # Disable competing gadget drivers (e.g. g_ether) that hold the UDC.
 # Only one gadget driver can bind to the UDC at a time.
 # Raspberry Pi OS ships g_ether + rpi-usb-gadget-ics for USB networking;
 # we must disable them permanently so HID gadget works on every boot.
-# ---------------------------------------------------------------------------
 BLACKLIST_CONF="/etc/modprobe.d/cyberraccoon-no-gether.conf"
 if [ ! -f "$BLACKLIST_CONF" ]; then
     echo "[INFO] Blacklisting competing gadget modules..."
@@ -193,16 +164,11 @@ for mod in g_ether g_serial g_mass_storage g_multi g_webcam; do
     fi
 done
 
-# ---------------------------------------------------------------------------
-# Install persistent gadget creator + systemd unit
-#
+# Install persistent gadget creator + systemd unit.
 # configfs gadgets live in tmpfs (/sys/kernel/config) and disappear on every
-# reboot. Instead of creating the gadget here (which only survives until the
-# next reboot), install a standalone helper script + a systemd oneshot unit
-# that recreates the gadget on every boot. Mirrors the persistence pattern
-# already used by cyberraccoon-pair-agent.service (see scripts/setup/bluetooth.sh).
-# ---------------------------------------------------------------------------
-
+# reboot. The standalone helper script + systemd oneshot unit recreate the
+# gadget on every boot. Mirrors the persistence pattern already used by
+# cyberraccoon-pair-agent.service (see scripts/setup/bluetooth.sh).
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HELPER_SRC="$REPO_ROOT/scripts/lib/cyberraccoon-usb-gadget-create.sh"
 HELPER_DST="/usr/local/sbin/cyberraccoon-usb-gadget-create"
@@ -238,9 +204,61 @@ UNITEOF
 systemctl daemon-reload
 systemctl enable cyberraccoon-usb-gadget.service
 
+# ---------------------------------------------------------------------------
+# Now handle the dwc2 overlay state. On the missing-overlay path we exit 0
+# after writing config.txt; on reboot the unit installed above fires and
+# creates /dev/hidg0 automatically.
+# ---------------------------------------------------------------------------
+case "$DWC2_STATE" in
+    peripheral|otg|default)
+        echo "[INFO] dwc2 overlay already enabled in $CONFIG_TXT (mode: $DWC2_STATE)"
+        ;;
+    host)
+        echo "[ERROR] dwc2 overlay in $CONFIG_TXT is set to host mode."
+        echo "        With dr_mode=host the Pi can't act as a USB device."
+        echo "        Edit $CONFIG_TXT and change dr_mode=host to"
+        echo "        dr_mode=peripheral (or remove dr_mode= for OTG default),"
+        echo "        then reboot before re-running this script."
+        exit 1
+        ;;
+    missing)
+        echo "[INFO] dwc2 overlay not enabled for this Pi in $CONFIG_TXT — adding it."
+        BACKUP="${CONFIG_TXT}.cyberraccoon-bak"
+        if [ ! -f "$BACKUP" ]; then
+            cp "$CONFIG_TXT" "$BACKUP"
+            echo "[INFO] Backup saved to $BACKUP"
+        fi
+        cat >> "$CONFIG_TXT" <<'CFG'
+
+# CyberRaccoon: enable dwc2 in peripheral mode so the Pi USB-C port can
+# act as a USB device (HID gadget). Required for /dev/hidg0.
+[all]
+dtoverlay=dwc2,dr_mode=peripheral
+CFG
+        echo ""
+        echo "[REBOOT REQUIRED] dwc2 overlay added to $CONFIG_TXT."
+        echo "                  The kernel must reboot before /sys/class/udc"
+        echo "                  appears and /dev/hidg0 can be created."
+        echo "                  cyberraccoon-usb-gadget.service is already"
+        echo "                  installed and enabled — it will fire on the"
+        echo "                  next boot once dwc2 is loaded."
+        echo ""
+        echo "                  Run:  sudo reboot"
+        # Signal to setup.sh / install.sh that a reboot is required.
+        # World-writable so the unprivileged installer can clean it up later.
+        touch /tmp/cyberraccoon-needs-reboot 2>/dev/null && chmod 666 /tmp/cyberraccoon-needs-reboot 2>/dev/null || true
+        exit 0
+        ;;
+    *)
+        echo "[WARN] Unrecognised dwc2 dr_mode=$DWC2_STATE in $CONFIG_TXT — continuing anyway."
+        ;;
+esac
+
 # Run the helper once now to create the gadget for the current boot.
 # Same outcome as the old inline creation, but routed through the unit so
 # logs go to the journal and the path matches future boots exactly.
+# Only reached when dwc2 is already active — on the missing-overlay path
+# the early exit above skips this step (a UDC won't exist until reboot).
 echo "[INFO] Starting cyberraccoon-usb-gadget.service for the current boot..."
 if systemctl restart cyberraccoon-usb-gadget.service; then
     if [ -e /dev/hidg0 ]; then
