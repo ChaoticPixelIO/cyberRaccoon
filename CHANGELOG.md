@@ -45,5 +45,11 @@ Other Pi models, capture paths, and target OSes may work but are unverified.
 - On Raspberry Pi, the venv intentionally inherits the system `python3-opencv`
   to preserve GStreamer support required by AirPlay capture.
 
+### Known issues
+
+- **AirPlay first-connect drop:** the initial AirPlay session sometimes
+  disconnects a few seconds after pairing. Retrying 1–3 times typically gets it
+  to a stable connection.
+
 [Unreleased]: https://github.com/ChaoticPixelIO/cyberRaccoon/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/ChaoticPixelIO/cyberRaccoon/releases/tag/v1.0.0
