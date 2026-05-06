@@ -73,6 +73,8 @@ pip install -e .
 
 ## Hardware Setup
 
+<img src="images/raspberry-pi-5.jpg" alt="Raspberry Pi 5 — the host computer that runs CyberRaccoon" width="33%" />
+
 All setup is managed through a single entry point. Each component is idempotent and safe to run multiple times.
 
 ```bash
@@ -93,6 +95,8 @@ sudo scripts/setup.sh --all             # everything applicable
 >
 > - **USB power/data splitter (recommended).** External power feeds the Pi; a separate data cable runs from the Pi USB-C to the target. Lets you swap the data cable to another target without power-cycling the Pi.
 > - **Single USB cable.** One cable from the Pi USB-C to the target carries both power and data (Pi side USB-C male; target side USB-C or USB-A — whichever fits the target's port). Simpler hardware, but changing target means powering off the Pi, and the target's USB may not deliver Pi 5's recommended 5V/5A — under-voltage warnings are possible. Runs fine in practice, but stability isn't guaranteed for every setup or workload. A known dwc2 kernel bug ([raspberrypi/linux#6289](https://github.com/raspberrypi/linux/issues/6289)) can also leave the UDC `not attached` on some single-cable setups; if that happens, switch to the splitter topology or use Bluetooth HID (`--transport bt`).
+
+<img src="images/usb-splitter.jpg" alt="USB power/data splitter — external power feeds the Pi while a separate data cable goes to the target" width="33%" />
 
 Creates `/dev/hidg0` so the Pi appears as a USB keyboard and mouse to the target computer. A single combined HID device is used with Report IDs (ID 1 = keyboard, ID 2 = mouse) for cross-platform compatibility (macOS requires this approach).
 
@@ -382,6 +386,11 @@ Tab completion and command history are available when `prompt_toolkit` is instal
 
 Captures the target screen via an HDMI-to-CSI bridge module connected to the Pi's CSI port. Works with any OS and even at BIOS/boot screens. No USB port needed.
 
+<p align="center">
+  <img src="images/hdmi-csi-bridge.jpg" alt="TC358743 HDMI-to-CSI bridge module" width="24%" />
+  <img src="images/csi-setup.jpg" alt="Assembled CSI capture setup connected to the Pi's CAM port" width="24%" />
+</p>
+
 ```bash
 python -m cyberraccoon --task "..." --source csi
 ```
@@ -421,6 +430,8 @@ Two capture modes are used automatically:
 ### HDMI-UVC (USB capture card)
 
 > **Note:** This capture source has not been fully validated on the current Pi 5 setup. It may work but is not guaranteed. Use CSI or AirPlay instead.
+
+<img src="images/usb-video-capture.jpg" alt="Generic USB HDMI capture card (UVC) — ~$10-20" width="33%" />
 
 Captures the target screen via a USB HDMI capture card using V4L2.
 
