@@ -115,12 +115,35 @@ trap "kill $SUDO_KEEPALIVE_PID 2>/dev/null || true" EXIT
 
 step 1 "Locating project directory..."
 
-# Detect if we're already inside the repo
-if [ -f "pyproject.toml" ] && grep -q "cyberraccoon" pyproject.toml 2>/dev/null; then
+# Resolve the script's own directory so we can detect the repo even when
+# invoked from another working directory (e.g. `bash /path/to/repo/install.sh`
+# from $HOME). Leave empty when running from stdin (`curl ... | bash`), where
+# there's no script file on disk — in that case $0 is "bash", not a path,
+# and falling back to it would silently equal the caller's CWD.
+SCRIPT_DIR=""
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+    # readlink -f follows symlinks so `ln -s .../install.sh ~/bin/foo` works.
+    REAL_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+    SCRIPT_DIR="$(cd "$(dirname "$REAL_SCRIPT")" && pwd)"
+fi
+
+is_cyberraccoon_repo() {
+    [ -f "$1/pyproject.toml" ] && grep -q "cyberraccoon" "$1/pyproject.toml" 2>/dev/null
+}
+
+# Detect if we're already inside the repo (in priority order):
+# 1. Caller's CWD — `cd repo && ./install.sh`
+# 2. Script's own directory — `/path/to/repo/install.sh` from elsewhere
+# 3. Default install location — repo previously cloned by this script
+if is_cyberraccoon_repo "$(pwd)"; then
     INSTALL_DIR="$(pwd)"
     info "Already inside CyberRaccoon repo: $INSTALL_DIR"
     NEED_CLONE=false
-elif [ -f "$DEFAULT_INSTALL_DIR/pyproject.toml" ] && grep -q "cyberraccoon" "$DEFAULT_INSTALL_DIR/pyproject.toml" 2>/dev/null; then
+elif [ -n "$SCRIPT_DIR" ] && is_cyberraccoon_repo "$SCRIPT_DIR"; then
+    INSTALL_DIR="$SCRIPT_DIR"
+    info "Using CyberRaccoon repo from script location: $INSTALL_DIR"
+    NEED_CLONE=false
+elif is_cyberraccoon_repo "$DEFAULT_INSTALL_DIR"; then
     INSTALL_DIR="$DEFAULT_INSTALL_DIR"
     info "Found existing install: $INSTALL_DIR"
     NEED_CLONE=false
@@ -168,22 +191,62 @@ fi
 
 step 3 "Setting up repository..."
 
+# Resolve the latest release tag from a remote URL or named remote.
+# Strict match: vX.Y.Z with 1-3 digits per segment. Anything else
+# (pre-releases like v1.0.0-rc1, dev tags, two-segment vX.Y, build
+# metadata) is intentionally ignored. Empty output = no match found.
+get_latest_release_tag() {
+    git ls-remote --tags --sort=-v:refname --refs "$1" 'v*' 2>/dev/null \
+        | awk '{print $2}' | sed 's|refs/tags/||' \
+        | grep -E '^v[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' \
+        | head -1
+}
+
 if $NEED_CLONE; then
     if [ -d "$INSTALL_DIR" ]; then
         error "$INSTALL_DIR already exists but doesn't look like CyberRaccoon."
         error "Remove it or choose a different location, then re-run."
         exit 1
     fi
-    info "Cloning from $REPO_URL into $INSTALL_DIR"
-    git clone "$REPO_URL" "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
-else
-    cd "$INSTALL_DIR"
-    info "Using existing repo at $INSTALL_DIR"
-    if [ -d .git ]; then
-        info "Pulling latest changes..."
-        git pull --ff-only origin main 2>/dev/null || warn "Could not fast-forward (local changes?). Continuing with current checkout."
+    LATEST_TAG="$(get_latest_release_tag "$REPO_URL")"
+    if [ -n "$LATEST_TAG" ]; then
+        info "Cloning $REPO_URL at latest release ($LATEST_TAG) into $INSTALL_DIR"
+        git clone --branch "$LATEST_TAG" --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    else
+        warn "No release tag matching vX.Y.Z found — falling back to main branch."
+        git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
     fi
+    cd "$INSTALL_DIR"
+elif [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
+    # Installer-managed checkout (previously cloned by this script into
+    # the default location). Safe to auto-update to the latest release tag.
+    cd "$INSTALL_DIR"
+    info "Using installer-managed repo at $INSTALL_DIR"
+    if [ -d .git ]; then
+        LATEST_TAG="$(get_latest_release_tag origin)"
+        if [ -z "$LATEST_TAG" ]; then
+            warn "No release tag matching vX.Y.Z found on origin — keeping current checkout."
+        else
+            CURRENT_TAG="$(git describe --exact-match --tags HEAD 2>/dev/null || true)"
+            if [ "$CURRENT_TAG" = "$LATEST_TAG" ]; then
+                info "Already on latest release ($LATEST_TAG)."
+            else
+                info "Updating to latest release: $LATEST_TAG"
+                if git fetch origin "refs/tags/$LATEST_TAG:refs/tags/$LATEST_TAG" 2>/dev/null \
+                   && git checkout "$LATEST_TAG" 2>/dev/null; then
+                    info "Checked out $LATEST_TAG."
+                else
+                    warn "Could not update to $LATEST_TAG — continuing with current checkout."
+                fi
+            fi
+        fi
+    fi
+else
+    # User-managed checkout: INSTALL_DIR was detected from caller's CWD
+    # (Case 1) or from the script's own directory (Case A'). The user is
+    # likely developing here — respect their checkout, don't auto-update.
+    cd "$INSTALL_DIR"
+    info "Using existing repo at $INSTALL_DIR (user-managed — not auto-updating)"
 fi
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cyberraccoon"
-version = "0.1.0"
+version = "1.0.0"
 description = "AI computer control via HDMI capture + USB HID"
 requires-python = ">=3.10"
 license = "Apache-2.0"

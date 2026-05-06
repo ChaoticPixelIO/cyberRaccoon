@@ -6,4 +6,4 @@ try:
 
     __version__ = version("cyberraccoon")
 except Exception:
-    __version__ = "0.1.0"  # fallback when not installed
+    __version__ = "0.0.0+unknown"  # fallback when running from source without install

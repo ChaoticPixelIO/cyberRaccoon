@@ -50,6 +50,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StrictBool
 
+from cyberraccoon import __version__
 from cyberraccoon.agent.skills import (
     SkillFormatError,
     SkillIncompleteError,
@@ -261,7 +262,7 @@ def create_app(controller: AppController) -> FastAPI:
             controller.remove_listener(_event_bridge)
             logger.info("Web server stopped")
 
-    app = FastAPI(title="CyberRaccoon", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="CyberRaccoon", version=__version__, lifespan=lifespan)
 
     # Store references for route handlers
     app.state.controller = controller
