@@ -20,7 +20,7 @@ The loop repeats until the task is complete. The target computer sees CyberRacco
 ## Features
 
 - **4 capture sources** — HDMI-to-CSI bridge (TC358743), AirPlay mirroring, USB HDMI capture card (UVC), or Pi camera module (picamera2)
-- **2 HID transports** — Bluetooth HID (wireless) or USB HID Gadget (wired; on Pi 5, single-cable USB-C OTG is affected by a dwc2 kernel bug — splitter cable is the documented workaround)
+- **2 HID transports** — Bluetooth HID (wireless) or USB HID Gadget (wired; a USB power/data splitter is recommended so you can swap targets without power-cycling the Pi, but a single USB-C-to-USB cable also works)
 - **Multiple LLM providers** — OpenAI (GPT), Anthropic (Claude), or any OpenAI-compatible API
 - **Input humanization** — Bezier curve mouse movements, variable typing rhythm, jitter, and overshoot to avoid bot detection
 - **Web UI + CLI** — Remote task management via browser or interactive terminal REPL
@@ -34,7 +34,7 @@ The loop repeats until the task is complete. The target computer sees CyberRacco
 | HDMI-to-CSI bridge (TC358743) | Optional | HDMI capture via Pi CSI port | Recommended capture path; no USB needed |
 | USB HDMI capture card (UVC) | Optional | HDMI capture via USB | ~$10–20; capture path still being validated |
 | Raspberry Pi Camera Module | Optional | Capture a physical screen via picamera2 | Capture path still being validated |
-| USB power/data splitter cable | Optional | USB HID output (Gadget mode) | Workaround for the Pi 5 dwc2 single-cable bug; only needed if you use USB HID and single-cable OTG doesn't work for you |
+| USB power/data splitter cable | Recommended | USB HID output (Gadget mode) | External power to the Pi, separate data cable to the target — lets you swap the data cable to another target without power-cycling the Pi. A single USB cable from the Pi USB-C to the target also works (carries power + data; target side USB-C or USB-A), but the Pi may log under-voltage warnings and changing target requires powering off the Pi. |
 
 > **Minimal setup (no extra hardware):** A Raspberry Pi 5 alone is enough — pair it as a wireless keyboard/mouse over Bluetooth and capture the target screen via AirPlay (macOS/iOS only). All other capture sources and the USB HID transport need the optional hardware above.
 

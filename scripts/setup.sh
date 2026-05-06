@@ -154,8 +154,11 @@ if $DO_INTERACTIVE; then
     echo "    all     → everything applicable   (simplest)"
     if is_pi5; then
         echo ""
-        echo "  Note: On Pi 5, single-cable USB-C OTG hits a known dwc2 kernel bug."
-        echo "        USB Gadget works with a USB power/data splitter cable."
+        echo "  Note: On Pi 5, a USB power/data splitter is recommended for USB"
+        echo "        Gadget — it lets you swap targets without power-cycling"
+        echo "        the Pi. A single USB-C-to-USB cable also works (target"
+        echo "        supplies the Pi); under-voltage is possible but it"
+        echo "        usually runs fine."
     fi
 
     echo ""
@@ -296,10 +299,18 @@ fi
 if $DO_GADGET && is_pi5; then
     echo "  Pi 5 USB Gadget cable check:"
     echo "    - Use the Pi USB-C port (the one used for power) as the data link."
-    echo "    - Single-cable USB-C OTG (Pi powered by the target) hits a known"
-    echo "      dwc2 kernel bug. If you are not already using a USB power/data"
-    echo "      splitter cable, set one up: external power to the Pi, data"
-    echo "      cable from Pi USB-C to the target."
+    echo "    - Recommended: USB power/data splitter — external power to the Pi,"
+    echo "      separate data cable to the target. Lets you swap the data cable"
+    echo "      to a different target without power-cycling the Pi."
+    echo "    - Also works: a single USB cable from the Pi USB-C to the target"
+    echo "      (one cable carries power + data; target side USB-C or USB-A)."
+    echo "      Trade-off: the Pi may log under-voltage (USB doesn't supply Pi"
+    echo "      5's recommended 5V/5A), and changing target means powering off"
+    echo "      the Pi. Usually runs fine, but full stability under heavy load"
+    echo "      isn't guaranteed."
+    echo "    - If the UDC stays 'not attached' (a known dwc2 kernel bug on"
+    echo "      single-cable setups), switch to the splitter topology or use"
+    echo "      Bluetooth HID."
     echo ""
 fi
 

@@ -57,10 +57,14 @@ fi
 # ---------------------------------------------------------------------------
 # Verify UDC is available.
 #   - Pi 4B: needs dtoverlay=dwc2 in /boot/firmware/config.txt + reboot.
-#   - Pi 5: dwc2 is loaded automatically, but single-cable USB-C OTG is
-#     affected by a kernel bug (raspberrypi/linux#6289) — UDC stays
-#     "not attached". A USB power/data splitter cable is the documented
-#     workaround. Bluetooth HID (--bt) avoids USB entirely.
+#   - Pi 5: dwc2 loads automatically. Recommended topology is a USB
+#     power/data splitter (external power + separate data cable to target)
+#     so you can swap targets without power-cycling the Pi. A single USB
+#     cable from the Pi USB-C to the target also works (carries power +
+#     data) but changing target requires powering off the Pi. If the UDC
+#     stays "not attached", a known kernel bug (raspberrypi/linux#6289)
+#     may be hitting a single-cable setup — switch to the splitter
+#     topology or fall back to Bluetooth HID (--bt).
 # ---------------------------------------------------------------------------
 if [ -z "$(ls /sys/class/udc 2>/dev/null)" ]; then
     echo "[ERROR] The Pi cannot present itself as a USB device right now."
@@ -76,10 +80,12 @@ if [ -z "$(ls /sys/class/udc 2>/dev/null)" ]; then
         echo "        2. The cable plugged into the Pi USB-C port doesn't carry"
         echo "           data (some chargers / cables are power-only). Try a"
         echo "           known-good USB-C data cable to the target."
-        echo "        3. You are powering the Pi through the same single USB-C"
-        echo "           cable from the target. This hits a known dwc2 kernel"
-        echo "           bug — use a USB power/data splitter so the Pi has its"
-        echo "           own power and a separate data link to the target."
+        echo "        3. If you're using a single USB cable (Pi powered by the"
+        echo "           target via the same cable), you may be hitting a known"
+        echo "           dwc2 kernel bug (raspberrypi/linux#6289). Switch to a"
+        echo "           USB power/data splitter (external power to Pi +"
+        echo "           separate data cable to target), or fall back to"
+        echo "           Bluetooth HID."
         echo ""
         echo "        Quick check (after fixing): ls /sys/class/udc — should"
         echo "        list a controller (e.g. xhci-hcd.0.auto)."

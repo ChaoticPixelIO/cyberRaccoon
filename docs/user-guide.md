@@ -89,7 +89,10 @@ sudo scripts/setup.sh --all             # everything applicable
 
 ### USB HID Gadget
 
-> **Note:** On Pi 5, single-cable USB-C OTG (Pi powered by the target Mac) is affected by a known dwc2 kernel bug ([raspberrypi/linux#6289](https://github.com/raspberrypi/linux/issues/6289)) — the UDC stays `not attached`. The documented workaround is a USB power/data splitter cable (external power to the Pi, data to the target). Bluetooth HID (`--transport bt`) avoids the issue entirely and needs no extra hardware.
+> **Note:** On Pi 5, two cable topologies work for USB HID:
+>
+> - **USB power/data splitter (recommended).** External power feeds the Pi; a separate data cable runs from the Pi USB-C to the target. Lets you swap the data cable to another target without power-cycling the Pi.
+> - **Single USB cable.** One cable from the Pi USB-C to the target carries both power and data (Pi side USB-C male; target side USB-C or USB-A — whichever fits the target's port). Simpler hardware, but changing target means powering off the Pi, and the target's USB may not deliver Pi 5's recommended 5V/5A — under-voltage warnings are possible. Runs fine in practice, but stability isn't guaranteed for every setup or workload. A known dwc2 kernel bug ([raspberrypi/linux#6289](https://github.com/raspberrypi/linux/issues/6289)) can also leave the UDC `not attached` on some single-cable setups; if that happens, switch to the splitter topology or use Bluetooth HID (`--transport bt`).
 
 Creates `/dev/hidg0` so the Pi appears as a USB keyboard and mouse to the target computer. A single combined HID device is used with Report IDs (ID 1 = keyboard, ID 2 = mouse) for cross-platform compatibility (macOS requires this approach).
 
@@ -443,7 +446,7 @@ python -m cyberraccoon.capture.cli --device 0 --output screenshot.jpg
 
 ### USB
 
-The Pi appears as a USB keyboard and mouse via USB HID Gadget. On Pi 5, single-cable USB-C OTG is affected by a known dwc2 kernel bug — see the [USB HID Gadget setup note](#usb-hid-gadget) for the splitter-cable workaround.
+The Pi appears as a USB keyboard and mouse via USB HID Gadget. On Pi 5, a USB power/data splitter is recommended (so you can swap targets without power-cycling the Pi), but a single USB cable from the Pi USB-C to the target also works — see the [USB HID Gadget setup note](#usb-hid-gadget) for cable specs and trade-offs.
 
 ```bash
 python -m cyberraccoon --task "..." --transport usb
@@ -756,7 +759,7 @@ python -m cyberraccoon.executor.cli drag 100 200 400 500
 - Pair "CyberRaccoon" from the target computer first.
 
 **USB HID not working on Pi 5**
-- Single-cable USB-C OTG (Pi powered by the target) is broken by a dwc2 kernel bug ([raspberrypi/linux#6289](https://github.com/raspberrypi/linux/issues/6289)) — UDC stays `not attached`. Workaround: USB power/data splitter cable (external power to Pi, data to target). Or use `--transport bt` to avoid the issue.
+- A USB power/data splitter (external power to Pi, separate data cable to the target) is the recommended topology — it also lets you swap the data cable without rebooting the Pi. A single USB cable from the Pi USB-C to the target also works. If `/sys/class/udc` is empty (UDC `not attached`) on a single-cable setup, you may be hitting a known dwc2 kernel bug ([raspberrypi/linux#6289](https://github.com/raspberrypi/linux/issues/6289)) — switch to the splitter topology or use `--transport bt`.
 
 ### LLM
 

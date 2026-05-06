@@ -27,11 +27,17 @@ echo "[INFO] Setting up CyberRaccoon USB Gadget..."
 # ---------------------------------------------------------------------------
 # Pi 5 cable-topology heads-up.
 # The Pi 5 USB-C port is the only one that can act as a USB device — it's
-# also the power input. A known dwc2 kernel bug (raspberrypi/linux#6289)
-# means single-cable OTG (Pi powered by the target via the same USB-C cable)
-# leaves the UDC "not attached". Documented workaround: USB power/data
-# splitter — external power to the Pi, data cable from the Pi USB-C to
-# the target.
+# also the power input. Two topologies work:
+#   - Recommended: USB power/data splitter — external power to the Pi,
+#     separate data cable to the target. Lets you swap the data cable
+#     between targets without power-cycling the Pi.
+#   - Single USB cable from the Pi USB-C to the target — carries both
+#     power and data. Simpler, but changing target means powering off
+#     the Pi, and the target's USB may not deliver Pi 5's recommended
+#     5V/5A (under-voltage warnings possible; runs fine in practice).
+# Fallback if single-cable OTG misbehaves (a known dwc2 kernel bug,
+# raspberrypi/linux#6289, can leave the UDC "not attached"): use the
+# splitter topology or fall back to Bluetooth HID.
 # ---------------------------------------------------------------------------
 if [ -f /proc/device-tree/model ] && grep -q "Raspberry Pi 5" /proc/device-tree/model; then
     echo ""
@@ -39,10 +45,14 @@ if [ -f /proc/device-tree/model ] && grep -q "Raspberry Pi 5" /proc/device-tree/
     echo "       - Use the Pi USB-C port (the same one used for power) as the"
     echo "         data link to the target. Other USB ports on the Pi are"
     echo "         host-only and cannot act as a USB device."
-    echo "       - Single-cable USB-C OTG (Pi powered by the target) hits a"
-    echo "         known dwc2 kernel bug. If you are not already using a USB"
-    echo "         power/data splitter cable, set one up: external power to"
-    echo "         the Pi, data cable from Pi USB-C to the target."
+    echo "       - Recommended: USB power/data splitter — external power to"
+    echo "         the Pi, separate data cable to the target. Lets you swap"
+    echo "         the data cable to another target without power-cycling"
+    echo "         the Pi."
+    echo "       - Also works: a single USB cable from the Pi USB-C to the"
+    echo "         target (one cable carries power + data; target side USB-C"
+    echo "         or USB-A). Under-voltage warnings are possible, and"
+    echo "         changing target means powering off the Pi."
     echo ""
 fi
 

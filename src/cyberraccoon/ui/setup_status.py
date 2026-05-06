@@ -375,10 +375,15 @@ def _check_usb_gadget() -> dict[str, str]:
         pi5_cable_note = (
             "Pi 5 cable check: the Pi USB-C port (the same one used for power) "
             "must carry data to the target, and the target needs to be powered "
-            "on — otherwise the Pi can't act as a USB device. If you are "
-            "powering the Pi from the target through one cable, use a USB "
-            "power/data splitter (external power to Pi, separate data cable to "
-            "target) to avoid a known dwc2 kernel bug."
+            "on — otherwise the Pi can't act as a USB device. Recommended: a "
+            "USB power/data splitter (external power to Pi, separate data "
+            "cable to target) — lets you swap the data cable to another target "
+            "without power-cycling the Pi. A single USB cable from the Pi "
+            "USB-C to the target also works (carries power + data; target side "
+            "USB-C or USB-A) — under-voltage warnings are possible and "
+            "changing target requires powering off the Pi. If the UDC stays "
+            "\"not attached\" (a known dwc2 kernel bug on single-cable "
+            "setups), switch to the splitter topology or use Bluetooth HID."
         )
 
         # 1. Verify config.txt enables dwc2 in a usable mode for Pi 5.
