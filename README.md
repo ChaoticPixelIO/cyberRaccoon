@@ -1,5 +1,7 @@
 # CyberRaccoon
 
+**Homepage:** [cyberraccoon.ai](https://cyberraccoon.ai)
+
 AI-powered computer control via Raspberry Pi — capture the screen, let a vision LLM decide what to do, and execute keyboard/mouse input as a hardware device. **Zero software installation on the target machine.** Works with any OS: Windows, macOS, Linux, even BIOS and boot screens.
 
 ## How It Works
