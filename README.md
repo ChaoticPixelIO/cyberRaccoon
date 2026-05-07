@@ -28,13 +28,13 @@ The loop repeats until the task is complete. The target computer sees CyberRacco
 
 ## Hardware Requirements
 
-| | Component | Required? | Purpose | Notes |
-|---|-----------|-----------|---------|-------|
-| <a href="docs/images/raspberry-pi-5.jpg"><img src="docs/images/raspberry-pi-5.jpg" alt="Raspberry Pi 5" width="160"></a> | Raspberry Pi 5 | **Required** | Main controller | Only Pi 5 is tested |
-| <a href="docs/images/hdmi-csi-bridge.jpg"><img src="docs/images/hdmi-csi-bridge.jpg" alt="TC358743 HDMI-to-CSI bridge" width="160"></a> | HDMI-to-CSI bridge (TC358743) | Optional | HDMI capture via Pi CSI port | Recommended capture path; no USB needed |
-| <a href="docs/images/usb-video-capture.jpg"><img src="docs/images/usb-video-capture.jpg" alt="USB HDMI capture card (UVC)" width="160"></a> | USB HDMI capture card (UVC) | Optional | HDMI capture via USB | ~$10–20; capture path still being validated |
-| <a href="docs/images/pi-camera.jpg"><img src="docs/images/pi-camera.jpg" alt="Raspberry Pi Camera Module" width="160"></a> | Raspberry Pi Camera Module | Optional | Capture a physical screen via picamera2 | Capture path still being validated |
-| <a href="docs/images/usb-splitter.jpg"><img src="docs/images/usb-splitter.jpg" alt="USB power/data splitter cable" width="160"></a> | USB power/data splitter cable | Recommended | USB HID output (Gadget mode) | External power to the Pi, separate data cable to the target — lets you swap the data cable to another target without power-cycling the Pi. A single USB cable from the Pi USB-C to the target also works (carries power + data; target side USB-C or USB-A), but the Pi may log under-voltage warnings and changing target requires powering off the Pi. |
+| Photo | Component | Purpose | Notes |
+|-------|-----------|---------|-------|
+| <a href="docs/images/raspberry-pi-5.jpg"><img src="docs/images/raspberry-pi-5.jpg" alt="Raspberry Pi 5" width="240"></a> | Raspberry Pi 5 | Main controller | **Required.** Only Pi 5 is tested |
+| <a href="docs/images/hdmi-csi-bridge.jpg"><img src="docs/images/hdmi-csi-bridge.jpg" alt="TC358743 HDMI-to-CSI bridge" width="240"></a> | HDMI-to-CSI bridge (TC358743) | HDMI capture via Pi CSI port | **Optional.** Recommended capture path; no USB needed |
+| <a href="docs/images/usb-video-capture.jpg"><img src="docs/images/usb-video-capture.jpg" alt="USB HDMI capture card (UVC)" width="240"></a> | USB HDMI capture card (UVC) | HDMI capture via USB | **Optional.** ~$10–20; capture path still being validated |
+| <a href="docs/images/pi-camera.jpg"><img src="docs/images/pi-camera.jpg" alt="Raspberry Pi Camera Module" width="240"></a> | Raspberry Pi Camera Module | Capture a physical screen via picamera2 | **Optional.** Capture path still being validated |
+| <a href="docs/images/usb-splitter.jpg"><img src="docs/images/usb-splitter.jpg" alt="USB power/data splitter cable" width="240"></a> | USB power/data splitter cable | USB HID output (Gadget mode) | **Recommended for USB-HID.** External power to the Pi, separate data cable to the target — lets you swap the data cable to another target without power-cycling the Pi. A single USB cable from the Pi USB-C to the target also works (carries power + data; target side USB-C or USB-A), but the Pi may log under-voltage warnings and changing target requires powering off the Pi. |
 
 > **Minimal setup (no extra hardware):** A Raspberry Pi 5 alone is enough — pair it as a wireless keyboard/mouse over Bluetooth and capture the target screen via AirPlay (macOS/iOS only). All other capture sources and the USB HID transport need the optional hardware above.
 
@@ -45,8 +45,7 @@ The loop repeats until the task is complete. The target computer sees CyberRacco
 SSH into your Pi (or open a terminal on it) and run:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/ChaoticPixelIO/cyberRaccoon/main/install.sh -o install.sh
-bash install.sh
+curl -sSL https://raw.githubusercontent.com/ChaoticPixelIO/cyberRaccoon/main/install.sh | bash
 ```
 
 > Run as your normal user — **not** with `sudo`. The installer asks for
